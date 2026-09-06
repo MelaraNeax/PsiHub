@@ -9,13 +9,14 @@
   <meta name="theme-color" content="#121212">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="PsiHub">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 
@@ -119,21 +120,25 @@
           </div>
 
           <!-- Barra de Acciones Inferior Integrada en la placa -->
-          <div class="explore-actions-bar" style="margin-top: 24px;">
-            <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener" style="flex: 1;">
-              <i class="ph-bold ph-file-pdf"></i>
-              <span>Leer Paper</span>
-            </a>
-            <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" style="flex: 1;" title="Próximamente">
-              <i class="ph-bold ph-translate"></i>
-              <span>Traducir</span>
-            </button>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button class="btn-cta-secondary explore-action-save" id="btn-story-save" style="flex: 1; min-width: 100px;">
+          <div class="explore-actions-bar" style="margin-top: 20px;">
+            <!-- Fila 1: Leer + Traducir -->
+            <div class="explore-actions-bar-row">
+              <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener">
+                <i class="ph-bold ph-file-pdf"></i>
+                <span>Leer Paper</span>
+              </a>
+              <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" title="Próximamente">
+                <i class="ph-bold ph-translate"></i>
+                <span>Traducir</span>
+              </button>
+            </div>
+            <!-- Fila 2: Guardar + Compartir -->
+            <div class="explore-actions-bar-row">
+              <button class="explore-action-save" id="btn-story-save">
                 <i class="ph-bold ph-bookmark-simple"></i>
                 <span id="btn-story-save-txt">Guardar</span>
               </button>
-              <button class="btn-cta-secondary explore-action-share" id="btn-story-share" title="Compartir" style="padding: 14px;">
+              <button class="explore-action-share" id="btn-story-share" title="Compartir">
                 <i class="ph-bold ph-share-network"></i>
               </button>
             </div>
@@ -287,19 +292,16 @@
   <nav class="bottom-nav" id="bottom-nav">
     <button class="nav-btn active" data-page="home" id="nav-home">
       <i class="ph-bold ph-house-simple"></i>
-      <span>Inicio</span>
     </button>
     <button class="nav-btn" data-page="explore" id="nav-explore">
       <i class="ph-bold ph-compass"></i>
-      <span>Explorar</span>
     </button>
     <button class="nav-btn" data-page="profile" id="nav-profile">
       <i class="ph-bold ph-user-circle"></i>
-      <span>Perfil</span>
     </button>
   </nav>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=8"></script>
+  <script type="module" src="app.js?v=11"></script>
 </body>
 </html>

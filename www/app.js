@@ -102,17 +102,17 @@ async function smartExpandQuery(rawQuery) {
 // ═══════════════════════════════════════════════════
 
 const CORRIENTES = [
-  { id: 'neurociencia',  label: 'Neurociencia',    abbr: 'NEU', query: 'neuroscience neurobiology cognitive neuroscience brain', color: '#E91E63' },
-  { id: 'tcc',           label: 'TCC / CBT',       abbr: 'TCC', query: 'cognitive behavioral therapy CBT',                      color: '#1565C0' },
-  { id: 'tercera_ola',   label: 'Tercera Ola',     abbr: '3°',  query: 'third wave ACT DBT mindfulness acceptance',             color: '#1DB954' },
-  { id: 'sistemica',     label: 'Sistémica',       abbr: 'SIS', query: 'systemic family therapy',                               color: '#00838F' },
-  { id: 'psicoanalisis', label: 'Psicoanálisis',   abbr: 'PSA', query: 'psychoanalysis psychoanalytic therapy',                 color: '#7B2D8B' },
-  { id: 'humanismo',     label: 'Humanismo',       abbr: 'HUM', query: 'humanistic person-centered therapy Rogers',             color: '#C17900' },
-  { id: 'gestalt',       label: 'Gestalt',         abbr: 'GES', query: 'gestalt therapy awareness contact',                     color: '#2E7D32' },
-  { id: 'existencial',   label: 'Existencial',     abbr: 'EXI', query: 'existential therapy logotherapy meaning Frankl',        color: '#4527A0' },
-  { id: 'fenomenologia', label: 'Fenomenología',   abbr: 'FEN', query: 'phenomenological existential psychotherapy',             color: '#5B3FE0' },
-  { id: 'segunda_ola',   label: 'Segunda Ola',     abbr: '2°',  query: 'rational emotive behavior REBT cognitive therapy',      color: '#E65C00' },
-  { id: 'psicodrama',    label: 'Psicodrama',      abbr: 'PDR', query: 'psychodrama Moreno role playing',                       color: '#C62828' },
+  { id: 'neurociencia',  label: 'Neurociencia',    abbr: 'NEU', icon: 'ph-brain',                 query: 'neuroscience neurobiology cognitive neuroscience brain', color: '#E91E63' },
+  { id: 'tcc',           label: 'TCC / CBT',       abbr: 'TCC', icon: 'ph-grid-four',             query: 'cognitive behavioral therapy CBT',                      color: '#1565C0' },
+  { id: 'tercera_ola',   label: 'Tercera Ola',     abbr: '3°',  icon: 'ph-waves',                 query: 'third wave ACT DBT mindfulness acceptance',             color: '#1DB954' },
+  { id: 'sistemica',     label: 'Sistémica',       abbr: 'SIS', icon: 'ph-graph',                 query: 'systemic family therapy',                               color: '#00838F' },
+  { id: 'psicoanalisis', label: 'Psicoanálisis',   abbr: 'PSA', icon: 'ph-couch',                 query: 'psychoanalysis psychoanalytic therapy',                 color: '#7B2D8B' },
+  { id: 'humanismo',     label: 'Humanismo',       abbr: 'HUM', icon: 'ph-person-arms-spread',    query: 'humanistic person-centered therapy Rogers',             color: '#C17900' },
+  { id: 'gestalt',       label: 'Gestalt',         abbr: 'GES', icon: 'ph-eye',                   query: 'gestalt therapy awareness contact',                     color: '#2E7D32' },
+  { id: 'existencial',   label: 'Existencial',     abbr: 'EXI', icon: 'ph-infinity',              query: 'existential therapy logotherapy meaning Frankl',        color: '#4527A0' },
+  { id: 'fenomenologia', label: 'Fenomenología',   abbr: 'FEN', icon: 'ph-spiral',                query: 'phenomenological existential psychotherapy',             color: '#5B3FE0' },
+  { id: 'segunda_ola',   label: 'Segunda Ola',     abbr: '2°',  icon: 'ph-lightning',             query: 'rational emotive behavior REBT cognitive therapy',      color: '#E65C00' },
+  { id: 'psicodrama',    label: 'Psicodrama',      abbr: 'PDR', icon: 'ph-masks-theater',         query: 'psychodrama Moreno role playing',                       color: '#C62828' },
 ];
 
 // ═══════════════════════════════════════════════════
@@ -231,103 +231,102 @@ const S = {
 };
 
 // ═══════════════════════════════════════════════════
-// DOM
+// DOM — se inicializa cuando el DOM está listo
 // ═══════════════════════════════════════════════════
 
 const $ = id => document.getElementById(id);
-const el = {
-  // Páginas
-  pageHome:    $('page-home'),
-  pageExplore: $('page-explore'),
-  pageProfile: $('page-profile'),
+let el = {};
 
-  // Home
-  btnSearchOpen:   $('btn-search-open'),
-  searchInlineWrapper: $('search-inline-wrapper'),
-  searchInput:     $('search-input'),
-  btnClearSearch:  $('btn-clear-search'),
-  corrientesRow:   $('corrientes-row'),
-  recsList:        $('recs-list'),
-  recsSubtitle:    $('recs-subtitle'),
-  btnRefreshRecs:  $('btn-refresh-recs'),
+function initDOMRefs() {
+  el = {
+    // Páginas
+    pageHome:    $('page-home'),
+    pageExplore: $('page-explore'),
+    pageProfile: $('page-profile'),
 
-  // Explorar (Historias Directas & Ambient Nebula)
-  exploreBgGlow:         $('explore-bg-glow'),
-  exploreStoryContainer: $('explore-story-container'),
-  storyProgressBar:      $('story-progress-bar'),
-  exploreTopicAvatar:    $('explore-topic-avatar'),
-  exploreTopicIcon:      $('explore-topic-icon'),
-  exploreStoryTopicLabel:$('explore-story-topic-label'),
-  btnStoryPause:         $('btn-story-pause'),
-  btnRefreshStories:     $('btn-refresh-stories'),
-  storyTapPrev:          $('story-tap-prev'),
-  storyTapNext:          $('story-tap-next'),
-  exploreStoryCard:      $('explore-story-card'),
-  exploreBadgeTopic:     $('explore-badge-topic'),
-  exploreJournalCite:    $('explore-journal-cite'),
-  exploreStoryHook:      $('explore-story-hook'),
-  exploreHeadline:       $('explore-headline'),
-  exploreFindingText:    $('explore-finding-text'),
-  exploreTakeawayBox:    $('explore-takeaway-box'),
-  exploreTakeawayText:   $('explore-takeaway-text'),
-  exploreTagsRow:        $('explore-tags-row'),
-  btnStoryRead:          $('btn-story-read'),
-  btnStorySave:          $('btn-story-save'),
-  btnStorySaveTxt:       $('btn-story-save-txt'),
-  btnStoryShare:         $('btn-story-share'),
+    // Home
+    btnSearchOpen:       $('btn-search-open'),
+    searchInlineWrapper: $('search-inline-wrapper'),
+    searchInput:         $('search-input'),
+    btnClearSearch:      $('btn-clear-search'),
+    corrientesRow:       $('corrientes-row'),
+    recsList:            $('recs-list'),
+    recsSubtitle:        $('recs-subtitle'),
+    btnRefreshRecs:      $('btn-refresh-recs'),
 
-  // Nav
-  navBtns: document.querySelectorAll('.nav-btn'),
+    // Explorar
+    exploreBgGlow:         $('explore-bg-glow'),
+    exploreStoryContainer: $('explore-story-container'),
+    storyProgressBar:      $('story-progress-bar'),
+    btnStoryPause:         $('btn-story-pause'),
+    btnRefreshStories:     $('btn-refresh-stories'),
+    storyTapPrev:          $('story-tap-prev'),
+    storyTapNext:          $('story-tap-next'),
+    exploreStoryCard:      $('explore-story-card'),
+    exploreJournalCite:    $('explore-journal-cite'),
+    exploreStoryHook:      $('explore-story-hook'),
+    exploreFindingText:    $('explore-finding-text'),
+    exploreTakeawayBox:    $('explore-takeaway-box'),
+    exploreTakeawayText:   $('explore-takeaway-text'),
+    exploreTagsRow:        $('explore-tags-row'),
+    btnStoryRead:          $('btn-story-read'),
+    btnStorySave:          $('btn-story-save'),
+    btnStorySaveTxt:       $('btn-story-save-txt'),
+    btnStoryShare:         $('btn-story-share'),
 
-  // Resultados
-  resultsView:       $('results-view'),
-  resultsHeader:     $('results-header'),
-  resultsHeaderLabel:$('results-header-label'),
-  resultsHeaderTitle:$('results-header-title'),
-  btnResultsBack:    $('btn-results-back'),
-  resultsBgGlow:     $('results-bg-glow'),
-  subtabBtns:        document.querySelectorAll('.subtab'),
-  resultsSort:       $('results-sort'),
-  resultsCount:      $('results-count'),
-  resultsLoading:    $('results-loading'),
-  resultsEmpty:      $('results-empty'),
-  resultsError:      $('results-error'),
-  resultsErrorMsg:   $('results-error-msg'),
-  btnResultsRetry:   $('btn-results-retry'),
-  paperList:         $('paper-list'),
-  btnLoadMore:       $('btn-load-more'),
+    // Nav
+    navBtns: document.querySelectorAll('.nav-btn'),
 
-  // Modal
-  modalOverlay:  $('modal-overlay'),
-  modalSheet:    $('modal-sheet'),
-  modalBody:     $('modal-body'),
-  btnModalClose: $('btn-modal-close'),
-  btnModalBk:    $('btn-modal-bk'),
+    // Resultados
+    resultsView:       $('results-view'),
+    resultsHeader:     $('results-header'),
+    resultsHeaderLabel:$('results-header-label'),
+    resultsHeaderTitle:$('results-header-title'),
+    btnResultsBack:    $('btn-results-back'),
+    resultsBgGlow:     $('results-bg-glow'),
+    subtabBtns:        document.querySelectorAll('.subtab'),
+    resultsSort:       $('results-sort'),
+    resultsCount:      $('results-count'),
+    resultsLoading:    $('results-loading'),
+    resultsEmpty:      $('results-empty'),
+    resultsError:      $('results-error'),
+    resultsErrorMsg:   $('results-error-msg'),
+    btnResultsRetry:   $('btn-results-retry'),
+    paperList:         $('paper-list'),
+    btnLoadMore:       $('btn-load-more'),
 
-  // Perfil
-  profileAvatar:     $('profile-avatar'),
-  avatarInitials:    $('avatar-initials'),
-  profileName:       $('profile-name'),
-  profileRole:       $('profile-role'),
-  statSaved:         $('stat-saved'),
-  statSearches:      $('stat-searches'),
-  sectionSaved:      $('section-saved'),
-  savedList:         $('saved-list'),
-  profileEmptySaved: $('profile-empty-saved'),
-  btnClearAllSaved:  $('btn-clear-all-saved'),
-  trEmail:           $('tr-email'),
-  btnSaveTrEmail:    $('btn-save-tr-email'),
-  trEmailStatus:     $('tr-email-status'),
+    // Modal
+    modalOverlay:  $('modal-overlay'),
+    modalSheet:    $('modal-sheet'),
+    modalBody:     $('modal-body'),
+    btnModalClose: $('btn-modal-close'),
+    btnModalBk:    $('btn-modal-bk'),
 
-  // Toast
-  toast: $('toast'),
-};
+    // Perfil
+    profileAvatar:     $('profile-avatar'),
+    avatarInitials:    $('avatar-initials'),
+    profileName:       $('profile-name'),
+    profileRole:       $('profile-role'),
+    statSaved:         $('stat-saved'),
+    sectionSaved:      $('section-saved'),
+    savedList:         $('saved-list'),
+    profileEmptySaved: $('profile-empty-saved'),
+    btnClearAllSaved:  $('btn-clear-all-saved'),
+    trEmail:           $('tr-email'),
+    btnSaveTrEmail:    $('btn-save-tr-email'),
+    trEmailStatus:     $('tr-email-status'),
+
+    // Toast
+    toast: $('toast'),
+  };
+}
 
 // ═══════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', () => {
+  initDOMRefs();
   registerSW();
   renderCorrientes();
   setupEventListeners();
@@ -403,8 +402,8 @@ function updateGlow() {
 
 function renderCorrientes() {
   el.corrientesRow.innerHTML = CORRIENTES.map(c => `
-    <div class="corriente-card" style="background:${c.color};" data-id="${c.id}">
-      <span class="corriente-abbr">${c.abbr}</span>
+    <div class="corriente-card" style="--c-color:${c.color};" data-id="${c.id}">
+      <div class="corriente-icon-wrap"><i class="ph-bold ${c.icon}"></i></div>
       <span class="corriente-name">${c.label}</span>
     </div>
   `).join('');
@@ -715,8 +714,7 @@ async function loadRecommendations() {
     };
 
     el.recsList.innerHTML = results.map((paper, i) => {
-      const tags = classifyPaper(paper);
-      const corriente = detectCorriente(paper);
+      const saved = isBookmarked(paper.id);
       return `
         <div class="rec-card" data-index="${i}">
           <div class="rec-body" style="padding-left: 0;">
@@ -725,6 +723,9 @@ async function loadRecommendations() {
             <div class="rec-meta">
               ${paper.year ? `<span><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
               <span><i class="ph-bold ph-quotes"></i>${paper.citations.toLocaleString('es')} citas</span>
+              <button class="rec-save-btn ${saved ? 'saved' : ''}" data-paper-index="${i}" title="${saved ? 'Quitar' : 'Guardar'}">
+                <i class="${saved ? 'ph-fill' : 'ph-bold'} ph-bookmark-simple"></i>
+              </button>
             </div>
           </div>
         </div>
@@ -734,11 +735,24 @@ async function loadRecommendations() {
     // Bind click en cada rec-card
     el.recsList.querySelectorAll('.rec-card').forEach(card => {
       const index = parseInt(card.dataset.index);
+      // Click en botón guardar — no abrir modal
+      const saveBtn = card.querySelector('.rec-save-btn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          const paper = results[index];
+          toggleBookmark(paper);
+          const saved = isBookmarked(paper.id);
+          saveBtn.classList.toggle('saved', saved);
+          saveBtn.querySelector('i').className = saved ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
+          saveBtn.title = saved ? 'Quitar' : 'Guardar';
+          showToast(saved ? 'Guardado ✓' : 'Quitado de guardados');
+        });
+      }
+      // Click en la card — abrir modal
       card.addEventListener('click', () => {
         const paper = results[index];
-        const corriente = detectCorriente(paper);
-        S.activeCorriente = corriente;
-        openModal(paper, corriente);
+        openModal(paper);
       });
     });
 
@@ -1068,12 +1082,33 @@ function setupEventListeners() {
   });
 
 
+  function triggerSearch() {
+    const q = el.searchInput.value.trim();
+    if (q) {
+      el.searchInlineWrapper.classList.remove('active');
+      doSearch(q);
+      el.searchInput.blur();
+    }
+  }
+
   el.btnSearchOpen.addEventListener('click', () => {
-    el.searchInlineWrapper.classList.toggle('active');
-    if (el.searchInlineWrapper.classList.contains('active')) {
-      setTimeout(() => el.searchInput.focus(), 300);
-    } else {
+    const isActive = el.searchInlineWrapper.classList.contains('active');
+    if (isActive) {
+      // Si hay texto, buscar; si no, solo cerrar
       triggerSearch();
+      if (!el.searchInput.value.trim()) {
+        el.searchInlineWrapper.classList.remove('active');
+      }
+    } else {
+      el.searchInlineWrapper.classList.add('active');
+      setTimeout(() => el.searchInput.focus(), 300);
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (el.searchInlineWrapper.classList.contains('active') && 
+        !el.searchInlineWrapper.contains(e.target)) {
+      el.searchInlineWrapper.classList.remove('active');
     }
   });
 
@@ -1081,14 +1116,6 @@ function setupEventListeners() {
     const v = el.searchInput.value;
     el.btnClearSearch.style.display = v ? 'flex' : 'none';
   });
-
-  const triggerSearch = () => {
-    const q = el.searchInput.value.trim();
-    if (q) {
-      doSearch(q);
-      el.searchInput.blur();
-    }
-  };
 
   el.searchInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') {

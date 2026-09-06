@@ -1,6 +1,6 @@
 {
-  "appId": "com.psyhub.app",
-  "appName": "PsyHub",
+  "appId": "com.nabo.psihub",
+  "appName": "PsiHub",
   "webDir": "www",
   "server": {
     "androidScheme": "https"
