@@ -1,0 +1,42 @@
+name: 🧬 Curaduría Diaria de Historias (Groq + OpenAlex)
+
+on:
+  schedule:
+    # Se ejecuta todos los días a las 05:00 UTC (02:00 AM hora de Argentina)
+    - cron: '0 5 * * *'
+  workflow_dispatch: # Permite ejecutar la acción manualmente desde GitHub con un botón
+
+permissions:
+  contents: write
+
+jobs:
+  generate-stories:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: ⚡ Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 🤖 Ejecutar script de curaduría con Groq y OpenAlex
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          node automation/generate_stories.js
+
+      - name: 🚀 Guardar y subir stories.json actualizado
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/stories.json
+          # Si hubo cambios, hace commit y push
+          if git diff --staged --quiet; then
+            echo "No hay cambios en data/stories.json hoy."
+          else
+            git commit -m "🤖 Actualización automática de historias del día [skip ci]"
+            git push
+          fi

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PsyHub</title>
+  <meta name="description" content="Tu plataforma de lectura científica en psicoterapia.">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#121212">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <link rel="stylesheet" href="style.css?v=8">
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════
+       PÁGINA PRINCIPAL (HOME)
+  ══════════════════════════════════════ -->
+  <div class="page" id="page-home">
+
+    <header class="home-header">
+      <div class="home-header-top">
+        <h1 class="app-title">PsyHub</h1>
+        <button class="icon-btn" id="btn-search-open" aria-label="Buscar">
+          <i class="ph-bold ph-magnifying-glass"></i>
+        </button>
+      </div>
+      <!-- Buscador expandible -->
+      <div class="search-container" id="search-container">
+        <div class="search-bar">
+          <i class="ph-bold ph-magnifying-glass search-icon"></i>
+          <input type="search" id="search-input" placeholder="Buscar por tema, autor, enfoque…" autocomplete="off" enterkeyhint="search">
+          <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i class="ph-bold ph-x"></i></button>
+        </div>
+      </div>
+    </header>
+
+    <div class="page-scroll">
+
+      <!-- Corrientes — fila deslizable -->
+      <section class="section">
+        <h2 class="section-title">Corrientes</h2>
+        <div class="corrientes-row" id="corrientes-row">
+          <!-- Generado por JS -->
+        </div>
+      </section>
+
+      <!-- Te puede interesar -->
+      <section class="section section-recs">
+        <div class="section-header-row">
+          <h2 class="section-title" style="margin-bottom:0;">Te puede interesar</h2>
+          <button class="btn-link-subtle" id="btn-refresh-recs" title="Actualizar recomendaciones">
+            <i class="ph-bold ph-arrows-clockwise"></i>
+          </button>
+        </div>
+        <p class="section-subtitle" id="recs-subtitle">Basado en tus guardados</p>
+        <div class="recs-list" id="recs-list">
+          <!-- Skeletons y luego cards -->
+          <div class="rec-skeleton"></div>
+          <div class="rec-skeleton"></div>
+          <div class="rec-skeleton"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       PÁGINA EXPLORAR (HISTORIAS DIARIAS DIRECTAS)
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-explore">
+    <!-- Nebula / Ambient Glow dinámico con el color de la historia -->
+    <div class="results-bg-glow explore-bg-glow" id="explore-bg-glow"></div>
+
+    <div class="explore-story-container" id="explore-story-container">
+      
+      <!-- Barras de progreso segmentadas arriba -->
+      <div class="story-progress-bar" id="story-progress-bar">
+        <!-- 6 barras generadas dinámicamente -->
+      </div>
+
+      <!-- Cabecera de la Historia (Estilo Corrientes / Results Header) -->
+      <div class="explore-story-header">
+        <div class="explore-topic-meta">
+          <div class="explore-topic-icon-wrap" id="explore-topic-avatar">
+            <i class="ph-bold ph-brain" id="explore-topic-icon"></i>
+          </div>
+          <div>
+            <span class="explore-topic-eyebrow" id="explore-story-topic-label">Neurociencia</span>
+            <h2 class="explore-topic-title">Ciencia Diaria</h2>
+          </div>
+        </div>
+
+        <div class="explore-header-controls">
+          <button class="explore-control-btn" id="btn-story-pause" aria-label="Pausar o reanudar" title="Pausar / Reanudar">
+            <i class="ph-bold ph-pause"></i>
+          </button>
+          <button class="explore-control-btn" id="btn-refresh-stories" aria-label="Actualizar historias" title="Actualizar">
+            <i class="ph-bold ph-arrows-clockwise"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Zonas invisibles para avanzar o retroceder al tocar la pantalla -->
+      <div class="story-tap-zone story-tap-prev" id="story-tap-prev" title="Historia anterior"></div>
+      <div class="story-tap-zone story-tap-next" id="story-tap-next" title="Siguiente historia"></div>
+
+      <!-- Placa Central: Moderna, translúcida, glassmorphism con blur -->
+      <div class="explore-story-body">
+        <div class="explore-glass-card" id="explore-story-card">
+          
+          <div class="explore-card-top">
+            <span class="tag-pill explore-tag-pill" id="explore-badge-topic">
+              <i class="ph-bold ph-sparkle"></i> Hallazgo del día
+            </span>
+            <span class="explore-cite" id="explore-journal-cite">Nature Neuroscience (2025)</span>
+          </div>
+
+          <h3 class="explore-hook" id="explore-story-hook">
+            ¿El café antes o después de estudiar?
+          </h3>
+
+          <div class="explore-finding-box" id="explore-finding-box">
+            <p class="explore-headline" id="explore-headline"></p>
+            <p class="explore-finding-text" id="explore-finding-text"></p>
+          </div>
+
+          <div class="explore-takeaway-box" id="explore-takeaway-box">
+            <div class="explore-takeaway-label">
+              <i class="ph-bold ph-target"></i> Mecanismo / Aplicación
+            </div>
+            <p class="explore-takeaway-text" id="explore-takeaway-text"></p>
+          </div>
+
+          <div class="explore-tags-row" id="explore-tags-row"></div>
+
+        </div>
+      </div>
+
+      <!-- Barra de Acciones Inferior (Estilo CTAs principales de la app) -->
+      <div class="explore-actions-bar">
+        <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener">
+          <i class="ph-bold ph-file-pdf"></i>
+          <span>Leer Paper (Open Access)</span>
+        </a>
+        <button class="btn-cta-secondary explore-action-save" id="btn-story-save">
+          <i class="ph-bold ph-bookmark-simple"></i>
+          <span id="btn-story-save-txt">Guardar</span>
+        </button>
+        <button class="btn-cta-secondary explore-action-share" id="btn-story-share" title="Compartir">
+          <i class="ph-bold ph-share-network"></i>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       PERFIL
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-profile">
+    <header class="generic-header">
+      <h2>Perfil</h2>
+    </header>
+    <div class="page-scroll">
+
+      <div class="profile-hero">
+        <div class="profile-avatar" id="profile-avatar">
+          <span id="avatar-initials">?</span>
+        </div>
+        <div class="profile-info">
+          <input class="profile-input" id="profile-name" type="text" placeholder="Tu nombre" maxlength="40">
+          <select class="profile-input" id="profile-role">
+            <option value="">Seleccionar rol…</option>
+            <option value="estudiante">Estudiante</option>
+            <option value="clinico">Clínico/a</option>
+            <option value="investigador">Investigador/a</option>
+            <option value="docente">Docente</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="profile-stats">
+        <div class="stat-card">
+          <span class="stat-value" id="stat-saved">0</span>
+          <span class="stat-label">Guardados</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value" id="stat-searches">0</span>
+          <span class="stat-label">Búsquedas</span>
+        </div>
+      </div>
+
+      <!-- Configuración de traducción -->
+      <section class="section profile-section">
+        <h3 class="subsection-title">Traducción Ilimitada</h3>
+        <p class="profile-hint">
+          PsyHub ahora utiliza <strong>Google Translate (gratuito e ilimitado)</strong> como motor principal para traducir títulos y abstracts, garantizando mayor cobertura.<br>
+          En caso de fallos, usamos MyMemory como respaldo. Podés añadir tu email de MyMemory (opcional) para aumentar el límite de respaldo.
+        </p>
+        <div class="profile-field">
+          <label for="tr-email">Email de respaldo (MyMemory, opcional)</label>
+          <div class="profile-input-wrap">
+            <input class="profile-input" id="tr-email" type="email" placeholder="tucorreo@ejemplo.com" autocomplete="email">
+            <button class="btn-save-field" id="btn-save-tr-email">
+              <i class="ph-bold ph-check"></i>
+            </button>
+          </div>
+          <span class="field-status" id="tr-email-status"></span>
+        </div>
+      </section>
+
+      <!-- Guardados -->
+      <section class="section profile-section" id="section-saved" style="display:none;">
+        <h3 class="subsection-title">Artículos guardados</h3>
+        <ul class="saved-list" id="saved-list"></ul>
+        <button class="btn-danger" id="btn-clear-all-saved">Eliminar todos los guardados</button>
+      </section>
+
+      <div class="profile-empty-saved" id="profile-empty-saved">
+        <i class="ph-bold ph-bookmark-simple"></i>
+        <p>No tenés artículos guardados.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VISTA DE RESULTADOS
+  ══════════════════════════════════════ -->
+  <div class="results-view hidden" id="results-view">
+    <div class="results-bg-glow" id="results-bg-glow"></div>
+    
+    <div class="results-header" id="results-header">
+      <button class="btn-back" id="btn-results-back"><i class="ph-bold ph-arrow-left"></i></button>
+      <div class="results-header-info">
+        <span class="results-header-label" id="results-header-label">Corriente</span>
+        <h2 class="results-header-title" id="results-header-title">Resultados</h2>
+      </div>
+    </div>
+
+    <div class="subtabs-bar">
+      <button class="subtab active" data-type="all">Todo</button>
+      <button class="subtab" data-type="teorico">Teórico</button>
+      <button class="subtab" data-type="evidencia">Evidencia</button>
+      <button class="subtab" data-type="clinico">Clínico</button>
+    </div>
+
+    <div class="filter-bar">
+      <label class="filter-sort-wrapper" for="results-sort">
+        <i class="ph-bold ph-faders"></i>
+        <select id="results-sort" class="sort-select">
+          <option value="">Relevancia</option>
+          <option value="cited_by_count:desc">Más citados</option>
+          <option value="publication_year:desc">Más recientes</option>
+        </select>
+        <i class="ph-bold ph-caret-down sort-caret"></i>
+      </label>
+      <span class="results-count" id="results-count"></span>
+    </div>
+
+    <div class="results-scroll">
+      <div class="state-loading" id="results-loading" style="display:none;">
+        <div class="spinner"></div>
+        <p>Buscando en OpenAlex…</p>
+      </div>
+      <div class="state-empty" id="results-empty" style="display:none;">
+        <i class="ph-bold ph-file-dashed"></i>
+        <p>No se encontraron resultados en acceso abierto para este filtro.</p>
+      </div>
+      <div class="state-error" id="results-error" style="display:none;">
+        <i class="ph-bold ph-warning-diamond"></i>
+        <p id="results-error-msg">Error de conexión.</p>
+        <button class="btn-retry" id="btn-results-retry">Reintentar</button>
+      </div>
+      <ul class="paper-list" id="paper-list"></ul>
+      <button class="btn-load-more" id="btn-load-more" style="display:none;">
+        <i class="ph-bold ph-arrow-circle-down"></i> Cargar más
+      </button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       MODAL DETALLE
+  ══════════════════════════════════════ -->
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal-sheet" id="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <button class="btn-modal-close" id="btn-modal-close"><i class="ph-bold ph-x"></i></button>
+        <button class="btn-modal-bk" id="btn-modal-bk"><i class="ph-bold ph-bookmark-simple"></i></button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       NAV INFERIOR
+  ══════════════════════════════════════ -->
+  <nav class="bottom-nav" id="bottom-nav">
+    <button class="nav-btn active" data-page="home" id="nav-home">
+      <i class="ph-bold ph-house-simple"></i>
+      <span>Inicio</span>
+    </button>
+    <button class="nav-btn" data-page="explore" id="nav-explore">
+      <i class="ph-bold ph-compass"></i>
+      <span>Explorar</span>
+    </button>
+    <button class="nav-btn" data-page="profile" id="nav-profile">
+      <i class="ph-bold ph-user-circle"></i>
+      <span>Perfil</span>
+    </button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+  <script type="module" src="app.js?v=8"></script>
+</body>
+</html>

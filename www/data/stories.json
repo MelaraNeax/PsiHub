@@ -1,0 +1,138 @@
+{
+  "updatedAt": "2026-09-06T17:12:12.741Z",
+  "version": "1.0",
+  "stories": [
+    {
+      "id": "neurociencia-1788714725372",
+      "topicId": "neurociencia",
+      "topicName": "Neurociencia",
+      "topicColor": "#38bdf8",
+      "topicIcon": "ph-brain",
+      "hook": "¿Qué nos enseña la investigación reciente en Neurociencia?",
+      "headline": "From Synaptic Plasticity to Neurodegeneration: BDNF as a Transformative Target in Medicine",
+      "finding": "The brain-derived neurotrophic factor (BDNF) has become one of the cornerstones of neuropathology, influencing synaptic plasticity, cognitive resilience, and neuronal survival. Apa...",
+      "takeaway": "La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.",
+      "paperTitle": "From Synaptic Plasticity to Neurodegeneration: BDNF as a Transformative Target in Medicine",
+      "journal": "International Journal of Molecular Sciences",
+      "year": 2025,
+      "doi": "10.3390/ijms26094271",
+      "url": "https://doi.org/10.3390/ijms26094271",
+      "pdfUrl": "https://www.mdpi.com/1422-0067/26/9/4271/pdf?version=1746006977",
+      "tags": [
+        "Neurociencia",
+        "Evidencia",
+        "Reciente"
+      ]
+    },
+    {
+      "id": "tcc-1788714726191",
+      "topicId": "tcc",
+      "topicName": "TCC & Conductual",
+      "topicColor": "#f59e0b",
+      "topicIcon": "ph-lightning",
+      "hook": "¿Qué nos enseña la investigación reciente en TCC & Conductual?",
+      "headline": "The evolving field of digital mental health: current evidence and implementation issues for smartphone apps, generative artificial intelligence, and virtual reality",
+      "finding": "The expanding domain of digital mental health is transitioning beyond traditional telehealth to incorporate smartphone apps, virtual reality, and generative artificial intelligence...",
+      "takeaway": "La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.",
+      "paperTitle": "The evolving field of digital mental health: current evidence and implementation issues for smartphone apps, generative artificial intelligence, and virtual reality",
+      "journal": "World Psychiatry",
+      "year": 2025,
+      "doi": "10.1002/wps.21299",
+      "url": "https://doi.org/10.1002/wps.21299",
+      "pdfUrl": "https://onlinelibrary.wiley.com/doi/pdfdirect/10.1002/wps.21299",
+      "tags": [
+        "TCC & Conductual",
+        "Evidencia",
+        "Reciente"
+      ]
+    },
+    {
+      "id": "clinica-1788714728382",
+      "topicId": "clinica",
+      "topicName": "Clínica & Psicoterapia",
+      "topicColor": "#10b981",
+      "topicIcon": "ph-heartbeat",
+      "hook": "¿Qué nos enseña la investigación reciente en Clínica & Psicoterapia?",
+      "headline": "Artificial intelligence in mental health care: a systematic review of diagnosis, monitoring, and intervention applications",
+      "finding": "Artificial intelligence (AI) has been recently applied to different mental health illnesses and healthcare domains. This systematic review presents the application of AI in mental ...",
+      "takeaway": "La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.",
+      "paperTitle": "Artificial intelligence in mental health care: a systematic review of diagnosis, monitoring, and intervention applications",
+      "journal": "Psychological Medicine",
+      "year": 2025,
+      "doi": "10.1017/s0033291724003295",
+      "url": "https://doi.org/10.1017/s0033291724003295",
+      "pdfUrl": "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/04DBD2D05976C9B1873B475018695418/S0033291724003295a.pdf/div-class-title-artificial-intelligence-in-mental-health-care-a-systematic-review-of-diagnosis-monitoring-and-intervention-applications-div.pdf",
+      "tags": [
+        "Clínica & Psicoterapia",
+        "Evidencia",
+        "Reciente"
+      ]
+    },
+    {
+      "id": "psicoanalisis-1788714730216",
+      "topicId": "psicoanalisis",
+      "topicName": "Psicoanálisis & Dinámica",
+      "topicColor": "#ec4899",
+      "topicIcon": "ph-spiral",
+      "hook": "¿Qué nos enseña la investigación reciente en Psicoanálisis & Dinámica?",
+      "headline": "Perspective to Practice: Theoretical Frameworks Explaining Intergenerational Trauma, Violence, and Maltreatment and Implications for the Therapeutic Response",
+      "finding": "Intergenerational trauma, violence, and maltreatment, in which symptoms or experiences of an ancestor's trauma repeat or otherwise manifest in subsequent generations, presents a we...",
+      "takeaway": "La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.",
+      "paperTitle": "Perspective to Practice: Theoretical Frameworks Explaining Intergenerational Trauma, Violence, and Maltreatment and Implications for the Therapeutic Response",
+      "journal": "International Journal of Environmental Research and Public Health",
+      "year": 2025,
+      "doi": "10.3390/ijerph22030321",
+      "url": "https://doi.org/10.3390/ijerph22030321",
+      "pdfUrl": "https://www.mdpi.com/1660-4601/22/3/321/pdf?version=1740142864",
+      "tags": [
+        "Psicoanálisis & Dinámica",
+        "Evidencia",
+        "Reciente"
+      ]
+    },
+    {
+      "id": "social-1788714730932",
+      "topicId": "social",
+      "topicName": "Psicología Social",
+      "topicColor": "#8b5cf6",
+      "topicIcon": "ph-users-three",
+      "hook": "¿Qué nos enseña la investigación reciente en Psicología Social?",
+      "headline": "Exploring automation bias in human–AI collaboration: a review and implications for explainable AI",
+      "finding": "Abstract As Artificial Intelligence (AI) becomes increasingly embedded in high-stakes domains such as healthcare, law, and public administration, automation bias (AB)—the tendency ...",
+      "takeaway": "La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.",
+      "paperTitle": "Exploring automation bias in human–AI collaboration: a review and implications for explainable AI",
+      "journal": "AI & Society",
+      "year": 2025,
+      "doi": "10.1007/s00146-025-02422-7",
+      "url": "https://doi.org/10.1007/s00146-025-02422-7",
+      "pdfUrl": "https://link.springer.com/content/pdf/10.1007/s00146-025-02422-7.pdf",
+      "tags": [
+        "Psicología Social",
+        "Evidencia",
+        "Reciente"
+      ]
+    },
+    {
+      "id": "neuropsicologia-1788714732741",
+      "topicId": "neuropsicologia",
+      "topicName": "Neuropsicología",
+      "topicColor": "#06b6d4",
+      "topicIcon": "ph-eye",
+      "hook": "¿Qué nos enseña la investigación reciente en Neuropsicología?",
+      "headline": "Breastfeeding: The Multifaceted Impact on Child Development and Maternal Well-Being",
+      "finding": "Breastfeeding is recognized as the gold standard in infant nutrition, providing necessary nutrients for optimal growth and development. Beyond its nutritional function, breastfeedi...",
+      "takeaway": "La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.",
+      "paperTitle": "Breastfeeding: The Multifaceted Impact on Child Development and Maternal Well-Being",
+      "journal": "Nutrients",
+      "year": 2025,
+      "doi": "10.3390/nu17081326",
+      "url": "https://doi.org/10.3390/nu17081326",
+      "pdfUrl": "https://www.mdpi.com/2072-6643/17/8/1326/pdf?version=1744365145",
+      "tags": [
+        "Neuropsicología",
+        "Evidencia",
+        "Reciente"
+      ]
+    }
+  ]
+}
