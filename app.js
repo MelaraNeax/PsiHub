@@ -243,7 +243,7 @@ const el = {
 
   // Home
   btnSearchOpen:   $('btn-search-open'),
-  searchContainer: $('search-container'),
+  searchInlineWrapper: $('search-inline-wrapper'),
   searchInput:     $('search-input'),
   btnClearSearch:  $('btn-clear-search'),
   corrientesRow:   $('corrientes-row'),
@@ -616,8 +616,7 @@ function buildCard(paper) {
   const tags        = (S.activeSubtype && S.activeSubtype !== 'all') ? [S.activeSubtype] : classifyPaper(paper);
 
   li.innerHTML = `
-    <div class="paper-color-bar" style="background:${cardColor};"></div>
-    <div class="paper-card-body">
+    <div class="paper-card-body" style="padding-left: 0;">
       <div class="paper-card-top">
         <h3 class="paper-card-title">${esc(displayTitle)}</h3>
         <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id)}" aria-label="Guardar">
@@ -720,11 +719,7 @@ async function loadRecommendations() {
       const corriente = detectCorriente(paper);
       return `
         <div class="rec-card" data-index="${i}">
-          <div class="rec-color-bar" style="background:${corriente.color};"></div>
-          <div class="rec-body">
-            <div class="rec-tags">
-              ${tags.map(tagBadge).join('')}
-            </div>
+          <div class="rec-body" style="padding-left: 0;">
             <p class="rec-title">${esc(paper.titleEs || paper.title)}</p>
             <p class="rec-snippet">${esc(paper.abstractEs || paper.abstract?.slice(0,150) || '')}</p>
             <div class="rec-meta">
@@ -942,8 +937,7 @@ function toggleBookmark(paper) {
 }
 
 function updateStatBadges() {
-  el.statSaved.textContent    = S.bookmarks.length;
-  el.statSearches.textContent = S.searches;
+  if (el.statSaved) el.statSaved.textContent = S.bookmarks.length;
 }
 
 // ═══════════════════════════════════════════════════
@@ -1074,10 +1068,13 @@ function setupEventListeners() {
   });
 
 
-  // Buscador
   el.btnSearchOpen.addEventListener('click', () => {
-    el.searchContainer.classList.toggle('open');
-    if (el.searchContainer.classList.contains('open')) setTimeout(() => el.searchInput.focus(), 300);
+    el.searchInlineWrapper.classList.toggle('active');
+    if (el.searchInlineWrapper.classList.contains('active')) {
+      setTimeout(() => el.searchInput.focus(), 300);
+    } else {
+      triggerSearch();
+    }
   });
 
   el.searchInput.addEventListener('input', () => {
@@ -1100,11 +1097,7 @@ function setupEventListeners() {
     }
   });
 
-  const searchIcon = el.searchContainer ? el.searchContainer.querySelector('.search-icon') : null;
-  if (searchIcon) {
-    searchIcon.style.cursor = 'pointer';
-    searchIcon.addEventListener('click', triggerSearch);
-  }
+  // Se eliminó searchIcon.addEventListener duplicado
 
   el.btnClearSearch.addEventListener('click', () => {
     el.searchInput.value = '';

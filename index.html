@@ -23,20 +23,18 @@
        PÁGINA PRINCIPAL (HOME)
   ══════════════════════════════════════ -->
   <div class="page" id="page-home">
+    <div class="results-bg-glow home-bg-glow"></div>
 
     <header class="home-header">
       <div class="home-header-top">
-        <h1 class="app-title">PsiHub</h1>
-        <button class="icon-btn" id="btn-search-open" aria-label="Buscar">
-          <i class="ph-bold ph-magnifying-glass"></i>
-        </button>
-      </div>
-      <!-- Buscador expandible -->
-      <div class="search-container" id="search-container">
-        <div class="search-bar">
-          <i class="ph-bold ph-magnifying-glass search-icon"></i>
-          <input type="search" id="search-input" placeholder="Buscar por tema, autor, enfoque…" autocomplete="off" enterkeyhint="search">
+        <h1 class="app-title" id="home-app-title">PsiHub</h1>
+        
+        <div class="search-inline-wrapper" id="search-inline-wrapper">
+          <input type="search" id="search-input" class="search-inline-input" placeholder="Buscar papers..." autocomplete="off" enterkeyhint="search">
           <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i class="ph-bold ph-x"></i></button>
+          <button class="icon-btn search-inline-trigger" id="btn-search-open" aria-label="Buscar">
+            <i class="ph-bold ph-magnifying-glass"></i>
+          </button>
         </div>
       </div>
     </header>
@@ -174,13 +172,9 @@
 
       <!-- Stats -->
       <div class="profile-stats">
-        <div class="stat-card">
+        <div class="stat-card" style="flex: unset; width: 100%;">
           <span class="stat-value" id="stat-saved">0</span>
           <span class="stat-label">Guardados</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-value" id="stat-searches">0</span>
-          <span class="stat-label">Búsquedas</span>
         </div>
       </div>
 

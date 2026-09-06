@@ -1,5 +1,5 @@
 /**
- * PsyHub — App Logic v3
+ * PsiHub — App Logic v3
  * Spotify aesthetic · OpenAlex · Traducción MyMemory
  */
 
@@ -243,7 +243,7 @@ const el = {
 
   // Home
   btnSearchOpen:   $('btn-search-open'),
-  searchContainer: $('search-container'),
+  searchInlineWrapper: $('search-inline-wrapper'),
   searchInput:     $('search-input'),
   btnClearSearch:  $('btn-clear-search'),
   corrientesRow:   $('corrientes-row'),
@@ -566,7 +566,7 @@ async function doFetch() {
 
   } catch (err) {
     if (err.name === 'AbortError') return;
-    console.error('[PsyHub fetch]', err);
+    console.error('[PsiHub fetch]', err);
     el.resultsErrorMsg.textContent = err.message || 'Error de conexión con OpenAlex.';
     showResultsState('error');
   } finally {
@@ -616,8 +616,7 @@ function buildCard(paper) {
   const tags        = (S.activeSubtype && S.activeSubtype !== 'all') ? [S.activeSubtype] : classifyPaper(paper);
 
   li.innerHTML = `
-    <div class="paper-color-bar" style="background:${cardColor};"></div>
-    <div class="paper-card-body">
+    <div class="paper-card-body" style="padding-left: 0;">
       <div class="paper-card-top">
         <h3 class="paper-card-title">${esc(displayTitle)}</h3>
         <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id)}" aria-label="Guardar">
@@ -720,11 +719,7 @@ async function loadRecommendations() {
       const corriente = detectCorriente(paper);
       return `
         <div class="rec-card" data-index="${i}">
-          <div class="rec-color-bar" style="background:${corriente.color};"></div>
-          <div class="rec-body">
-            <div class="rec-tags">
-              ${tags.map(tagBadge).join('')}
-            </div>
+          <div class="rec-body" style="padding-left: 0;">
             <p class="rec-title">${esc(paper.titleEs || paper.title)}</p>
             <p class="rec-snippet">${esc(paper.abstractEs || paper.abstract?.slice(0,150) || '')}</p>
             <div class="rec-meta">
@@ -942,8 +937,7 @@ function toggleBookmark(paper) {
 }
 
 function updateStatBadges() {
-  el.statSaved.textContent    = S.bookmarks.length;
-  el.statSearches.textContent = S.searches;
+  if (el.statSaved) el.statSaved.textContent = S.bookmarks.length;
 }
 
 // ═══════════════════════════════════════════════════
@@ -1074,10 +1068,13 @@ function setupEventListeners() {
   });
 
 
-  // Buscador
   el.btnSearchOpen.addEventListener('click', () => {
-    el.searchContainer.classList.toggle('open');
-    if (el.searchContainer.classList.contains('open')) setTimeout(() => el.searchInput.focus(), 300);
+    el.searchInlineWrapper.classList.toggle('active');
+    if (el.searchInlineWrapper.classList.contains('active')) {
+      setTimeout(() => el.searchInput.focus(), 300);
+    } else {
+      triggerSearch();
+    }
   });
 
   el.searchInput.addEventListener('input', () => {
@@ -1100,11 +1097,7 @@ function setupEventListeners() {
     }
   });
 
-  const searchIcon = el.searchContainer ? el.searchContainer.querySelector('.search-icon') : null;
-  if (searchIcon) {
-    searchIcon.style.cursor = 'pointer';
-    searchIcon.addEventListener('click', triggerSearch);
-  }
+  // Se eliminó searchIcon.addEventListener duplicado
 
   el.btnClearSearch.addEventListener('click', () => {
     el.searchInput.value = '';
@@ -1380,15 +1373,9 @@ function renderCurrentStory(index) {
     }).join('');
   }
 
-  // 3. Header y metadatos del tópico
-  if (el.exploreTopicIcon) el.exploreTopicIcon.className = 'ph-bold ' + (story.topicIcon || 'ph-brain');
-  if (el.exploreStoryTopicLabel) el.exploreStoryTopicLabel.textContent = story.topicName;
-  if (el.exploreJournalCite) el.exploreJournalCite.textContent = story.journal ? `${story.journal} (${story.year || ''})` : '';
-
-  // 4. Placa central (Hook, Headline, Finding, Takeaway, Tags)
+  // 3. Placa central (Hook, Finding, Takeaway, Tags)
   if (el.exploreStoryHook) el.exploreStoryHook.textContent = story.hook;
-  if (el.exploreHeadline) el.exploreHeadline.textContent = story.headline || '';
-  if (el.exploreFindingText) el.exploreFindingText.textContent = story.finding || '';
+  if (el.exploreFindingText) el.exploreFindingText.textContent = story.finding || story.headline || '';
 
   if (el.exploreTakeawayBox) {
     if (story.takeaway) {
@@ -1400,8 +1387,18 @@ function renderCurrentStory(index) {
   }
 
   if (el.exploreTagsRow) {
-    el.exploreTagsRow.innerHTML = (story.tags || []).map(t => `<span class="explore-chip">${esc(t)}</span>`).join('');
+    el.exploreTagsRow.innerHTML = (story.tags || [story.topicName]).map(t => 
+      `<span style="display:inline-block; margin-right:6px; font-size:10px; padding:4px 10px; background:rgba(255,255,255,0.15); border-radius:100px; font-weight:700; color:var(--txt);">${esc(t)}</span>`
+    ).join('');
   }
+
+  // 4. Metadatos (Journal, Año, Citas)
+  const metaJournal = $('explore-journal-cite');
+  if (metaJournal) metaJournal.innerHTML = `<i class="ph-bold ph-book"></i> ${esc(story.journal || 'Journal Científico')}`;
+  const metaYear = $('explore-year');
+  if (metaYear) metaYear.innerHTML = `<i class="ph-bold ph-calendar-blank"></i> ${esc(story.year || new Date().getFullYear())}`;
+  const metaCites = $('explore-cites');
+  if (metaCites) metaCites.innerHTML = `<i class="ph-bold ph-quotes"></i> ${esc(story.citations || 0)} citas`;
 
   // 5. Botón de lectura (PDF / DOI)
   if (el.btnStoryRead) {
@@ -1529,7 +1526,7 @@ function toggleStoryBookmark() {
     abstractEs: `${story.hook}\n\n${story.finding}\n\n${story.takeaway || ''}`,
     topics: story.tags || [story.topicName],
     journal: story.journal || 'Curaduría Diaria',
-    firstInstitution: 'PsyHub Science Stories',
+    firstInstitution: 'PsiHub Science Stories',
     corrienteId: story.topicId
   };
 
@@ -1541,7 +1538,7 @@ async function shareCurrentStory() {
   if (!S.stories || !S.stories[S.activeStoryIdx]) return;
   const story = S.stories[S.activeStoryIdx];
   const shareData = {
-    title: `PsyHub: ${story.topicName}`,
+    title: `PsiHub: ${story.topicName}`,
     text: `${story.hook}\n${story.headline || story.finding}`,
     url: story.pdfUrl || story.url || window.location.href
   };

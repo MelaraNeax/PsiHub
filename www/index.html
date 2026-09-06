@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>PsyHub</title>
+  <title>PsiHub</title>
   <meta name="description" content="Tu plataforma de lectura científica en psicoterapia.">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#121212">
@@ -23,20 +23,18 @@
        PÁGINA PRINCIPAL (HOME)
   ══════════════════════════════════════ -->
   <div class="page" id="page-home">
+    <div class="results-bg-glow home-bg-glow"></div>
 
     <header class="home-header">
       <div class="home-header-top">
-        <h1 class="app-title">PsyHub</h1>
-        <button class="icon-btn" id="btn-search-open" aria-label="Buscar">
-          <i class="ph-bold ph-magnifying-glass"></i>
-        </button>
-      </div>
-      <!-- Buscador expandible -->
-      <div class="search-container" id="search-container">
-        <div class="search-bar">
-          <i class="ph-bold ph-magnifying-glass search-icon"></i>
-          <input type="search" id="search-input" placeholder="Buscar por tema, autor, enfoque…" autocomplete="off" enterkeyhint="search">
+        <h1 class="app-title" id="home-app-title">PsiHub</h1>
+        
+        <div class="search-inline-wrapper" id="search-inline-wrapper">
+          <input type="search" id="search-input" class="search-inline-input" placeholder="Buscar papers..." autocomplete="off" enterkeyhint="search">
           <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i class="ph-bold ph-x"></i></button>
+          <button class="icon-btn search-inline-trigger" id="btn-search-open" aria-label="Buscar">
+            <i class="ph-bold ph-magnifying-glass"></i>
+          </button>
         </div>
       </div>
     </header>
@@ -85,77 +83,63 @@
         <!-- 6 barras generadas dinámicamente -->
       </div>
 
-      <!-- Cabecera de la Historia (Estilo Corrientes / Results Header) -->
-      <div class="explore-story-header">
-        <div class="explore-topic-meta">
-          <div class="explore-topic-icon-wrap" id="explore-topic-avatar">
-            <i class="ph-bold ph-brain" id="explore-topic-icon"></i>
-          </div>
-          <div>
-            <span class="explore-topic-eyebrow" id="explore-story-topic-label">Neurociencia</span>
-            <h2 class="explore-topic-title">Ciencia Diaria</h2>
-          </div>
-        </div>
-
-        <div class="explore-header-controls">
-          <button class="explore-control-btn" id="btn-story-pause" aria-label="Pausar o reanudar" title="Pausar / Reanudar">
-            <i class="ph-bold ph-pause"></i>
-          </button>
-          <button class="explore-control-btn" id="btn-refresh-stories" aria-label="Actualizar historias" title="Actualizar">
-            <i class="ph-bold ph-arrows-clockwise"></i>
-          </button>
-        </div>
-      </div>
-
       <!-- Zonas invisibles para avanzar o retroceder al tocar la pantalla -->
       <div class="story-tap-zone story-tap-prev" id="story-tap-prev" title="Historia anterior"></div>
       <div class="story-tap-zone story-tap-next" id="story-tap-next" title="Siguiente historia"></div>
 
-      <!-- Placa Central: Moderna, translúcida, glassmorphism con blur -->
+      <!-- Placa Central: Minimalista -->
       <div class="explore-story-body">
         <div class="explore-glass-card" id="explore-story-card">
           
-          <div class="explore-card-top">
-            <span class="tag-pill explore-tag-pill" id="explore-badge-topic">
-              <i class="ph-bold ph-sparkle"></i> Hallazgo del día
-            </span>
-            <span class="explore-cite" id="explore-journal-cite">Nature Neuroscience (2025)</span>
-          </div>
+          <!-- Tags arriba -->
+          <div class="explore-tags-row" id="explore-tags-row" style="margin-bottom: 16px;"></div>
 
-          <h3 class="explore-hook" id="explore-story-hook">
+          <!-- Gancho (Título principal) -->
+          <h2 class="explore-hook" id="explore-story-hook">
             ¿El café antes o después de estudiar?
-          </h3>
+          </h2>
 
+          <!-- Hallazgo (Subtítulo descriptivo) -->
           <div class="explore-finding-box" id="explore-finding-box">
-            <p class="explore-headline" id="explore-headline"></p>
             <p class="explore-finding-text" id="explore-finding-text"></p>
           </div>
 
-          <div class="explore-takeaway-box" id="explore-takeaway-box">
-            <div class="explore-takeaway-label">
-              <i class="ph-bold ph-target"></i> Mecanismo / Aplicación
-            </div>
-            <p class="explore-takeaway-text" id="explore-takeaway-text"></p>
+          <!-- Takeaway opcional -->
+          <div class="explore-takeaway-box" id="explore-takeaway-box" style="display:none; margin-top: 16px;">
+            <p class="explore-takeaway-text" id="explore-takeaway-text" style="color: var(--txt-2); font-size: 14px; font-style: italic;"></p>
           </div>
 
-          <div class="explore-tags-row" id="explore-tags-row"></div>
+          <!-- Metadatos del Paper -->
+          <div class="explore-meta-row" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: var(--txt-3); display: flex; flex-direction: column; gap: 6px;">
+            <span id="explore-journal-cite"><i class="ph-bold ph-book"></i> Journal</span>
+            <span style="display:flex; gap:12px;">
+              <span id="explore-year"><i class="ph-bold ph-calendar-blank"></i> 2024</span>
+              <span id="explore-cites"><i class="ph-bold ph-quotes"></i> 0 citas</span>
+            </span>
+          </div>
+
+          <!-- Barra de Acciones Inferior Integrada en la placa -->
+          <div class="explore-actions-bar" style="margin-top: 24px;">
+            <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener" style="flex: 1;">
+              <i class="ph-bold ph-file-pdf"></i>
+              <span>Leer Paper</span>
+            </a>
+            <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" style="flex: 1;" title="Próximamente">
+              <i class="ph-bold ph-translate"></i>
+              <span>Traducir</span>
+            </button>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn-cta-secondary explore-action-save" id="btn-story-save" style="flex: 1; min-width: 100px;">
+                <i class="ph-bold ph-bookmark-simple"></i>
+                <span id="btn-story-save-txt">Guardar</span>
+              </button>
+              <button class="btn-cta-secondary explore-action-share" id="btn-story-share" title="Compartir" style="padding: 14px;">
+                <i class="ph-bold ph-share-network"></i>
+              </button>
+            </div>
+          </div>
 
         </div>
-      </div>
-
-      <!-- Barra de Acciones Inferior (Estilo CTAs principales de la app) -->
-      <div class="explore-actions-bar">
-        <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener">
-          <i class="ph-bold ph-file-pdf"></i>
-          <span>Leer Paper (Open Access)</span>
-        </a>
-        <button class="btn-cta-secondary explore-action-save" id="btn-story-save">
-          <i class="ph-bold ph-bookmark-simple"></i>
-          <span id="btn-story-save-txt">Guardar</span>
-        </button>
-        <button class="btn-cta-secondary explore-action-share" id="btn-story-share" title="Compartir">
-          <i class="ph-bold ph-share-network"></i>
-        </button>
       </div>
 
     </div>
@@ -188,13 +172,9 @@
 
       <!-- Stats -->
       <div class="profile-stats">
-        <div class="stat-card">
+        <div class="stat-card" style="flex: unset; width: 100%;">
           <span class="stat-value" id="stat-saved">0</span>
           <span class="stat-label">Guardados</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-value" id="stat-searches">0</span>
-          <span class="stat-label">Búsquedas</span>
         </div>
       </div>
 
@@ -202,7 +182,7 @@
       <section class="section profile-section">
         <h3 class="subsection-title">Traducción Ilimitada</h3>
         <p class="profile-hint">
-          PsyHub ahora utiliza <strong>Google Translate (gratuito e ilimitado)</strong> como motor principal para traducir títulos y abstracts, garantizando mayor cobertura.<br>
+          PsiHub ahora utiliza <strong>Google Translate (gratuito e ilimitado)</strong> como motor principal para traducir títulos y abstracts, garantizando mayor cobertura.<br>
           En caso de fallos, usamos MyMemory como respaldo. Podés añadir tu email de MyMemory (opcional) para aumentar el límite de respaldo.
         </p>
         <div class="profile-field">

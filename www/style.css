@@ -160,7 +160,7 @@ ul, ol { list-style: none; }
 .home-header {
   flex-shrink: 0;
   padding: calc(env(safe-area-inset-top, 0) + 16px) 20px 0;
-  background: linear-gradient(180deg, rgba(30,30,30,0.95) 0%, transparent 100%);
+  background: transparent;
   position: relative;
   z-index: 10;
 }
@@ -193,53 +193,71 @@ ul, ol { list-style: none; }
 
 .icon-btn:hover { background: rgba(255,255,255,0.14); }
 
-/* ─── Search container ─── */
-.search-container {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.3s var(--ease), margin 0.3s;
-}
-
-.search-container.open {
-  max-height: 60px;
-  margin-bottom: 12px;
-}
-
-.search-bar {
+/* ─── Search inline ─── */
+.search-inline-wrapper {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 24px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  height: 38px;
+  width: 38px;
+  border: 1px solid transparent;
+}
+
+.search-inline-wrapper:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.search-inline-wrapper.active {
+  width: 100%;
+  max-width: 260px;
   background: var(--surface);
-  border: 1px solid rgba(255,255,255,0.12);
-  padding: 0 14px;
-  gap: 10px;
-  height: 48px;
+  border-color: rgba(255, 255, 255, 0.12);
+  justify-content: space-between;
 }
 
-.search-bar:focus-within {
-  border-color: rgba(255,255,255,0.35);
-}
-
-.search-icon { color: var(--txt-3); font-size: 18px; flex-shrink: 0; }
-
-#search-input {
-  flex: 1;
+.search-inline-input {
+  width: 0;
+  opacity: 0;
   background: none;
   border: none;
   color: var(--txt);
   font-size: 15px;
   font-family: var(--font);
   outline: none;
-  -webkit-appearance: none;
-  appearance: none;
+  padding: 0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-#search-input::placeholder { color: var(--txt-3); }
+.search-inline-input::placeholder { color: var(--txt-3); }
+
+.search-inline-wrapper.active .search-inline-input {
+  width: calc(100% - 40px);
+  opacity: 1;
+  padding: 0 0 0 14px;
+}
+
+.search-inline-trigger {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--txt);
+  font-size: 20px;
+  background: transparent;
+  flex-shrink: 0;
+}
 
 .btn-clear-search {
   color: var(--txt-3);
   font-size: 18px;
   display: flex;
   align-items: center;
+  padding-right: 8px;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -777,27 +795,19 @@ input[type="search"]::-webkit-search-cancel-button {
   display: none;
 }
 
-/* Header con gradiente de color de la corriente */
 .results-header {
   flex-shrink: 0;
-  padding: calc(env(safe-area-inset-top, 0) + 14px) 20px 18px;
+  padding: calc(env(safe-area-inset-top, 0) + 10px) 20px 10px;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 14px;
-  min-height: 100px;
-  background: var(--results-bg, #1e1e1e);
+  min-height: 70px;
+  background: transparent;
   position: relative;
 }
 
 .results-header::after {
-  content: '';
-  position: absolute;
-  bottom: -32px;
-  left: 0;
-  right: 0;
-  height: 32px;
-  background: linear-gradient(var(--results-bg-faint, rgba(30,30,30,0.7)), transparent);
-  pointer-events: none;
+  display: none;
 }
 
 .btn-back {
@@ -1407,11 +1417,6 @@ input[type="search"]::-webkit-search-cancel-button {
 
 #page-explore {
   background: var(--bg);
-  position: fixed;
-  inset: 0 0 var(--nav-h) 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
   user-select: none;
 }
 
@@ -1490,58 +1495,13 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 /* Cabecera de la Historia (Estilo Results Header de Corrientes) */
-.explore-story-header {
+.story-minimal-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 0 12px;
-  z-index: 25;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.explore-topic-meta {
-  display: flex;
-  align-items: center;
+  justify-content: flex-end;
   gap: 12px;
-}
-
-.explore-topic-icon-wrap {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  color: var(--story-color, #38bdf8);
-  box-shadow: 0 0 16px rgba(0, 0, 0, 0.4), inset 0 0 12px rgba(255, 255, 255, 0.03);
-  transition: color 0.4s ease;
-}
-
-.explore-topic-eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--story-color, #38bdf8);
-  display: block;
-  margin-bottom: 2px;
-  transition: color 0.4s ease;
-}
-
-.explore-topic-title {
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: -0.3px;
-  color: #ffffff;
-}
-
-.explore-header-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  padding: 0 8px 12px;
+  z-index: 25;
 }
 
 .explore-control-btn {
@@ -1600,14 +1560,10 @@ input[type="search"]::-webkit-search-cancel-button {
 
 /* Tarjeta Glassmorphic Translúcida */
 .explore-glass-card {
-  background: rgba(26, 26, 30, 0.65);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
-  padding: 20px 22px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
-  transition: border-color 0.4s ease;
+  padding: 10px 16px;
+  max-width: 600px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .explore-card-top {
@@ -1632,21 +1588,16 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 .explore-hook {
-  font-size: 21px;
+  font-size: clamp(22px, 5vw, 32px);
   font-weight: 800;
-  line-height: 1.28;
+  line-height: 1.25;
   color: #ffffff;
-  margin-bottom: 14px;
-  letter-spacing: -0.3px;
+  margin-bottom: 16px;
+  letter-spacing: -0.5px;
 }
 
 .explore-finding-box {
-  background: rgba(255, 255, 255, 0.04);
-  border-left: 3px solid var(--story-color, #38bdf8);
-  padding: 13px 15px;
-  border-radius: 0 12px 12px 0;
-  margin-bottom: 12px;
-  transition: border-color 0.4s ease;
+  margin-bottom: 16px;
 }
 
 .explore-headline {
@@ -1658,16 +1609,12 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 .explore-finding-text {
-  font-size: 13px;
-  color: #d1d5db;
-  line-height: 1.5;
+  font-size: clamp(14px, 3.5vw, 16px);
+  color: #e5e7eb;
+  line-height: 1.6;
 }
 
 .explore-takeaway-box {
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  padding: 11px 13px;
-  border-radius: 12px;
   margin-bottom: 14px;
 }
 
@@ -1708,6 +1655,7 @@ input[type="search"]::-webkit-search-cancel-button {
 /* Barra de Acciones Inferior */
 .explore-actions-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 8px 0 calc(var(--safe-bottom) + 8px);
@@ -1715,14 +1663,37 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 .explore-action-read {
-  flex: 1;
+  flex: 1 1 100%;
   background: var(--story-color, #38bdf8);
   color: #050505;
   font-weight: 700;
   border-radius: 12px;
-  padding: 13px;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 15px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.explore-action-translate {
+  flex: 1 1 100%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-weight: 600;
+  border-radius: 12px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: all 0.2s ease;
+  opacity: 0.8;
+  cursor: not-allowed;
 }
 
 .explore-action-read:active {
@@ -1762,3 +1733,25 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 
+
+ . b t n - l o a d - m o r e   { 
+     d i s p l a y :   f l e x ; 
+     a l i g n - i t e m s :   c e n t e r ; 
+     j u s t i f y - c o n t e n t :   c e n t e r ; 
+     g a p :   8 p x ; 
+     w i d t h :   c a l c ( 1 0 0 %   -   4 0 p x ) ; 
+     m a r g i n :   2 0 p x   a u t o   4 0 p x ; 
+     p a d d i n g :   1 4 p x ; 
+     b a c k g r o u n d :   v a r ( - - s u r f a c e ) ; 
+     b o r d e r :   1 p x   s o l i d   r g b a ( 2 5 5 , 2 5 5 , 2 5 5 , 0 . 0 6 ) ; 
+     b o r d e r - r a d i u s :   2 0 p x ; 
+     c o l o r :   v a r ( - - t x t ) ; 
+     f o n t - s i z e :   1 5 p x ; 
+     f o n t - w e i g h t :   6 0 0 ; 
+     t r a n s i t i o n :   a l l   0 . 2 s   e a s e ; 
+ } 
+ . b t n - l o a d - m o r e : h o v e r   { 
+     b a c k g r o u n d :   r g b a ( 2 5 5 ,   2 5 5 ,   2 5 5 ,   0 . 0 8 ) ; 
+ } 
+  
+ 
