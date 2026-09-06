@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = 'llama3-70b-8192'; // Modelo gratuito, ultra rápido y de alta capacidad en Groq
+const GROQ_MODEL = 'llama-3.1-70b-versatile'; // Modelo gratuito, ultra rápido y de alta capacidad en Groq
 
 // 6 Tópicos definidos para PsyHub
 const TOPICS = [
@@ -242,14 +242,19 @@ async function main() {
       const papers = await fetchTopCandidatePapers(topic.query);
       if (papers.length === 0) {
         console.warn(`  ⚠️ No se encontraron papers para "${topic.name}". Saltando.`);
+        await new Promise(r => setTimeout(r, 2500));
         continue;
       }
       console.log(`  ✓ Encontrados ${papers.length} papers. Analizando con Groq...`);
       const story = await summarizeWithGroq(topic, papers);
       stories.push(story);
       console.log(`  ✨ Historia generada: "${story.hook}"`);
+      
+      // Retraso para no saturar las APIs (OpenAlex/Groq) y evitar error 429
+      await new Promise(r => setTimeout(r, 2500));
     } catch (err) {
       console.error(`  ❌ Error procesando tópico "${topic.name}":`, err.message);
+      await new Promise(r => setTimeout(r, 2500));
     }
   }
 
