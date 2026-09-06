@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>PsyHub</title>
+  <title>PsiHub</title>
   <meta name="description" content="Tu plataforma de lectura científica en psicoterapia.">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#121212">
@@ -26,7 +26,7 @@
 
     <header class="home-header">
       <div class="home-header-top">
-        <h1 class="app-title">PsyHub</h1>
+        <h1 class="app-title">PsiHub</h1>
         <button class="icon-btn" id="btn-search-open" aria-label="Buscar">
           <i class="ph-bold ph-magnifying-glass"></i>
         </button>
@@ -85,21 +85,11 @@
         <!-- 6 barras generadas dinámicamente -->
       </div>
 
-      <!-- Controles minimalistas flotantes -->
-      <div class="story-minimal-controls">
-        <button class="explore-control-btn" id="btn-story-pause" aria-label="Pausar o reanudar" title="Pausar / Reanudar">
-          <i class="ph-bold ph-pause"></i>
-        </button>
-        <button class="explore-control-btn" id="btn-refresh-stories" aria-label="Actualizar historias" title="Actualizar">
-          <i class="ph-bold ph-arrows-clockwise"></i>
-        </button>
-      </div>
-
       <!-- Zonas invisibles para avanzar o retroceder al tocar la pantalla -->
       <div class="story-tap-zone story-tap-prev" id="story-tap-prev" title="Historia anterior"></div>
       <div class="story-tap-zone story-tap-next" id="story-tap-next" title="Siguiente historia"></div>
 
-      <!-- Placa Central: Sobria, glassmorphism limpio -->
+      <!-- Placa Central: Minimalista -->
       <div class="explore-story-body">
         <div class="explore-glass-card" id="explore-story-card">
           
@@ -132,12 +122,16 @@
 
           <!-- Barra de Acciones Inferior Integrada en la placa -->
           <div class="explore-actions-bar" style="margin-top: 24px;">
-            <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener">
+            <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener" style="flex: 1;">
               <i class="ph-bold ph-file-pdf"></i>
               <span>Leer Paper</span>
             </a>
-            <div style="display: flex; gap: 8px;">
-              <button class="btn-cta-secondary explore-action-save" id="btn-story-save" style="flex: 1;">
+            <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" style="flex: 1;" title="Próximamente">
+              <i class="ph-bold ph-translate"></i>
+              <span>Traducir</span>
+            </button>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn-cta-secondary explore-action-save" id="btn-story-save" style="flex: 1; min-width: 100px;">
                 <i class="ph-bold ph-bookmark-simple"></i>
                 <span id="btn-story-save-txt">Guardar</span>
               </button>
@@ -194,7 +188,7 @@
       <section class="section profile-section">
         <h3 class="subsection-title">Traducción Ilimitada</h3>
         <p class="profile-hint">
-          PsyHub ahora utiliza <strong>Google Translate (gratuito e ilimitado)</strong> como motor principal para traducir títulos y abstracts, garantizando mayor cobertura.<br>
+          PsiHub ahora utiliza <strong>Google Translate (gratuito e ilimitado)</strong> como motor principal para traducir títulos y abstracts, garantizando mayor cobertura.<br>
           En caso de fallos, usamos MyMemory como respaldo. Podés añadir tu email de MyMemory (opcional) para aumentar el límite de respaldo.
         </p>
         <div class="profile-field">

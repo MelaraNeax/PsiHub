@@ -1,5 +1,5 @@
 /**
- * PsyHub — App Logic v3
+ * PsiHub — App Logic v3
  * Spotify aesthetic · OpenAlex · Traducción MyMemory
  */
 
@@ -566,7 +566,7 @@ async function doFetch() {
 
   } catch (err) {
     if (err.name === 'AbortError') return;
-    console.error('[PsyHub fetch]', err);
+    console.error('[PsiHub fetch]', err);
     el.resultsErrorMsg.textContent = err.message || 'Error de conexión con OpenAlex.';
     showResultsState('error');
   } finally {
@@ -1533,7 +1533,7 @@ function toggleStoryBookmark() {
     abstractEs: `${story.hook}\n\n${story.finding}\n\n${story.takeaway || ''}`,
     topics: story.tags || [story.topicName],
     journal: story.journal || 'Curaduría Diaria',
-    firstInstitution: 'PsyHub Science Stories',
+    firstInstitution: 'PsiHub Science Stories',
     corrienteId: story.topicId
   };
 
@@ -1545,7 +1545,7 @@ async function shareCurrentStory() {
   if (!S.stories || !S.stories[S.activeStoryIdx]) return;
   const story = S.stories[S.activeStoryIdx];
   const shareData = {
-    title: `PsyHub: ${story.topicName}`,
+    title: `PsiHub: ${story.topicName}`,
     text: `${story.hook}\n${story.headline || story.finding}`,
     url: story.pdfUrl || story.url || window.location.href
   };

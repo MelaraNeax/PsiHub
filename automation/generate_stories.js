@@ -1,5 +1,5 @@
 /**
- * generate_stories.js — Automatización diaria de historias para PsyHub
+ * generate_stories.js — Automatización diaria de historias para PsiHub
  * 
  * 1. Consulta OpenAlex para obtener los 10 papers más recientes y relevantes de 6 tópicos de psicología/neurociencias.
  * 2. Envía los abstracts a la API de Groq (Llama 3.3 70B) para que seleccione el más impactante y lo sintetice en formato "snackable".
@@ -16,7 +16,7 @@ const path = require('path');
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'openai/gpt-oss-120b'; // Modelo recomendado tras la jubilación de Llama
 
-// 6 Tópicos definidos para PsyHub
+// 8 Tópicos definidos para PsiHub
 const TOPICS = [
   {
     id: 'neurociencia',
@@ -59,6 +59,20 @@ const TOPICS = [
     color: '#06b6d4',
     icon: 'ph-eye',
     query: 'neuropsychology executive functions working memory cognitive aging neurodevelopment'
+  },
+  {
+    id: 'desarrollo',
+    name: 'Desarrollo & Infantil',
+    color: '#f43f5e',
+    icon: 'ph-baby',
+    query: 'developmental psychology child development adolescence attachment parenting autism'
+  },
+  {
+    id: 'organizacional',
+    name: 'Organizacional',
+    color: '#84cc16',
+    icon: 'ph-briefcase',
+    query: 'organizational psychology occupational health leadership burnout employee well-being'
   }
 ];
 
@@ -94,7 +108,7 @@ async function fetchTopCandidatePapers(topicQuery) {
   let retries = 3;
   while (retries > 0) {
     res = await fetch(url.toString(), {
-      headers: { 'User-Agent': 'PsyHubDailyStoriesBot/1.0 (psyhub.app.research@gmail.com)' }
+      headers: { 'User-Agent': 'PsiHubDailyStoriesBot/1.0 (psyhub.app.research@gmail.com)' }
     });
     if (res.status === 429) {
       console.warn(`    ⚠️ OpenAlex 429 Too Many Requests. Esperando ${4 - retries}x segundos...`);
@@ -242,7 +256,7 @@ Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el
 }
 
 async function main() {
-  console.log('🚀 Iniciando curaduría diaria de Historias para PsyHub...');
+  console.log('🚀 Iniciando curaduría diaria de Historias para PsiHub...');
   console.log(`📅 Fecha: ${new Date().toISOString()}`);
   console.log(`🤖 Modelo Groq: ${GROQ_MODEL}`);
   console.log(`🔑 Groq API Key: ${GROQ_API_KEY ? 'Presente ✓' : 'No provista (usando fallback de prueba)'}\n`);
