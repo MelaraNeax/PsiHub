@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = 'llama-3.1-70b-versatile'; // Modelo gratuito, ultra rápido y de alta capacidad en Groq
+const GROQ_MODEL = 'openai/gpt-oss-120b'; // Modelo recomendado tras la jubilación de Llama
 
 // 6 Tópicos definidos para PsyHub
 const TOPICS = [
@@ -90,12 +90,25 @@ async function fetchTopCandidatePapers(topicQuery) {
   url.searchParams.set('per-page', '15');
   url.searchParams.set('mailto', 'psyhub.app.research@gmail.com');
 
-  const res = await fetch(url.toString(), {
-    headers: { 'User-Agent': 'PsyHubDailyStoriesBot/1.0' }
-  });
+  let res;
+  let retries = 3;
+  while (retries > 0) {
+    res = await fetch(url.toString(), {
+      headers: { 'User-Agent': 'PsyHubDailyStoriesBot/1.0 (psyhub.app.research@gmail.com)' }
+    });
+    if (res.status === 429) {
+      console.warn(`    ⚠️ OpenAlex 429 Too Many Requests. Esperando ${4 - retries}x segundos...`);
+      await new Promise(r => setTimeout(r, (4 - retries) * 3000));
+      retries--;
+    } else if (!res.ok) {
+      throw new Error(`OpenAlex error ${res.status}: ${res.statusText}`);
+    } else {
+      break;
+    }
+  }
 
-  if (!res.ok) {
-    throw new Error(`OpenAlex error ${res.status}: ${res.statusText}`);
+  if (!res || !res.ok) {
+    throw new Error('OpenAlex error: Excedido el límite de reintentos 429.');
   }
 
   const data = await res.json();
