@@ -1,17 +1,17 @@
 {
-  "updatedAt": "2026-09-06T18:48:32.227Z",
+  "updatedAt": "2026-09-06T19:07:04.316Z",
   "version": "1.0",
   "stories": [
     {
-      "id": "neurociencia-mtq5zg9z",
+      "id": "neurociencia-mtq6nm4e",
       "topicId": "neurociencia",
       "topicName": "Neurociencia",
       "topicColor": "#38bdf8",
       "topicIcon": "ph-brain",
-      "hook": "¿Pueden los psicodélicos remodelar tu cerebro en una sesión?",
-      "headline": "Los psicodélicos inducen plasticidad neuronal que potencia la recuperación en trastornos mentales",
-      "finding": "Estudios clínicos y preclínicos demuestran que sustancias como psilocibina y LSD aumentan la formación de nuevas sinapsis y dendritas, mejoran la conectividad funcional y revierten patrones rígidos de actividad cerebral asociados a depresión, ansiedad y TEPT.",
-      "takeaway": "Esta plasticidad facilita la reestructuración cognitiva, permitiendo terapias breves y duraderas; su uso guiado puede acelerar la respuesta al tratamiento y reducir la resistencia a fármacos tradicionales.",
+      "hook": "¿Los psicodélicos pueden reprogramar tu cerebro?",
+      "headline": "Los psicodélicos inducen plasticidad neuronal rápida y duradera",
+      "finding": "Los compuestos psicodélicos como psilocibina y LSD activan vías de señalización que aumentan la formación de nuevas sinapsis y dendritas en semanas, no meses. Estudios humanos muestran mejoras sostenidas en depresión y ansiedad tras una sola dosis, vinculadas a estos cambios estructurales.",
+      "takeaway": "Este hallazgo sugiere que una única sesión psicodélica puede desencadenar procesos de neuroplasticidad que sustentan mejoras clínicas, abriendo la puerta a terapias breves y centradas en la experiencia, y a combinar psicodélicos con psicoterapia para potenciar resultados.",
       "paperTitle": "Psychedelic-Induced Neural Plasticity: A Comprehensive Review and a Discussion of Clinical Implications",
       "journal": "Brain Sciences",
       "year": 2025,
@@ -20,20 +20,20 @@
       "pdfUrl": "https://www.mdpi.com/2076-3425/15/2/117/pdf?version=1737801806",
       "tags": [
         "psicodélicos",
-        "plasticidad neuronal",
+        "neuroplasticidad",
         "psicoterapia"
       ]
     },
     {
-      "id": "tcc-mtq5zkde",
+      "id": "tcc-mtq6nqfi",
       "topicId": "tcc",
       "topicName": "TCC & Conductual",
       "topicColor": "#f59e0b",
       "topicIcon": "ph-lightning",
-      "hook": "¿Los apps pueden reemplazar la terapia presencial?",
-      "headline": "Intervenciones digitales basadas en TCC mejoran síntomas en estudiantes universitarios",
-      "finding": "Una meta‑análisis de ensayos controlados muestra que las intervenciones digitales con componentes cognitivo‑conductuales reducen significativamente la depresión y ansiedad en estudiantes, con un tamaño del efecto medio (d≈0.45) frente a controles activos.",
-      "takeaway": "Esto sugiere que los programas digitales pueden ampliar el acceso a la TCC en campus, ofreciendo una alternativa rentable y escalable sin perder eficacia clínica.",
+      "hook": "¿Terapia digital tan eficaz como la presencial?",
+      "headline": "Intervenciones digitales de salud mental igualan a la terapia presencial en estudiantes universitarios",
+      "finding": "Un meta‑análisis de ensayos controlados aleatorios mostró que los programas digitales basados en TCC reducen la sintomatología de ansiedad y depresión en estudiantes con un tamaño de efecto medio (g≈0.55), comparable al de la terapia cara a cara.",
+      "takeaway": "Esto sugiere que los servicios de salud mental pueden escalar usando plataformas digitales sin perder efectividad, facilitando el acceso rápido y económico a tratamientos basados en TCC.",
       "paperTitle": "Digital Mental Health Interventions for University Students With Mental Health Difficulties: A Systematic Review and Meta‐Analysis",
       "journal": "Early Intervention in Psychiatry",
       "year": 2025,
@@ -44,28 +44,6 @@
         "TCC",
         "intervención digital",
         "universitarios"
-      ]
-    },
-    {
-      "id": "psicoanalisis-mtq5zyi4",
-      "topicId": "psicoanalisis",
-      "topicName": "Psicoanálisis & Dinámica",
-      "topicColor": "#ec4899",
-      "topicIcon": "ph-spiral",
-      "hook": "¿El trauma infantil decide la terapia?",
-      "headline": "El trauma infantil no predice la respuesta a CBT ni psicodinámica",
-      "finding": "En un ensayo aleatorio con 100 adultos con depresión, se midió trauma infantil y se comparó psicoterapia psicodinámica breve y CBT durante 28 semanas. El trauma se asoció a mayor gravedad inicial, pero no influyó en la mejoría ni moderó la eficacia de ninguno de los tratamientos.",
-      "takeaway": "Los profesionales pueden elegir CBT o psicodinámica sin temer que el trauma infantil reduzca la efectividad, enfocándose en factores motivacionales y logísticos.",
-      "paperTitle": "Childhood trauma and treatment outcomes in short-term psychodynamic and cognitive behavioral therapy for adult depression",
-      "journal": "Frontiers in Psychiatry",
-      "year": 2025,
-      "doi": "10.3389/fpsyt.2025.1692277",
-      "url": "https://doi.org/10.3389/fpsyt.2025.1692277",
-      "pdfUrl": "https://public-pages-files-2025.frontiersin.org/journals/psychiatry/articles/10.3389/fpsyt.2025.1692277/pdf",
-      "tags": [
-        "trauma",
-        "terapia",
-        "depresión"
       ]
     }
   ]
