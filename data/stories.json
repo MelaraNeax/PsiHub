@@ -1,17 +1,17 @@
 {
-  "updatedAt": "2026-09-06T19:11:56.875Z",
+  "updatedAt": "2026-09-06T23:27:47.491Z",
   "version": "1.0",
   "stories": [
     {
-      "id": "neurociencia-mtq6trrw",
+      "id": "neurociencia-mtqfyua5",
       "topicId": "neurociencia",
       "topicName": "Neurociencia",
       "topicColor": "#38bdf8",
       "topicIcon": "ph-brain",
-      "hook": "¿Los psicodélicos pueden reactivar la plasticidad cerebral?",
-      "headline": "Los psicodélicos inducen una plasticidad neural comparable a la del aprendizaje",
-      "finding": "Estudios preclínicos y clínicos demuestran que sustancias como psilocibina y LSD aumentan la formación de nuevas sinapsis y dendritas, mejorando la conectividad en regiones asociadas al estado de ánimo y la cognición. Estos cambios persisten semanas después de la dosis.",
-      "takeaway": "Este efecto sugiere que los psicodélicos pueden potenciar la terapia psicológica al facilitar la reestructuración cognitiva, ofreciendo una herramienta para trastornos resistentes como depresión mayor y TEPT.",
+      "hook": "¿Una sola dosis puede remodelar tu cerebro?",
+      "headline": "Los psicodélicos inducen plasticidad neuronal rápida y duradera",
+      "finding": "Los psicodélicos activan vías de crecimiento sináptico, aumentan la formación de espinas dendríticas y expresan genes de plasticidad, evidenciado en modelos animales y neuroimagen humana, coincidiendo con mejorías rápidas en depresión, TEPT y ansiedad.",
+      "takeaway": "Abren una ventana de plasticidad similar a un período crítico, permitiendo que la terapia psicológica sea más eficaz; su uso controlado podría transformar el tratamiento de trastornos mentales resistentes.",
       "paperTitle": "Psychedelic-Induced Neural Plasticity: A Comprehensive Review and a Discussion of Clinical Implications",
       "journal": "Brain Sciences",
       "year": 2025,
@@ -20,20 +20,20 @@
       "pdfUrl": "https://www.mdpi.com/2076-3425/15/2/117/pdf?version=1737801806",
       "tags": [
         "psicodélicos",
-        "plasticidad neural",
-        "terapia"
+        "plasticidad neuronal",
+        "psicoterapia"
       ]
     },
     {
-      "id": "tcc-mtq6twfe",
+      "id": "tcc-mtqfyy7j",
       "topicId": "tcc",
       "topicName": "TCC & Conductual",
       "topicColor": "#f59e0b",
       "topicIcon": "ph-lightning",
-      "hook": "¿Los estudiantes pueden superar la ansiedad sin terapia presencial?",
-      "headline": "Intervenciones digitales igualan la terapia presencial en estudiantes universitarios",
-      "finding": "Una meta‑análisis de ensayos controlados mostró que los programas digitales, mayormente basados en TCC, reducen síntomas de depresión y ansiedad con un tamaño de efecto comparable al de la terapia cara a cara. La adherencia fue ligeramente mayor y el costo significativamente menor.",
-      "takeaway": "Esto sugiere que los profesionales pueden integrar módulos digitales de TCC para ampliar el acceso, mantener la efectividad y reducir costos, especialmente en poblaciones con alta demanda y escasez de recursos.",
+      "hook": "¿Puede una app reemplazar la terapia presencial?",
+      "headline": "Intervenciones digitales igualan la eficacia de la TCC presencial en estudiantes universitarios",
+      "finding": "Los ensayos controlados mostraron que los programas digitales basados en TCC redujeron síntomas de ansiedad y depresión con efectos similares a la terapia cara a cara, pese a la mínima interacción humana.",
+      "takeaway": "Los profesionales pueden integrar herramientas digitales como complemento o sustituto parcial, ampliando el acceso sin perder efectividad.",
       "paperTitle": "Digital Mental Health Interventions for University Students With Mental Health Difficulties: A Systematic Review and Meta‐Analysis",
       "journal": "Early Intervention in Psychiatry",
       "year": 2025,
@@ -47,25 +47,25 @@
       ]
     },
     {
-      "id": "organizacional-mtq6uebq",
-      "topicId": "organizacional",
-      "topicName": "Organizacional",
-      "topicColor": "#84cc16",
-      "topicIcon": "ph-briefcase",
-      "hook": "¿Dominar la IA mejora tu equilibrio vital?",
-      "headline": "Alfabetización en IA eleva autonomía, competencia y satisfacción laboral",
-      "finding": "Los docentes universitarios con mayor alfabetización en IA reportan mayor satisfacción de sus necesidades psicológicas básicas – autonomía, competencia y relación – lo que a su vez mejora su equilibrio trabajo‑vida y satisfacción laboral. El efecto es directo y mediado por la teoría de autodeterminación.",
-      "takeaway": "Implica que formar al personal en IA no solo aumenta productividad, sino que protege su salud mental al satisfacer necesidades psicológicas, ofreciendo una vía práctica para reducir burnout y mejorar la calidad de vida en entornos académicos.",
-      "paperTitle": "The impact of AI literacy on work–life balance and job satisfaction among university faculty: a self-determination theory perspective",
-      "journal": "Frontiers in Psychology",
+      "id": "desarrollo-mtqfzcf7",
+      "topicId": "desarrollo",
+      "topicName": "Desarrollo & Infantil",
+      "topicColor": "#f43f5e",
+      "topicIcon": "ph-baby",
+      "hook": "¿Pantallas: culpables o refugio de los niños?",
+      "headline": "Uso de pantallas y problemas socioemocionales se influyen mutuamente",
+      "finding": "Un meta‑análisis de 117 estudios longitudinales (292 739 niños) halló una asociación pequeña pero significativa entre tiempo frente a pantallas y futuros problemas socioemocionales (b = 0.06). Asimismo, los niños con problemas socioemocionales tienden a aumentar su uso de pantallas.",
+      "takeaway": "Los profesionales deben evaluar tanto el tiempo de pantalla como el estado socioemocional, pues intervenir en uno puede influir en el otro y prevenir una espiral negativa.",
+      "paperTitle": "Electronic screen use and children’s socioemotional problems: A systematic review and meta-analysis of longitudinal studies.",
+      "journal": "Psychological Bulletin",
       "year": 2025,
-      "doi": "10.3389/fpsyg.2025.1669247",
-      "url": "https://doi.org/10.3389/fpsyg.2025.1669247",
-      "pdfUrl": "https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2025.1669247/pdf",
+      "doi": "10.1037/bul0000468",
+      "url": "https://doi.org/10.1037/bul0000468",
+      "pdfUrl": "https://doi.org/10.1037/bul0000468",
       "tags": [
-        "IA",
-        "bienestar",
-        "autodeterminación"
+        "pantallas",
+        "socioemocional",
+        "desarrollo infantil"
       ]
     }
   ]
