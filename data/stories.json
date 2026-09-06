@@ -1,17 +1,17 @@
 {
-  "updatedAt": "2026-09-06T19:07:04.316Z",
+  "updatedAt": "2026-09-06T19:11:56.875Z",
   "version": "1.0",
   "stories": [
     {
-      "id": "neurociencia-mtq6nm4e",
+      "id": "neurociencia-mtq6trrw",
       "topicId": "neurociencia",
       "topicName": "Neurociencia",
       "topicColor": "#38bdf8",
       "topicIcon": "ph-brain",
-      "hook": "¿Los psicodélicos pueden reprogramar tu cerebro?",
-      "headline": "Los psicodélicos inducen plasticidad neuronal rápida y duradera",
-      "finding": "Los compuestos psicodélicos como psilocibina y LSD activan vías de señalización que aumentan la formación de nuevas sinapsis y dendritas en semanas, no meses. Estudios humanos muestran mejoras sostenidas en depresión y ansiedad tras una sola dosis, vinculadas a estos cambios estructurales.",
-      "takeaway": "Este hallazgo sugiere que una única sesión psicodélica puede desencadenar procesos de neuroplasticidad que sustentan mejoras clínicas, abriendo la puerta a terapias breves y centradas en la experiencia, y a combinar psicodélicos con psicoterapia para potenciar resultados.",
+      "hook": "¿Los psicodélicos pueden reactivar la plasticidad cerebral?",
+      "headline": "Los psicodélicos inducen una plasticidad neural comparable a la del aprendizaje",
+      "finding": "Estudios preclínicos y clínicos demuestran que sustancias como psilocibina y LSD aumentan la formación de nuevas sinapsis y dendritas, mejorando la conectividad en regiones asociadas al estado de ánimo y la cognición. Estos cambios persisten semanas después de la dosis.",
+      "takeaway": "Este efecto sugiere que los psicodélicos pueden potenciar la terapia psicológica al facilitar la reestructuración cognitiva, ofreciendo una herramienta para trastornos resistentes como depresión mayor y TEPT.",
       "paperTitle": "Psychedelic-Induced Neural Plasticity: A Comprehensive Review and a Discussion of Clinical Implications",
       "journal": "Brain Sciences",
       "year": 2025,
@@ -20,20 +20,20 @@
       "pdfUrl": "https://www.mdpi.com/2076-3425/15/2/117/pdf?version=1737801806",
       "tags": [
         "psicodélicos",
-        "neuroplasticidad",
-        "psicoterapia"
+        "plasticidad neural",
+        "terapia"
       ]
     },
     {
-      "id": "tcc-mtq6nqfi",
+      "id": "tcc-mtq6twfe",
       "topicId": "tcc",
       "topicName": "TCC & Conductual",
       "topicColor": "#f59e0b",
       "topicIcon": "ph-lightning",
-      "hook": "¿Terapia digital tan eficaz como la presencial?",
-      "headline": "Intervenciones digitales de salud mental igualan a la terapia presencial en estudiantes universitarios",
-      "finding": "Un meta‑análisis de ensayos controlados aleatorios mostró que los programas digitales basados en TCC reducen la sintomatología de ansiedad y depresión en estudiantes con un tamaño de efecto medio (g≈0.55), comparable al de la terapia cara a cara.",
-      "takeaway": "Esto sugiere que los servicios de salud mental pueden escalar usando plataformas digitales sin perder efectividad, facilitando el acceso rápido y económico a tratamientos basados en TCC.",
+      "hook": "¿Los estudiantes pueden superar la ansiedad sin terapia presencial?",
+      "headline": "Intervenciones digitales igualan la terapia presencial en estudiantes universitarios",
+      "finding": "Una meta‑análisis de ensayos controlados mostró que los programas digitales, mayormente basados en TCC, reducen síntomas de depresión y ansiedad con un tamaño de efecto comparable al de la terapia cara a cara. La adherencia fue ligeramente mayor y el costo significativamente menor.",
+      "takeaway": "Esto sugiere que los profesionales pueden integrar módulos digitales de TCC para ampliar el acceso, mantener la efectividad y reducir costos, especialmente en poblaciones con alta demanda y escasez de recursos.",
       "paperTitle": "Digital Mental Health Interventions for University Students With Mental Health Difficulties: A Systematic Review and Meta‐Analysis",
       "journal": "Early Intervention in Psychiatry",
       "year": 2025,
@@ -44,6 +44,28 @@
         "TCC",
         "intervención digital",
         "universitarios"
+      ]
+    },
+    {
+      "id": "organizacional-mtq6uebq",
+      "topicId": "organizacional",
+      "topicName": "Organizacional",
+      "topicColor": "#84cc16",
+      "topicIcon": "ph-briefcase",
+      "hook": "¿Dominar la IA mejora tu equilibrio vital?",
+      "headline": "Alfabetización en IA eleva autonomía, competencia y satisfacción laboral",
+      "finding": "Los docentes universitarios con mayor alfabetización en IA reportan mayor satisfacción de sus necesidades psicológicas básicas – autonomía, competencia y relación – lo que a su vez mejora su equilibrio trabajo‑vida y satisfacción laboral. El efecto es directo y mediado por la teoría de autodeterminación.",
+      "takeaway": "Implica que formar al personal en IA no solo aumenta productividad, sino que protege su salud mental al satisfacer necesidades psicológicas, ofreciendo una vía práctica para reducir burnout y mejorar la calidad de vida en entornos académicos.",
+      "paperTitle": "The impact of AI literacy on work–life balance and job satisfaction among university faculty: a self-determination theory perspective",
+      "journal": "Frontiers in Psychology",
+      "year": 2025,
+      "doi": "10.3389/fpsyg.2025.1669247",
+      "url": "https://doi.org/10.3389/fpsyg.2025.1669247",
+      "pdfUrl": "https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2025.1669247/pdf",
+      "tags": [
+        "IA",
+        "bienestar",
+        "autodeterminación"
       ]
     }
   ]
