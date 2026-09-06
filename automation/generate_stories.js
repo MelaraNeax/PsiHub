@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = 'llama-3.3-70b-versatile'; // Modelo gratuito, ultra rápido y de alta capacidad en Groq
+const GROQ_MODEL = 'llama3-70b-8192'; // Modelo gratuito, ultra rápido y de alta capacidad en Groq
 
 // 6 Tópicos definidos para PsyHub
 const TOPICS = [
