@@ -1,17 +1,17 @@
 {
-  "updatedAt": "2026-09-06T23:27:47.491Z",
+  "updatedAt": "2026-09-06T23:54:32.193Z",
   "version": "1.0",
   "stories": [
     {
-      "id": "neurociencia-mtqfyua5",
+      "id": "neurociencia-mtqgx9mb",
       "topicId": "neurociencia",
       "topicName": "Neurociencia",
       "topicColor": "#38bdf8",
       "topicIcon": "ph-brain",
-      "hook": "¿Una sola dosis puede remodelar tu cerebro?",
+      "hook": "¿Psychedelics pueden reprogramar tu cerebro en horas?",
       "headline": "Los psicodélicos inducen plasticidad neuronal rápida y duradera",
-      "finding": "Los psicodélicos activan vías de crecimiento sináptico, aumentan la formación de espinas dendríticas y expresan genes de plasticidad, evidenciado en modelos animales y neuroimagen humana, coincidiendo con mejorías rápidas en depresión, TEPT y ansiedad.",
-      "takeaway": "Abren una ventana de plasticidad similar a un período crítico, permitiendo que la terapia psicológica sea más eficaz; su uso controlado podría transformar el tratamiento de trastornos mentales resistentes.",
+      "finding": "Los compuestos psicodélicos como psilocibina y LSD activan vías de señalización que aumentan la formación de nuevas sinapsis y la expresión de genes de plasticidad, produciendo cambios estructurales en semanas. Estos efectos se correlacionan con mejorías clínicas en depresión y TEPT.",
+      "takeaway": "Esta plasticidad explica la rapidez y durabilidad de los efectos terapéuticos, sugiriendo que una o pocas sesiones pueden reconfigurar circuitos disfuncionales, ofreciendo una alternativa a tratamientos crónicos y abriendo nuevas vías para intervenciones psicoterapéuticas.",
       "paperTitle": "Psychedelic-Induced Neural Plasticity: A Comprehensive Review and a Discussion of Clinical Implications",
       "journal": "Brain Sciences",
       "year": 2025,
@@ -21,19 +21,19 @@
       "tags": [
         "psicodélicos",
         "plasticidad neuronal",
-        "psicoterapia"
+        "terapia"
       ]
     },
     {
-      "id": "tcc-mtqfyy7j",
+      "id": "tcc-mtqgxdmk",
       "topicId": "tcc",
       "topicName": "TCC & Conductual",
       "topicColor": "#f59e0b",
       "topicIcon": "ph-lightning",
-      "hook": "¿Puede una app reemplazar la terapia presencial?",
-      "headline": "Intervenciones digitales igualan la eficacia de la TCC presencial en estudiantes universitarios",
-      "finding": "Los ensayos controlados mostraron que los programas digitales basados en TCC redujeron síntomas de ansiedad y depresión con efectos similares a la terapia cara a cara, pese a la mínima interacción humana.",
-      "takeaway": "Los profesionales pueden integrar herramientas digitales como complemento o sustituto parcial, ampliando el acceso sin perder efectividad.",
+      "hook": "¿Puede una app igualar a la terapia presencial?",
+      "headline": "Intervenciones digitales igualan la efectividad de la TCC presencial en estudiantes universitarios",
+      "finding": "Una revisión sistemática y meta‑análisis de ensayos controlados mostró que las intervenciones digitales basadas en TCC reducen síntomas de ansiedad y depresión en estudiantes con una magnitud de efecto similar a la terapia cara a cara.",
+      "takeaway": "Esto sugiere que los servicios universitarios pueden escalar la atención usando apps, ampliando el acceso sin perder eficacia, y permite integrar seguimiento continuo.",
       "paperTitle": "Digital Mental Health Interventions for University Students With Mental Health Difficulties: A Systematic Review and Meta‐Analysis",
       "journal": "Early Intervention in Psychiatry",
       "year": 2025,
@@ -47,15 +47,15 @@
       ]
     },
     {
-      "id": "desarrollo-mtqfzcf7",
+      "id": "desarrollo-mtqgxqrx",
       "topicId": "desarrollo",
       "topicName": "Desarrollo & Infantil",
       "topicColor": "#f43f5e",
       "topicIcon": "ph-baby",
-      "hook": "¿Pantallas: culpables o refugio de los niños?",
-      "headline": "Uso de pantallas y problemas socioemocionales se influyen mutuamente",
-      "finding": "Un meta‑análisis de 117 estudios longitudinales (292 739 niños) halló una asociación pequeña pero significativa entre tiempo frente a pantallas y futuros problemas socioemocionales (b = 0.06). Asimismo, los niños con problemas socioemocionales tienden a aumentar su uso de pantallas.",
-      "takeaway": "Los profesionales deben evaluar tanto el tiempo de pantalla como el estado socioemocional, pues intervenir en uno puede influir en el otro y prevenir una espiral negativa.",
+      "hook": "¿Los niños usan pantallas por sus problemas emocionales?",
+      "headline": "El uso de pantallas y problemas socioemocionales se influyen mutuamente",
+      "finding": "Longitudinal meta‑análisis de 117 estudios (292,739 niños) muestra una asociación pequeña pero significativa en ambas direcciones: más tiempo frente a pantalla predice mayores problemas socioemocionales (b=0.06) y, a la inversa, los problemas predicen mayor uso de pantalla.",
+      "takeaway": "Los profesionales deben evaluar tanto el tiempo de pantalla como los síntomas emocionales, pues intervenir en uno puede influir en el otro, rompiendo el ciclo bidireccional.",
       "paperTitle": "Electronic screen use and children’s socioemotional problems: A systematic review and meta-analysis of longitudinal studies.",
       "journal": "Psychological Bulletin",
       "year": 2025,
@@ -65,7 +65,7 @@
       "tags": [
         "pantallas",
         "socioemocional",
-        "desarrollo infantil"
+        "intervención"
       ]
     }
   ]
