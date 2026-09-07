@@ -49,7 +49,6 @@ const QUERY_EXPANSION = {
   'sistémica':    'systemic family therapy',
   'sistemica':     'systemic family therapy',
   'gestalt':       'gestalt therapy',
-  'psicodrama':    'psychodrama',
   'mindfulness':   'mindfulness based intervention meditation',
   'act':           'acceptance commitment therapy ACT',
   'dbt':           'dialectical behavior therapy DBT',
@@ -112,88 +111,170 @@ const CORRIENTES = [
   { id: 'existencial',   label: 'Existencial',     abbr: 'EXI', icon: 'ph-infinity',              query: 'existential therapy logotherapy meaning Frankl',        color: '#4527A0' },
   { id: 'fenomenologia', label: 'Fenomenología',   abbr: 'FEN', icon: 'ph-spiral',                query: 'phenomenological existential psychotherapy',             color: '#5B3FE0' },
   { id: 'segunda_ola',   label: 'Segunda Ola',     abbr: '2°',  icon: 'ph-lightning',             query: 'rational emotive behavior REBT cognitive therapy',      color: '#E65C00' },
-  { id: 'psicodrama',    label: 'Psicodrama',      abbr: 'PDR', icon: 'ph-masks-theater',         query: 'psychodrama Moreno role playing',                       color: '#C62828' },
 ];
 
 // ═══════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════
-// CLASIFICACIÓN INTELIGENTE DE PAPERS (Teórico / Evidencia / Clínico)
+// ═══════════════════════════════════════════════════
+// CLASIFICACIÓN INTELIGENTE DE PAPERS (Evidencia / Clínico / Teórico)
 // ═══════════════════════════════════════════════════
 
-const KW_EVIDENCIA_STRONG = [
-  'randomized controlled', 'randomised controlled', 'meta-analysis', 'systematic review',
-  'rct', 'clinical trial', 'empirical study', 'placebo', 'effect size', 'double-blind',
-  'cohort study', 'control group', 'statistical analysis'
-];
-const KW_EVIDENCIA_MID = [
-  'efficacy', 'effectiveness', 'evidence-based', 'controlled trial', 'empirical',
-  'quantitative', 'outcomes measurement'
-];
-
-const KW_CLINICO_STRONG = [
-  'case report', 'case study', 'treatment protocol', 'clinical intervention',
-  'psychotherapy session', 'therapeutic relationship', 'clinical practice',
-  'patient care', 'psychotherapeutic technique', 'therapist', 'therapeutic alliance',
-  'clinical psychology', 'clinical study', 'clinical application', 'clinical case'
-];
-const KW_CLINICO_MID = [
-  'clinical', 'clinician', 'clinicians', 'patient', 'patients', 'intervention',
-  'disorder', 'depression', 'anxiety', 'psychiatric', 'diagnosis', 'symptom reduction',
-  'counseling', 'manualized', 'inpatient', 'outpatient', 'session', 'therapy'
+const EVIDENCIA_TERMS_TITLE_MESH = [
+  'meta-analysis', 'meta-analytic', 'metaanálisis', 'meta-análisis',
+  'systematic review', 'revisión sistemática', 'randomized controlled trial',
+  'randomised controlled trial', 'randomized controlled', 'randomised controlled',
+  'ensayo controlado aleatorizado', 'clinical trial', 'ensayo clínico',
+  'comparative study', 'estudio comparativo', 'efficacy', 'eficacia',
+  'cohort study', 'cohort studies', 'estudio de cohorte',
+  'case-control study', 'longitudinal cohort', 'prospective cohort', 'rct',
+  'double-blind', 'doble ciego', 'placebo-controlled', 'multicenter trial',
+  'longitudinal study', 'estudio longitudinal'
 ];
 
-const KW_TEORICO_STRONG = [
-  'theoretical framework', 'conceptual model', 'epistemology', 'psychoanalytic theory',
-  'historical review', 'philosophical', 'constructivism', 'hermeneutic',
-  'theoretical foundation', 'phenomenological', 'ontological', 'critical review'
+const EVIDENCIA_TERMS_GENERAL = [
+  'effectiveness', 'efectividad', 'odds ratio', 'relative risk', 'riesgo relativo',
+  'confidence interval', 'intervalo de confianza', '95% ci',
+  'effect size', 'tamaño del efecto', 'statistical significance', 'significancia estadística',
+  'empirical study', 'estudio empírico', 'quantitative analysis', 'análisis cuantitativo',
+  'meta-analyzed', 'cohen\'s d', 'regression model', 'heterogeneity', 'forest plot',
+  'sample size', 'tamaño de la muestra', 'control group', 'grupo control',
+  'p < 0.', 'p < .', 'n = ', 'patients were randomized', 'participantes', 'participants'
 ];
-const KW_TEORICO_MID = [
-  'conceptual', 'theory', 'framework', 'paradigm', 'theoretical', 'perspectives',
-  'epistemological', 'psychoanalysis'
+
+const CLINICO_TERMS_TITLE_MESH = [
+  'practice guideline', 'clinical guideline', 'guía clínica', 'guías de práctica',
+  'guidelines', 'guideline', 'case report', 'clinical case report', 'reporte de caso',
+  'case study', 'estudio de caso', 'caso clínico', 'treatment outcome',
+  'resultado del tratamiento', 'psychotherapy/methods', 'treatment protocol',
+  'protocolo de tratamiento', 'clinical protocol', 'protocolo clínico', 'protocol',
+  'intervention', 'intervención', 'psychotherapy', 'psicoterapia',
+  'clinical practice', 'práctica clínica', 'manualized treatment', 'tratamiento manualizado',
+  'therapeutic alliance', 'alianza terapéutica', 'alliance rupture', 'ruptura de la alianza',
+  'patient care', 'atención al paciente', 'counseling', 'consejería'
+];
+
+const CLINICO_TOPICS = [
+  'clinical psychology', 'psicología clínica', 'psychotherapy', 'psicoterapia',
+  'psychiatry', 'psiquiatría', 'mental health', 'salud mental',
+  'counseling psychology', 'applied psychology', 'family therapy', 'terapia familiar',
+  'cognitive therapy', 'terapia cognitiva', 'psychoanalytic therapy', 'psychotherapeutic'
+];
+
+const CLINICO_TERMS_GENERAL = [
+  'therapist', 'terapeuta', 'inpatient', 'outpatient', 'ambulatorio',
+  'diagnostic criteria', 'criterios diagnósticos', 'dsm-5', 'dsm-iv', 'dsm', 'icd-11', 'icd-10',
+  'cie-10', 'cie-11', 'symptom reduction', 'reducción de síntomas', 'clinical utility', 'utilidad clínica',
+  'treatment efficacy in practice', 'patient evaluation', 'evaluación del paciente',
+  'clinical presentation', 'presentación clínica', 'consultation', 'adherence to treatment',
+  'patient', 'paciente', 'treatment', 'tratamiento', 'disorder', 'trastorno', 'symptom', 'síntoma'
+];
+
+const TEORICO_TYPES = ['book-chapter', 'editorial', 'perspective', 'letter', 'paratext'];
+
+const TEORICO_TERMS_TITLE = [
+  'framework', 'marco teórico', 'marco conceptual', 'epistemology', 'epistemología',
+  'epistemological', 'epistemológico', 'conceptual model', 'modelo conceptual',
+  'theory', 'teoría', 'rethinking', 'repensando', 'perspectives', 'perspectiva',
+  'philosophical', 'filosófico', 'philosophy of mind', 'filosofía de la mente',
+  'constructivism', 'constructivismo', 'hermeneutic', 'hermenéutica',
+  'phenomenological framework', 'ontological', 'ontológico',
+  'psychoanalytic theory', 'theoretical foundations', 'fundamentos teóricos', 'towards a theory'
+];
+
+const TEORICO_TERMS_GENERAL = [
+  'conceptual', 'paradigm', 'paradigma', 'theoretical perspective', 'perspectiva teórica',
+  'epistemic', 'epistémico', 'dialectical', 'dialéctico', 'historical review', 'revisión histórica',
+  'conceptual analysis', 'análisis conceptual'
 ];
 
 function getPaperSubtypeScores(paper) {
   if (!paper) return { evidencia: 0, clinico: 0, teorico: 0 };
+
+  const type = (paper.type || '').toLowerCase();
   const title = (paper.title || '').toLowerCase();
+  const titleEs = (paper.titleEs || '').toLowerCase();
   const abstract = (paper.abstract || '').toLowerCase();
-  const topics = (paper.topics || []).join(' ').toLowerCase();
-  const fullText = `${title} ${title} ${topics} ${abstract}`;
+  const abstractEs = (paper.abstractEs || '').toLowerCase();
+  const topics = (paper.topics || []).map(t => String(t).toLowerCase());
+  const topicsStr = topics.join(' ');
+  const meshList = (paper.mesh || []).map(m => String(m).toLowerCase());
+  const meshStr = meshList.join(' ');
+
+  const titleAndMesh = `${title} ${titleEs} ${meshStr}`;
+  const fullText = `${titleAndMesh} ${topicsStr} ${abstract} ${abstractEs}`;
 
   let scoreEvidencia = 0;
   let scoreClinico = 0;
   let scoreTeorico = 0;
 
-  KW_EVIDENCIA_STRONG.forEach(kw => { if (fullText.includes(kw)) scoreEvidencia += 3; });
-  KW_EVIDENCIA_MID.forEach(kw => { if (fullText.includes(kw)) scoreEvidencia += 1; });
+  // 1. EVIDENCIA
+  if (type === 'review') scoreEvidencia += 5;
+  EVIDENCIA_TERMS_TITLE_MESH.forEach(kw => {
+    if (titleAndMesh.includes(kw)) scoreEvidencia += 6;
+    else if (fullText.includes(kw)) scoreEvidencia += 3;
+  });
+  EVIDENCIA_TERMS_GENERAL.forEach(kw => {
+    if (fullText.includes(kw)) scoreEvidencia += 2;
+  });
 
-  KW_CLINICO_STRONG.forEach(kw => { if (fullText.includes(kw)) scoreClinico += 3; });
-  KW_CLINICO_MID.forEach(kw => { if (fullText.includes(kw)) scoreClinico += 1; });
+  // 2. CLÍNICA
+  CLINICO_TERMS_TITLE_MESH.forEach(kw => {
+    if (titleAndMesh.includes(kw)) scoreClinico += 6;
+    else if (fullText.includes(kw)) scoreClinico += 3;
+  });
+  CLINICO_TOPICS.forEach(top => {
+    if (topicsStr.includes(top)) scoreClinico += 3;
+  });
+  CLINICO_TERMS_GENERAL.forEach(kw => {
+    if (fullText.includes(kw)) scoreClinico += 1.5;
+  });
 
-  KW_TEORICO_STRONG.forEach(kw => { if (fullText.includes(kw)) scoreTeorico += 3; });
-  KW_TEORICO_MID.forEach(kw => { if (fullText.includes(kw)) scoreTeorico += 1; });
+  // 3. TEORÍA
+  if (TEORICO_TYPES.includes(type)) scoreTeorico += 5;
+  TEORICO_TERMS_TITLE.forEach(kw => {
+    if (title.includes(kw) || titleEs.includes(kw)) scoreTeorico += 6;
+    else if (topicsStr.includes(kw)) scoreTeorico += 4;
+    else if (abstract.includes(kw) || abstractEs.includes(kw)) scoreTeorico += 2;
+  });
+  TEORICO_TERMS_GENERAL.forEach(kw => {
+    if (fullText.includes(kw)) scoreTeorico += 1.5;
+  });
+
+  // Criterio de descarte para teoría: presencia clara de estadística empírica o diseño experimental
+  const hasEmpiricalData = /p\s*[<=]\s*0?\.\d+|n\s*=\s*\d+|randomiz|aleatoriz|control group|grupo control|meta-analy|metaanálisis|clinical trial|ensayo clínico|sample size|tamaño de la muestra/i.test(fullText);
+  if (hasEmpiricalData) {
+    scoreTeorico = Math.max(0, scoreTeorico - 8);
+    scoreEvidencia += 4;
+  }
 
   return { evidencia: scoreEvidencia, clinico: scoreClinico, teorico: scoreTeorico };
 }
 
 function classifyPaper(paper) {
-  const scoresObj = getPaperSubtypeScores(paper);
-  const scores = [
-    { tag: 'evidencia', score: scoresObj.evidencia },
-    { tag: 'clinico',   score: scoresObj.clinico },
-    { tag: 'teorico',   score: scoresObj.teorico }
+  const scores = getPaperSubtypeScores(paper);
+  const ranked = [
+    { tag: 'evidencia', score: scores.evidencia },
+    { tag: 'clinico',   score: scores.clinico },
+    { tag: 'teorico',   score: scores.teorico }
   ].sort((a, b) => b.score - a.score);
 
-  const tags = [];
-  if (scores[0].score > 0) {
-    tags.push(scores[0].tag);
-    if (scores[1].score >= 3 && scores[1].score >= scores[0].score * 0.65) {
-      tags.push(scores[1].tag);
+  if (ranked[0].score > 0) {
+    const tags = [ranked[0].tag];
+    if (ranked[1].score >= 4 && ranked[1].score >= ranked[0].score * 0.75) {
+      tags.push(ranked[1].tag);
     }
-  } else {
-    tags.push('teorico');
+    return tags;
   }
 
-  return tags;
+  // Fallback inteligente bilingüe
+  const full = `${paper.title || ''} ${paper.titleEs || ''} ${(paper.topics || []).join(' ')} ${paper.abstract || ''} ${paper.abstractEs || ''}`.toLowerCase();
+  if (/patient|paciente|therap|terap|treatment|tratamient|disorder|trastorn|symptom|sintoma|síntoma|clinic|clínic|diagnos|diagnóst|consult|counsel/i.test(full)) {
+    return ['clinico'];
+  }
+  if (/data|dato|study|estudio|result|hallazgo|participant|muestra|sample|investig|experiment|evaluat|ensayo|meta-an/i.test(full)) {
+    return ['evidencia'];
+  }
+  return ['teorico'];
 }
 
 // ═══════════════════════════════════════════════════
@@ -303,18 +384,34 @@ function initDOMRefs() {
     btnModalBk:    $('btn-modal-bk'),
 
     // Perfil
-    profileAvatar:     $('profile-avatar'),
-    avatarInitials:    $('avatar-initials'),
-    profileName:       $('profile-name'),
-    profileRole:       $('profile-role'),
-    statSaved:         $('stat-saved'),
-    sectionSaved:      $('section-saved'),
-    savedList:         $('saved-list'),
-    profileEmptySaved: $('profile-empty-saved'),
-    btnClearAllSaved:  $('btn-clear-all-saved'),
-    trEmail:           $('tr-email'),
-    btnSaveTrEmail:    $('btn-save-tr-email'),
-    trEmailStatus:     $('tr-email-status'),
+    profileAvatar:        $('profile-avatar'),
+    profileAvatarImg:     $('profile-avatar-img'),
+    avatarInitials:       $('avatar-initials'),
+    profileName:          $('profile-name'),
+    profileRole:          $('profile-role'),
+    displayProfileName:   $('display-profile-name'),
+    displayProfileRole:   $('display-profile-role'),
+    displayRoleText:      $('display-role-text'),
+    authNotConnected:     $('auth-not-connected'),
+    authConnected:        $('auth-connected'),
+    btnGoogleLogin:       $('btn-google-login'),
+    btnGoogleLogout:      $('btn-google-logout'),
+    connectedUserEmail:   $('connected-user-email'),
+    googleModalOverlay:   $('google-modal-overlay'),
+    googleModalSheet:     $('google-modal-sheet'),
+    btnCloseGoogleModal:  $('btn-close-google-modal'),
+    googleLoginForm:      $('google-login-form'),
+    googleInputEmail:     $('google-input-email'),
+    googleInputName:      $('google-input-name'),
+    openalexApiKey:       $('openalex-api-key'),
+    btnSaveApiKey:        $('btn-save-api-key'),
+    apiKeyStatus:         $('api-key-status'),
+    statSaved:            $('stat-saved'),
+    statPoolStatus:       $('stat-pool-status'),
+    sectionSaved:         $('section-saved'),
+    savedList:            $('saved-list'),
+    profileEmptySaved:    $('profile-empty-saved'),
+    btnClearAllSaved:     $('btn-clear-all-saved'),
 
     // Toast
     toast: $('toast'),
@@ -494,6 +591,7 @@ function closeResults(animated = true) {
     el.resultsView.classList.add('hidden');
   }
   S.resultsOpen = false;
+  S.activeSubtype = 'all';
   S.papers = [];
   el.paperList.innerHTML = '';
   el.btnLoadMore.style.display = 'none';
@@ -601,18 +699,19 @@ function renderPapers(papers, append) {
   el.paperList.appendChild(frag);
 }
 
-function buildCard(paper) {
+function buildCard(paper, onBookmarkChange) {
   const li = document.createElement('li');
   li.className = 'paper-card';
 
-  const corriente   = S.activeCorriente;
-  const cardColor   = corriente ? corriente.color : '#555';
+  const isCorrienteView = Boolean(S.resultsOpen && S.activeCorriente && el.resultsHeaderLabel?.textContent?.toLowerCase().includes('corriente'));
+  const corriente = isCorrienteView ? S.activeCorriente : null;
   const isBk        = isBookmarked(paper.id);
   const displayTitle = paper.titleEs || paper.title;
   const snippet      = paper.abstractEs || (paper.abstract ? paper.abstract.slice(0, 150) + '...' : '');
-  const firstAuthor = paper.authors[0] || '';
-  const moreAuthors = paper.authors.length > 1 ? ` +${paper.authors.length - 1}` : '';
-  const tags        = (S.activeSubtype && S.activeSubtype !== 'all') ? [S.activeSubtype] : classifyPaper(paper);
+  const firstAuthor = Array.isArray(paper.authors) ? (paper.authors[0] || '') : (paper.authors || '');
+  const moreAuthors = Array.isArray(paper.authors) && paper.authors.length > 1 ? ` +${paper.authors.length - 1}` : '';
+  const isFilterActiveInResults = Boolean(S.resultsOpen && S.activeSubtype && S.activeSubtype !== 'all');
+  const tags        = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
 
   li.innerHTML = `
     <div class="paper-card-body" style="padding-left: 0;">
@@ -627,7 +726,7 @@ function buildCard(paper) {
       <div class="paper-card-meta">
         ${tags.map(tagBadge).join('')}
         ${paper.year ? `<span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
-        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-quotes"></i>${paper.citations.toLocaleString('es')}</span>
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-quotes"></i>${(paper.citations || 0).toLocaleString('es')}</span>
       </div>
     </div>
   `;
@@ -641,6 +740,9 @@ function buildCard(paper) {
     const saved = isBookmarked(paper.id);
     btn.classList.toggle('saved', saved);
     btn.querySelector('i').className = saved ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
+    if (typeof onBookmarkChange === 'function') {
+      onBookmarkChange(saved, paper);
+    }
   });
 
   return li;
@@ -705,56 +807,12 @@ async function loadRecommendations() {
       p.abstractEs = translatedSnippets[i] + '...';
     });
 
-    // Detectar corriente para color
-    const detectCorriente = paper => {
-      const text = (paper.title + ' ' + paper.topics.join(' ')).toLowerCase();
-      return CORRIENTES.find(c =>
-        c.query.split(' ').some(term => text.includes(term.toLowerCase()))
-      ) || CORRIENTES[Math.floor(Math.random() * CORRIENTES.length)];
-    };
-
-    el.recsList.innerHTML = results.map((paper, i) => {
-      const saved = isBookmarked(paper.id);
-      return `
-        <div class="rec-card" data-index="${i}">
-          <div class="rec-body" style="padding-left: 0;">
-            <p class="rec-title">${esc(paper.titleEs || paper.title)}</p>
-            <p class="rec-snippet">${esc(paper.abstractEs || paper.abstract?.slice(0,150) || '')}</p>
-            <div class="rec-meta">
-              ${paper.year ? `<span><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
-              <span><i class="ph-bold ph-quotes"></i>${paper.citations.toLocaleString('es')} citas</span>
-              <button class="rec-save-btn ${saved ? 'saved' : ''}" data-paper-index="${i}" title="${saved ? 'Quitar' : 'Guardar'}">
-                <i class="${saved ? 'ph-fill' : 'ph-bold'} ph-bookmark-simple"></i>
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    // Bind click en cada rec-card
-    el.recsList.querySelectorAll('.rec-card').forEach(card => {
-      const index = parseInt(card.dataset.index);
-      // Click en botón guardar — no abrir modal
-      const saveBtn = card.querySelector('.rec-save-btn');
-      if (saveBtn) {
-        saveBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          const paper = results[index];
-          toggleBookmark(paper);
-          const saved = isBookmarked(paper.id);
-          saveBtn.classList.toggle('saved', saved);
-          saveBtn.querySelector('i').className = saved ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
-          saveBtn.title = saved ? 'Quitar' : 'Guardar';
-          showToast(saved ? 'Guardado ✓' : 'Quitado de guardados');
-        });
-      }
-      // Click en la card — abrir modal
-      card.addEventListener('click', () => {
-        const paper = results[index];
-        openModal(paper);
-      });
+    el.recsList.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    results.forEach(paper => {
+      frag.appendChild(buildCard(paper));
     });
+    el.recsList.appendChild(frag);
 
   } catch (err) {
     console.error('[Recs]', err);
@@ -779,17 +837,24 @@ async function openModal(paper, corriente) {
     paper.citations = typeof paper.citations === 'number' ? paper.citations : 0;
 
     S.currentPaper = paper;
-    corriente = corriente || (paper.corrienteId ? CORRIENTES.find(c => c.id === paper.corrienteId) : null) || S.activeCorriente;
+    // Solo mostrar la corriente si el paper fue abierto explícitamente desde la sección de corrientes activa
+    const isCorrienteActive = Boolean(
+      corriente && S.activeCorriente && S.resultsOpen &&
+      corriente.id === S.activeCorriente.id &&
+      el.resultsHeaderLabel?.textContent?.toLowerCase().includes('corriente')
+    );
+    const modalCorriente = isCorrienteActive ? corriente : null;
 
     const isBk = isBookmarked(paper.id);
     el.btnModalBk.classList.toggle('saved', isBk);
     el.btnModalBk.querySelector('i').className = isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
 
-    const tags = (S.activeSubtype && S.activeSubtype !== 'all') ? [S.activeSubtype] : classifyPaper(paper);
+    const isFilterActiveInResults = Boolean(S.resultsOpen && S.activeSubtype && S.activeSubtype !== 'all');
+    const tags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
     const displayTitle = paper.titleEs || paper.title || 'Sin título';
 
     // Mostrar modal con abstract existente o aviso
-    el.modalBody.innerHTML = buildModalHTML(paper, corriente, tags, displayTitle, paper.abstractEs, false);
+    el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, tags, displayTitle, paper.abstractEs, false);
     el.modalBody.scrollTop = 0;
     el.modalOverlay.classList.remove('hidden');
     el.modalSheet.classList.remove('closing');
@@ -808,10 +873,12 @@ async function openModal(paper, corriente) {
           if (full.firstInstitution) paper.firstInstitution = full.firstInstitution;
           if (full.oaUrl && !paper.oaUrl) paper.oaUrl = full.oaUrl;
           if (full.doi && !paper.doi) paper.doi = full.doi;
+          if (full.type) paper.type = full.type;
+          if (full.mesh?.length) paper.mesh = full.mesh;
 
           // Re-renderizar modal con la información completa
-          const updatedTags = (S.activeSubtype && S.activeSubtype !== 'all') ? [S.activeSubtype] : classifyPaper(paper);
-          el.modalBody.innerHTML = buildModalHTML(paper, corriente, updatedTags, displayTitle, paper.abstractEs, false);
+          const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
+          el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, updatedTags, displayTitle, paper.abstractEs, false);
         }
       } catch (errOpenAlex) {
         console.warn('[openModal] No se pudo obtener detalle de OpenAlex:', errOpenAlex);
@@ -846,8 +913,13 @@ async function openModal(paper, corriente) {
 }
 
 function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, translating) {
-  const tagColor = corriente ? corriente.color : '#555';
-  const tagLabel_ = corriente ? corriente.label : 'Artículo';
+  const isCorriente = Boolean(corriente && corriente.label);
+  const tagColor = isCorriente ? corriente.color : 'var(--txt-3)';
+  const tagLabel_ = isCorriente ? corriente.label : 'Artículo';
+  const tagStyle = isCorriente
+    ? `background:${tagColor}22; color:${tagColor}; border:1px solid ${tagColor}55;`
+    : `background:rgba(255,255,255,0.06); color:var(--txt-3); border:1px solid rgba(255,255,255,0.1);`;
+
   const abstractContent = paper.abstract || 'Abstract no disponible en los metadatos de OpenAlex.';
   const authors = Array.isArray(paper.authors) ? paper.authors : [];
   const citations = typeof paper.citations === 'number' ? paper.citations : 0;
@@ -855,7 +927,7 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
 
   return `
     <div class="modal-tags">
-      <span class="modal-tag" style="background:${tagColor}22; color:${tagColor}; border:1px solid ${tagColor}55;">${esc(tagLabel_)}</span>
+      <span class="modal-tag" style="${tagStyle}">${esc(tagLabel_)}</span>
       ${(tags || []).map(tagBadge).join('')}
       ${paper.year ? `<span class="modal-tag" style="background:rgba(255,255,255,0.06); color:var(--txt-3); border:1px solid rgba(255,255,255,0.08);">${paper.year}</span>` : ''}
     </div>
@@ -959,73 +1031,81 @@ function updateStatBadges() {
 // ═══════════════════════════════════════════════════
 
 function loadProfile() {
-  el.profileName.value = S.profile.name || '';
-  el.profileRole.value = S.profile.role || '';
-  el.trEmail.value = localStorage.getItem('psyhub_tr_email') || '';
-  updateAvatarInitials();
+  const googleUser = loadData('psyhub_google_user', null);
+  const userEmail = localStorage.getItem('psyhub_user_email') || '';
+  const apiKey = localStorage.getItem('psyhub_openalex_api_key') || '';
+
+  if (el.profileName) el.profileName.value = S.profile.name || (googleUser ? googleUser.name : '');
+  if (el.profileRole) el.profileRole.value = S.profile.role || '';
+  if (el.openalexApiKey) el.openalexApiKey.value = apiKey;
+
+  updateProfileUI(googleUser, userEmail, apiKey);
   updateStatBadges();
 }
 
-function updateAvatarInitials() {
-  const parts = (S.profile.name || '').trim().split(' ').filter(Boolean);
+function updateProfileUI(googleUser, userEmail, apiKey) {
+  const name = S.profile.name || (googleUser ? googleUser.name : '') || 'Mi Perfil';
+  if (el.displayProfileName) el.displayProfileName.textContent = name;
+
+  const roleLabels = {
+    estudiante: 'Estudiante de Psicología',
+    clinico: 'Psicólogo/a Clínico/a',
+    investigador: 'Investigador/a',
+    docente: 'Docente Universitario/a',
+    psiquiatra: 'Médico/a Psiquiatra'
+  };
+  if (el.displayRoleText) {
+    el.displayRoleText.textContent = roleLabels[S.profile.role] || 'Sin rol definido';
+  }
+
+  updateAvatarInitials(name);
+
+  // Estado de conexión Google
+  const isConnected = Boolean(googleUser || userEmail);
+  if (el.authNotConnected && el.authConnected) {
+    el.authNotConnected.style.display = isConnected ? 'none' : 'block';
+    el.authConnected.style.display = isConnected ? 'block' : 'none';
+  }
+  if (el.connectedUserEmail) {
+    el.connectedUserEmail.textContent = (googleUser ? googleUser.email : userEmail) || 'usuario@gmail.com';
+  }
+
+  // Estado de cola OpenAlex
+  if (el.statPoolStatus) {
+    el.statPoolStatus.textContent = apiKey ? 'API Key' : (isConnected ? 'Prioritaria' : 'Polite');
+    el.statPoolStatus.style.color = apiKey ? '#38bdf8' : (isConnected ? '#10b981' : 'var(--txt-1)');
+  }
+}
+
+function updateAvatarInitials(name) {
+  const cleanName = (name || S.profile.name || '').trim();
+  const parts = cleanName.split(' ').filter(Boolean);
   const initials = parts.length >= 2
     ? (parts[0][0] + parts[parts.length-1][0]).toUpperCase()
-    : (S.profile.name || '?').slice(0,2).toUpperCase();
-  el.avatarInitials.textContent = initials;
+    : (cleanName ? cleanName.slice(0, 2).toUpperCase() : 'P');
+  if (el.avatarInitials) el.avatarInitials.textContent = initials;
 }
 
 function refreshProfile() {
   updateStatBadges();
   if (S.bookmarks.length === 0) {
-    el.sectionSaved.style.display      = 'none';
-    el.profileEmptySaved.style.display = 'flex';
+    if (el.sectionSaved) el.sectionSaved.style.display = 'none';
+    if (el.profileEmptySaved) el.profileEmptySaved.style.display = 'flex';
     return;
   }
-  el.sectionSaved.style.display      = 'block';
-  el.profileEmptySaved.style.display = 'none';
+  if (el.sectionSaved) el.sectionSaved.style.display = 'block';
+  if (el.profileEmptySaved) el.profileEmptySaved.style.display = 'none';
 
-  el.savedList.innerHTML = S.bookmarks.map((b, index) => {
-    const displayTitle = b.titleEs || b.title || 'Sin título';
-    const firstAuthor = (Array.isArray(b.authors) && b.authors[0]) ? b.authors[0] : 'Autor no disponible';
-    const yearStr = b.year ? `${b.year} · ` : '';
-    const citesStr = `${(b.citations || 0).toLocaleString('es')} citas`;
-
-    return `
-      <li class="saved-card" data-index="${index}">
-        <div class="saved-card-header">
-          <span class="saved-card-badge"><i class="ph-bold ph-bookmark-simple"></i> Guardado</span>
-          <button type="button" class="saved-card-remove" data-index="${index}" aria-label="Eliminar guardado" title="Eliminar guardado">
-            <i class="ph-bold ph-trash"></i>
-          </button>
-        </div>
-        <div class="saved-card-main" data-index="${index}">
-          <h4 class="saved-card-title">${esc(displayTitle)}</h4>
-          <p class="saved-card-authors">${esc(firstAuthor)}</p>
-          <div class="saved-card-footer">
-            <span class="saved-card-meta">${yearStr}${citesStr}</span>
-            <span class="saved-card-action">Ver artículo <i class="ph-bold ph-arrow-right"></i></span>
-          </div>
-        </div>
-      </li>
-    `;
-  }).join('');
-
-  // Event listeners directos a cada tarjeta
-  el.savedList.querySelectorAll('.saved-card-main').forEach(elem => {
-    elem.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(elem.dataset.index, 10);
-      openSavedPaperByIndex(idx);
+  if (el.savedList) {
+    el.savedList.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    S.bookmarks.forEach(b => {
+      frag.appendChild(buildCard(b, (saved) => {
+        if (!saved) refreshProfile();
+      }));
     });
-  });
-
-  el.savedList.querySelectorAll('.saved-card-remove').forEach(elem => {
-    elem.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(elem.dataset.index, 10);
-      removeSavedPaperByIndex(idx);
-    });
-  });
+    el.savedList.appendChild(frag);
+  }
 }
 
 function openSavedPaperByIndex(idx) {
@@ -1271,20 +1351,25 @@ function setupEventListeners() {
     });
   }
 
-  if (el.storyTapNext)  el.storyTapNext.addEventListener('click', nextStory);
-  if (el.storyTapPrev)  el.storyTapPrev.addEventListener('click', prevStory);
-  if (el.btnStorySave)  el.btnStorySave.addEventListener('click', toggleStoryBookmark);
-  if (el.btnStoryShare) el.btnStoryShare.addEventListener('click', shareCurrentStory);
+  if (el.storyTapNext)  el.storyTapNext.addEventListener('click', (e) => { e.stopPropagation(); nextStory(); });
+  if (el.storyTapPrev)  el.storyTapPrev.addEventListener('click', (e) => { e.stopPropagation(); prevStory(); });
+  if (el.btnStorySave)  el.btnStorySave.addEventListener('click', (e) => { e.stopPropagation(); toggleStoryBookmark(); });
+  if (el.btnStoryShare) el.btnStoryShare.addEventListener('click', (e) => { e.stopPropagation(); shareCurrentStory(); });
 
-  // Mantener presionado para pausar (touch y mouse)
+  // Historias: Mantener presionado para pausar + Tocar para saltear o retroceder
   if (el.exploreStoryContainer) {
     let holdTimeout = null;
+    let didHold = false;
+
     const onHoldStart = (e) => {
-      if (e.target.closest('.explore-header-controls') || e.target.closest('.explore-actions-bar')) return;
+      if (e.target.closest('button, a, .explore-actions-bar, .story-minimal-controls, .explore-header-controls, .story-progress-bar')) return;
+      didHold = false;
       holdTimeout = setTimeout(() => {
+        didHold = true;
         pauseStory();
-      }, 160);
+      }, 220);
     };
+
     const onHoldEnd = () => {
       if (holdTimeout) clearTimeout(holdTimeout);
       if (S.storyPaused) resumeStory();
@@ -1294,6 +1379,24 @@ function setupEventListeners() {
     el.exploreStoryContainer.addEventListener('touchend', onHoldEnd, { passive: true });
     el.exploreStoryContainer.addEventListener('mousedown', onHoldStart);
     el.exploreStoryContainer.addEventListener('mouseup', onHoldEnd);
+
+    // Tap en pantalla para avanzar / retroceder historia
+    el.exploreStoryContainer.addEventListener('click', (e) => {
+      if (didHold) {
+        didHold = false;
+        return;
+      }
+      if (e.target.closest('button, a, .explore-actions-bar, .story-minimal-controls, .explore-header-controls, .story-progress-bar')) {
+        return;
+      }
+      const rect = el.exploreStoryContainer.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      if (clickX < rect.width * 0.35) {
+        prevStory();
+      } else {
+        nextStory();
+      }
+    });
   }
 
   // Perfil
@@ -1302,33 +1405,115 @@ function setupEventListeners() {
     saveData('psyhub_profile', S.profile);
     updateAvatarInitials();
   });
-  el.profileRole.addEventListener('change', () => {
-    S.profile.role = el.profileRole.value;
-    saveData('psyhub_profile', S.profile);
-  });
+  // Perfil: nombre y rol
+  if (el.profileName) {
+    el.profileName.addEventListener('input', () => {
+      S.profile.name = el.profileName.value.trim();
+      saveData('psyhub_profile', S.profile);
+      const googleUser = loadData('psyhub_google_user', null);
+      updateProfileUI(googleUser, localStorage.getItem('psyhub_user_email'), localStorage.getItem('psyhub_openalex_api_key'));
+    });
+  }
 
-  // Email de traducción
-  el.btnSaveTrEmail.addEventListener('click', () => {
-    const email = el.trEmail.value.trim();
-    if (email && !email.includes('@')) {
-      el.trEmailStatus.textContent = 'Ingresá un email válido.';
-      el.trEmailStatus.style.color = 'var(--red)';
-      return;
-    }
-    localStorage.setItem('psyhub_tr_email', email);
-    el.trEmailStatus.textContent = email ? '✓ Email guardado. Límite aumentado a 10.000 palabras/día.' : '✓ Email eliminado. Usando modo anónimo.';
-    el.trEmailStatus.style.color = 'var(--green)';
-  });
+  if (el.profileRole) {
+    el.profileRole.addEventListener('change', () => {
+      S.profile.role = el.profileRole.value;
+      saveData('psyhub_profile', S.profile);
+      const googleUser = loadData('psyhub_google_user', null);
+      updateProfileUI(googleUser, localStorage.getItem('psyhub_user_email'), localStorage.getItem('psyhub_openalex_api_key'));
+    });
+  }
+
+  // Google Sign-In Modal
+  if (el.btnGoogleLogin && el.googleModalOverlay) {
+    el.btnGoogleLogin.addEventListener('click', () => {
+      el.googleModalOverlay.classList.remove('hidden');
+      if (el.googleInputEmail) {
+        setTimeout(() => el.googleInputEmail.focus(), 200);
+      }
+    });
+  }
+
+  if (el.btnCloseGoogleModal && el.googleModalOverlay) {
+    el.btnCloseGoogleModal.addEventListener('click', () => {
+      el.googleModalOverlay.classList.add('hidden');
+    });
+  }
+
+  if (el.googleModalOverlay) {
+    el.googleModalOverlay.addEventListener('click', (e) => {
+      if (e.target === el.googleModalOverlay) {
+        el.googleModalOverlay.classList.add('hidden');
+      }
+    });
+  }
+
+  if (el.googleLoginForm) {
+    el.googleLoginForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const email = (el.googleInputEmail?.value || '').trim();
+      const name = (el.googleInputName?.value || '').trim();
+
+      if (!email || !email.includes('@')) {
+        showToast('Ingresá un correo de Google válido');
+        return;
+      }
+
+      localStorage.setItem('psyhub_user_email', email);
+      localStorage.setItem('psyhub_tr_email', email);
+
+      const displayName = name || S.profile.name || email.split('@')[0];
+      const googleData = { email, name: displayName, connectedAt: Date.now() };
+      saveData('psyhub_google_user', googleData);
+
+      if (!S.profile.name && name) {
+        S.profile.name = name;
+        saveData('psyhub_profile', S.profile);
+      }
+
+      el.googleModalOverlay.classList.add('hidden');
+      loadProfile();
+      showToast('¡Cuenta vinculada! Cola prioritaria de OpenAlex activa ✓');
+
+      // Refrescar recomendaciones con la cola prioritaria activa
+      loadRecommendations();
+    });
+  }
+
+  if (el.btnGoogleLogout) {
+    el.btnGoogleLogout.addEventListener('click', () => {
+      localStorage.removeItem('psyhub_user_email');
+      localStorage.removeItem('psyhub_google_user');
+      loadProfile();
+      showToast('Cuenta de Google desconectada');
+    });
+  }
+
+  // Guardar API Key de OpenAlex
+  if (el.btnSaveApiKey && el.openalexApiKey) {
+    el.btnSaveApiKey.addEventListener('click', () => {
+      const key = el.openalexApiKey.value.trim();
+      localStorage.setItem('psyhub_openalex_api_key', key);
+      if (el.apiKeyStatus) {
+        el.apiKeyStatus.textContent = key ? '✓ Clave guardada (100.000 req/día)' : 'Modo estándar';
+        el.apiKeyStatus.style.color = '#10b981';
+      }
+      loadProfile();
+      showToast(key ? 'Clave API de OpenAlex guardada ✓' : 'Clave eliminada');
+    });
+  }
 
   // Limpiar guardados
-  el.btnClearAllSaved.addEventListener('click', () => {
-    if (!confirm('¿Eliminar todos los artículos guardados?')) return;
-    S.bookmarks = [];
-    saveData('psyhub_bk', S.bookmarks);
-    refreshProfile();
-    updateStatBadges();
-    showToast('Guardados eliminados');
-  });
+  if (el.btnClearAllSaved) {
+    el.btnClearAllSaved.addEventListener('click', () => {
+      if (!confirm('¿Eliminar todos los artículos guardados?')) return;
+      S.bookmarks = [];
+      saveData('psyhub_bk', S.bookmarks);
+      refreshProfile();
+      updateStatBadges();
+      showToast('Guardados eliminados');
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════
@@ -1427,11 +1612,11 @@ function renderCurrentStory(index) {
   const metaCites = $('explore-cites');
   if (metaCites) metaCites.innerHTML = `<i class="ph-bold ph-quotes"></i> ${esc(story.citations || 0)} citas`;
 
-  // 5. Botón de lectura (PDF / DOI)
+  // 5. Botón de lectura (PDF / DOI) — color neutro permanente
   if (el.btnStoryRead) {
     const paperUrl = story.pdfUrl || story.url || (story.doi ? `https://doi.org/${story.doi}` : '#');
     el.btnStoryRead.href = paperUrl;
-    el.btnStoryRead.style.background = color;
+    el.btnStoryRead.style.background = '';
   }
 
   // 6. Botón guardar
