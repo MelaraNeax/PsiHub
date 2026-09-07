@@ -351,6 +351,7 @@ function initDOMRefs() {
     exploreTakeawayText:   $('explore-takeaway-text'),
     exploreTagsRow:        $('explore-tags-row'),
     btnStoryRead:          $('btn-story-read'),
+    btnStoryTranslate:     $('btn-story-translate'),
     btnStorySave:          $('btn-story-save'),
     btnStorySaveTxt:       $('btn-story-save-txt'),
     btnStoryShare:         $('btn-story-share'),
@@ -411,6 +412,15 @@ function initDOMRefs() {
 
     // Toast
     toast: $('toast'),
+
+    // Modo Lectura
+    readerOverlay: $('reader-overlay'),
+    readerModal:   $('reader-modal'),
+    btnReaderClose:$('btn-reader-close'),
+    readerLoading: $('reader-loading'),
+    readerError:   $('reader-error'),
+    readerErrorMsg:$('reader-error-msg'),
+    readerContent: $('reader-content'),
   };
 }
 
@@ -1093,9 +1103,14 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
       ${paper.oaUrl
         ? `<a class="btn-cta-primary" href="${esc(paper.oaUrl)}" target="_blank" rel="noopener"><i class="ph-bold ph-file-pdf"></i> Leer texto original (Open Access)</a>`
         : ''}
-      <button class="btn-cta-secondary" disabled style="opacity:0.4; cursor:not-allowed;">
-        <i class="ph-bold ph-translate"></i> Traducir PDF completo <span style="font-size:11px; opacity:0.7;">(próximamente)</span>
-      </button>
+      ${paper.oaUrl
+        ? `<button class="btn-cta-secondary" id="btn-modal-translate-pdf">
+             <i class="ph-bold ph-translate"></i> Traducir PDF a Modo Lectura
+           </button>`
+        : `<button class="btn-cta-secondary" disabled style="opacity:0.4; cursor:not-allowed;" title="Solo disponible para Open Access">
+             <i class="ph-bold ph-translate"></i> Traducir PDF (Requiere Open Access)
+           </button>`
+      }
       <button class="btn-cta-secondary btn-copy-apa" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
         <i class="ph-bold ph-copy"></i> Copiar cita APA
       </button>
@@ -1111,6 +1126,68 @@ function closeModal() {
     document.body.style.overflow = '';
     S.currentPaper = null;
   }, 200);
+}
+
+// ═══════════════════════════════════════════════════
+// MODO LECTURA (TRADUCCIÓN PDF)
+// ═══════════════════════════════════════════════════
+
+// URL de tu Hugging Face Space — reemplaza con tu URL real después del deploy
+const HF_SPACE_URL = 'https://TU-USUARIO-psihub-reader.hf.space';
+
+async function openReaderModal(paperUrl, paperId) {
+  if (!paperUrl) {
+    showToast('El paper no tiene un link Open Access disponible.');
+    return;
+  }
+  
+  // Pause stories if viewing from explore
+  if (!el.pageExplore.classList.contains('hidden') && !S.storyPaused) {
+    pauseStory();
+  }
+
+  el.readerOverlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  
+  el.readerLoading.style.display = 'flex';
+  el.readerError.style.display = 'none';
+  el.readerContent.innerHTML = '';
+  
+  try {
+    const apiUrl = `${HF_SPACE_URL}/api/translate`;
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: paperUrl, id: paperId })
+    });
+    const data = await res.json();
+    
+    if (!res.ok) throw new Error(data.detail || data.error || 'Error desconocido del servidor');
+    
+    el.readerLoading.style.display = 'none';
+    
+    // Renderizar Markdown a HTML con marked.js
+    const rawHtml = marked.parse(data.markdown);
+    el.readerContent.innerHTML = rawHtml;
+    
+  } catch (error) {
+    console.error('Translation error:', error);
+    el.readerLoading.style.display = 'none';
+    el.readerError.style.display = 'flex';
+    el.readerErrorMsg.textContent = error.message || 'Error de conexión con el servidor de traducción.';
+  }
+}
+
+function closeReaderModal() {
+  el.readerOverlay.classList.add('hidden');
+  // Only restore overflow if paper modal is not open beneath it
+  if (el.modalOverlay.classList.contains('hidden')) {
+    document.body.style.overflow = '';
+  }
+  // Resume stories if viewing from explore
+  if (!el.pageExplore.classList.contains('hidden') && S.storyPaused) {
+    resumeStory();
+  }
 }
 
 // ═══════════════════════════════════════════════════
@@ -1432,10 +1509,14 @@ function setupEventListeners() {
   // Modal
   el.btnModalClose.addEventListener('click', closeModal);
   el.modalOverlay.addEventListener('click', e => { if (e.target === el.modalOverlay) closeModal(); });
+  
+  // Reader Modal
+  el.btnReaderClose.addEventListener('click', closeReaderModal);
+  el.readerOverlay.addEventListener('click', e => { if (e.target === el.readerOverlay) closeReaderModal(); });
   el.btnModalBk.addEventListener('click', () => { if (S.currentPaper) toggleBookmark(S.currentPaper); });
   el.modalBody.addEventListener('click', async (e) => {
-    const btn = e.target.closest('#btn-modal-copy-apa') || e.target.closest('.btn-copy-apa');
-    if (btn && S.currentPaper) {
+    const btnCopy = e.target.closest('#btn-modal-copy-apa') || e.target.closest('.btn-copy-apa');
+    if (btnCopy && S.currentPaper) {
       e.stopPropagation();
       const apaText = formatAPAReference(S.currentPaper);
       try {
@@ -1454,6 +1535,13 @@ function setupEventListeners() {
         console.error('[Copy APA]', err);
         showToast('No se pudo copiar la cita');
       }
+      return;
+    }
+
+    const btnTranslate = e.target.closest('#btn-modal-translate-pdf');
+    if (btnTranslate && S.currentPaper) {
+      e.stopPropagation();
+      openReaderModal(S.currentPaper.oaUrl, S.currentPaper.id);
     }
   });
 
@@ -1546,6 +1634,16 @@ function setupEventListeners() {
   if (el.storyTapPrev)  el.storyTapPrev.addEventListener('click', (e) => { e.stopPropagation(); prevStory(); });
   if (el.btnStorySave)  el.btnStorySave.addEventListener('click', (e) => { e.stopPropagation(); toggleStoryBookmark(); });
   if (el.btnStoryShare) el.btnStoryShare.addEventListener('click', (e) => { e.stopPropagation(); shareCurrentStory(); });
+  if (el.btnStoryTranslate) {
+    el.btnStoryTranslate.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentStory = S.stories[S.activeStoryIdx];
+      if (currentStory && currentStory.paper) {
+        const id = currentStory.paper.id || currentStory.id;
+        openReaderModal(currentStory.paper.oaUrl || currentStory.paper.doi, id);
+      }
+    });
+  }
 
   // Historias: Mantener presionado para pausar + Tocar para saltear o retroceder
   if (el.exploreStoryContainer) {

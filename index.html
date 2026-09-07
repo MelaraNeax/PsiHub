@@ -17,6 +17,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
   <link rel="stylesheet" href="style.css?v=17">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 
@@ -129,7 +130,7 @@
             <i class="ph-bold ph-file-pdf"></i>
             <span>Leer Paper</span>
           </a>
-          <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" title="Próximamente">
+          <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" title="Traducir PDF a Modo Lectura">
             <i class="ph-bold ph-translate"></i>
             <span>Traducir</span>
           </button>
@@ -395,6 +396,36 @@
           Vincular cuenta
         </button>
       </form>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       MODAL MODO LECTURA (TRADUCCIÓN)
+  ══════════════════════════════════════ -->
+  <div class="reader-overlay hidden" id="reader-overlay">
+    <div class="reader-modal" id="reader-modal">
+      <div class="reader-header">
+        <button class="btn-reader-close" id="btn-reader-close" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+        <div class="reader-header-info">
+          <span class="reader-title-badge">Modo Lectura</span>
+        </div>
+      </div>
+      
+      <div class="reader-scroll">
+        <div class="reader-loading" id="reader-loading" style="display:none;">
+          <div class="spinner"></div>
+          <p>Traduciendo y procesando PDF...<br><small>Esto puede tardar unos segundos.</small></p>
+        </div>
+        
+        <div class="reader-error" id="reader-error" style="display:none;">
+          <i class="ph-bold ph-warning-diamond"></i>
+          <p id="reader-error-msg">Error al traducir.</p>
+        </div>
+
+        <div class="reader-content" id="reader-content">
+          <!-- Markdown renderizado aquí -->
+        </div>
+      </div>
     </div>
   </div>
 

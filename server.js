@@ -49,7 +49,7 @@ const server = http.createServer((req, res) => {
   }
 
   // Prevenir Directory Traversal
-  const safePath = path.normalize(pathname).replace(/^(\.\.[\/\\])+/, '');
+  const safePath = path.normalize(pathname).replace(/^(\.\.[\\/\\\\])+/, '');
   const filePath = path.join(ROOT, safePath);
 
   fs.stat(filePath, (err, stats) => {

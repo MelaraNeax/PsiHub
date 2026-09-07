@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\Nabo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+  "python.analysis.extraPaths": [
+    "C:\\Users\\Nabo\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages",
+    "${workspaceFolder}/hf-space"
+  ]
+}

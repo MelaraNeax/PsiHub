@@ -12,8 +12,8 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const PRIMARY_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
-const FALLBACK_MODEL = 'openai/gpt-oss-20b';
+const PRIMARY_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
+const FALLBACK_MODEL = 'openai/gpt-oss-120b';
 
 // 8 Tópicos definidos para Psi-hub
 const TOPICS = [
@@ -195,13 +195,8 @@ function extractJson(text) {
  */
 async function callGroqWithRetry(messages) {
   const models = [
-    process.env.GROQ_MODEL,
     PRIMARY_MODEL,
-    FALLBACK_MODEL,
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-    'openai/gpt-oss-120b',
-    'openai/gpt-oss-20b'
+    FALLBACK_MODEL
   ].filter((m, idx, self) => m && self.indexOf(m) === idx);
 
   let lastError = null;
@@ -296,6 +291,7 @@ Abstract Completo: ${p.abstract}
 
   const systemPrompt = `Eres un divulgador de élite y psicólogo científico especializado en neurociencias y psicoterapia basada en evidencia.
 Tu misión es seleccionar de una lista de 5 papers candidatos el hallazgo MÁS riguroso, sorprendente y de mayor impacto clínico o conceptual.
+Redacta de manera académica sin faltas ortográficas, usando correctamente los conectores lógicos del español.
 
 REGLAS CRÍTICAS DE FIDELIDAD DE DATOS (CERO ALUCINACIONES):
 - NUNCA inventes, aproximes ni extrapoles números, porcentajes o tamaños de muestra.
