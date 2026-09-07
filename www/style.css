@@ -173,9 +173,33 @@ ul, ol { list-style: none; }
 }
 
 .app-title {
-  font-size: 26px;
+  font-size: 25px;
   font-weight: 800;
   letter-spacing: -0.5px;
+  display: inline-flex;
+  align-items: center;
+  user-select: none;
+  flex-shrink: 0;
+  color: var(--txt-1);
+}
+
+.hub-badge {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.95), rgba(13, 148, 136, 0.9));
+  color: #042421;
+  font-size: 0.82em;
+  font-weight: 900;
+  padding: 1px 7px 2px;
+  margin-left: 2px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 16px rgba(45, 212, 191, 0.45), inset 0 1px 2px rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  letter-spacing: -0.2px;
+  line-height: 1.15;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .icon-btn {
@@ -202,7 +226,7 @@ ul, ol { list-style: none; }
   border-radius: 100px;
   height: 38px;
   width: 38px;
-  transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s, border-color 0.2s;
+  transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s, border-color 0.2s, box-shadow 0.2s;
   overflow: hidden;
   position: relative;
   flex-shrink: 0;
@@ -213,10 +237,12 @@ ul, ol { list-style: none; }
 }
 
 .search-inline-wrapper.active {
-  width: 185px;
-  max-width: calc(100vw - 160px);
-  background: var(--surface);
-  border-color: rgba(255, 255, 255, 0.16);
+  width: min(230px, calc(100vw - 165px));
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .search-inline-input {
@@ -241,7 +267,12 @@ ul, ol { list-style: none; }
 
 .search-inline-wrapper.active .search-inline-input {
   opacity: 1;
-  padding: 0 4px 0 14px;
+  padding: 0 6px 0 14px;
+}
+
+/* Ocultar siempre la 'x' de cancelar si el buscador no está expandido */
+.search-inline-wrapper:not(.active) .btn-clear-search {
+  display: none !important;
 }
 
 .btn-clear-search {
@@ -257,13 +288,14 @@ ul, ol { list-style: none; }
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
+  margin-right: 2px;
   border-radius: 50%;
   transition: color 0.15s, background 0.15s;
 }
 
 .btn-clear-search:hover {
   color: var(--txt);
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .search-inline-trigger {

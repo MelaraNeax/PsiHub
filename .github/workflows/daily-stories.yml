@@ -2,8 +2,8 @@ name: 🧬 Curaduría Diaria de Historias (Groq + OpenAlex)
 
 on:
   schedule:
-    # Se ejecuta todos los días a las 05:00 UTC (02:00 AM hora de Argentina)
-    - cron: '0 5 * * *'
+    # Se ejecuta todos los días a las 00:00 hora de Argentina (03:00 UTC)
+    - cron: '0 3 * * *'
   workflow_dispatch: # Permite ejecutar la acción manualmente desde GitHub con un botón
 
 permissions:
@@ -25,6 +25,7 @@ jobs:
       - name: 🤖 Ejecutar script de curaduría con Groq y OpenAlex
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: 'llama-3.3-70b-versatile'
         run: |
           node automation/generate_stories.js
 

@@ -449,8 +449,22 @@ function registerSW() {
 // NAVEGACIÓN
 // ═══════════════════════════════════════════════════
 
+function resetInlineSearch() {
+  if (el.searchInput) {
+    el.searchInput.value = '';
+    el.searchInput.blur();
+  }
+  if (el.btnClearSearch) {
+    el.btnClearSearch.style.display = 'none';
+  }
+  if (el.searchInlineWrapper) {
+    el.searchInlineWrapper.classList.remove('active');
+  }
+}
+
 function navigateTo(page) {
   closeResults(false);
+  resetInlineSearch();
 
   // Pausar reproducción si sale de Explorar
   if (S.activePage === 'explore' && page !== 'explore') {
@@ -591,6 +605,7 @@ function closeResults(animated = true) {
   S.papers = [];
   el.paperList.innerHTML = '';
   el.btnLoadMore.style.display = 'none';
+  resetInlineSearch();
 }
 
 let currentFetchController = null;
@@ -1153,30 +1168,36 @@ function setupEventListeners() {
   function triggerSearch() {
     const q = el.searchInput.value.trim();
     if (q) {
-      el.searchInlineWrapper.classList.remove('active');
+      resetInlineSearch();
       doSearch(q);
-      el.searchInput.blur();
     }
   }
 
-  el.btnSearchOpen.addEventListener('click', () => {
+  el.btnSearchOpen.addEventListener('click', (e) => {
+    e.stopPropagation();
     const isActive = el.searchInlineWrapper.classList.contains('active');
     if (isActive) {
-      // Si hay texto, buscar; si no, solo cerrar
-      triggerSearch();
-      if (!el.searchInput.value.trim()) {
-        el.searchInlineWrapper.classList.remove('active');
+      // Si hay texto, buscar; si no, resetear y cerrar
+      if (el.searchInput.value.trim()) {
+        triggerSearch();
+      } else {
+        resetInlineSearch();
       }
     } else {
       el.searchInlineWrapper.classList.add('active');
-      setTimeout(() => el.searchInput.focus(), 300);
+      setTimeout(() => el.searchInput.focus(), 250);
     }
   });
 
   document.addEventListener('click', e => {
-    if (el.searchInlineWrapper.classList.contains('active') && 
+    if (el.searchInlineWrapper && el.searchInlineWrapper.classList.contains('active') && 
         !el.searchInlineWrapper.contains(e.target)) {
-      el.searchInlineWrapper.classList.remove('active');
+      if (!el.searchInput.value.trim()) {
+        resetInlineSearch();
+      } else {
+        el.searchInlineWrapper.classList.remove('active');
+        if (el.btnClearSearch) el.btnClearSearch.style.display = 'none';
+      }
     }
   });
 
@@ -1192,12 +1213,12 @@ function setupEventListeners() {
     }
   });
 
-  // Se eliminó searchIcon.addEventListener duplicado
-
-  el.btnClearSearch.addEventListener('click', () => {
-    el.searchInput.value = '';
-    el.btnClearSearch.style.display = 'none';
-    closeResults();
+  el.btnClearSearch.addEventListener('click', (e) => {
+    e.stopPropagation();
+    resetInlineSearch();
+    if (S.resultsOpen) {
+      closeResults();
+    }
   });
 
   // Resultados
@@ -1295,13 +1316,9 @@ function setupEventListeners() {
       closeModal();
       return true;
     }
-    // 2. Si el buscador expandible está abierto, cerrarlo
-    if (el.searchContainer && el.searchContainer.classList.contains('open')) {
-      el.searchContainer.classList.remove('open');
-      if (el.searchInput) {
-        el.searchInput.value = '';
-        el.searchInput.blur();
-      }
+    // 2. Si el buscador inline está abierto, cerrarlo
+    if (el.searchInlineWrapper && el.searchInlineWrapper.classList.contains('active')) {
+      resetInlineSearch();
       return true;
     }
     // 3. Si la vista de resultados está abierta, cerrarla y volver al home
@@ -1488,24 +1505,46 @@ function setupEventListeners() {
 // SECCIÓN EXPLORAR — HISTORIAS DIRECTAS CON NEBULA
 // ═══════════════════════════════════════════════════
 
-const GITHUB_STORIES_REMOTE_URL = window.PSYHUB_STORIES_REMOTE_URL || '';
+const GITHUB_STORIES_REMOTE_URL = window.PSYHUB_STORIES_REMOTE_URL || 
+  'https://raw.githubusercontent.com/MelaraNeax/PsiHub/main/data/stories.json';
 
 async function loadStories(forceRefresh = false) {
   try {
     let data = null;
 
-    if (GITHUB_STORIES_REMOTE_URL && (forceRefresh || !S.stories.length)) {
+    // 1. Intentar cargar desde GitHub remoto (historias actualizadas por GitHub Actions)
+    if (GITHUB_STORIES_REMOTE_URL) {
       try {
-        const res = await fetch(GITHUB_STORIES_REMOTE_URL, { cache: forceRefresh ? 'no-cache' : 'default' });
+        const cacheBuster = `?t=${Date.now()}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+        const res = await fetch(`${GITHUB_STORIES_REMOTE_URL}${cacheBuster}`, {
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
         if (res.ok) {
           data = await res.json();
-          console.log('[Stories] Cargadas desde GitHub remoto ✓');
+          console.log('[Stories] Cargadas frescas desde GitHub remoto ✓');
+          saveData('psyhub_cached_stories', data);
         }
       } catch (errRemote) {
-        console.warn('[Stories] Error con GitHub remoto, usando copia local:', errRemote);
+        console.warn('[Stories] Sin conexión con GitHub remoto, usando copia local o cache:', errRemote.message);
       }
     }
 
+    // 2. Si no hay internet o falló GitHub, intentar desde caché local guardada
+    if (!data) {
+      const cached = loadData('psyhub_cached_stories', null);
+      if (cached && Array.isArray(cached.stories) && cached.stories.length > 0) {
+        data = cached;
+        console.log('[Stories] Cargadas desde caché local previa ✓');
+      }
+    }
+
+    // 3. Fallback final: archivo data/stories.json empaquetado en la app
     if (!data) {
       const resLocal = await fetch('data/stories.json');
       if (resLocal.ok) {
