@@ -40,9 +40,9 @@ import uvicorn
 # ══════════════════════════════════════════════════
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-MODEL = "openai/gpt-oss-20b"
-FALLBACK_MODEL = "openai/gpt-oss-120b"
-DELAY_BETWEEN_CHUNKS_SEC = 20
+MODEL = "llama-3.3-70b-versatile"
+FALLBACK_MODEL = "llama-3.1-8b-instant"
+DELAY_BETWEEN_CHUNKS_SEC = 2
 CACHE_DIR = Path("./cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
