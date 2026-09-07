@@ -90,17 +90,23 @@ function reconstructAbstract(invertedIndex) {
 }
 
 /**
- * Busca hasta 3 papers destacados con abstract en OpenAlex (optimizado para no sobrecargar tokens)
+ * Busca hasta 5 papers destacados con abstract en OpenAlex
  */
 async function fetchTopCandidatePapers(topicQuery) {
   const currentYear = new Date().getFullYear();
-  const fromYear = currentYear - 1; // Último año y año corriente
+  const fromYear = currentYear - 2; // Últimos 2-3 años para garantizar actualidad y rotación continua
   
+  // Aleatorizar ordenamiento y página para explorar papers diversos en cada ejecución
+  const sortOptions = ['cited_by_count:desc', 'relevance_score:desc', 'publication_date:desc'];
+  const randomSort = sortOptions[Math.floor(Math.random() * sortOptions.length)];
+  const randomPage = Math.floor(Math.random() * 3) + 1;
+
   const url = new URL('https://api.openalex.org/works');
   url.searchParams.set('search', topicQuery);
   url.searchParams.set('filter', `is_oa:true,from_publication_date:${fromYear}-01-01`);
-  url.searchParams.set('sort', 'cited_by_count:desc');
-  url.searchParams.set('per-page', '8');
+  url.searchParams.set('sort', randomSort);
+  url.searchParams.set('page', String(randomPage));
+  url.searchParams.set('per-page', '25'); // Muestra representativa amplia para filtrar candidatos completos
   url.searchParams.set('mailto', 'psyhub.app.research@gmail.com');
 
   let res;
@@ -114,6 +120,14 @@ async function fetchTopCandidatePapers(topicQuery) {
       await new Promise(r => setTimeout(r, (4 - retries) * 3000));
       retries--;
     } else if (!res.ok) {
+      if (randomPage > 1) {
+        url.searchParams.set('page', '1');
+        url.searchParams.set('sort', 'cited_by_count:desc');
+        res = await fetch(url.toString(), {
+          headers: { 'User-Agent': 'PsiHubDailyStoriesBot/1.0 (psyhub.app.research@gmail.com)' }
+        });
+        if (res.ok) break;
+      }
       throw new Error(`OpenAlex error ${res.status}: ${res.statusText}`);
     } else {
       break;
@@ -125,15 +139,18 @@ async function fetchTopCandidatePapers(topicQuery) {
   }
 
   const data = await res.json();
-  const validPapers = [];
+  const validPool = [];
 
   for (const item of (data.results || [])) {
     const abstract = reconstructAbstract(item.abstract_inverted_index);
-    if (abstract && abstract.length > 80 && item.title) {
-      validPapers.push({
+    if (abstract && abstract.length >= 180 && item.title) {
+      const authors = (item.authorships || []).map(a => a.author?.display_name).filter(Boolean);
+      validPool.push({
         id: item.id,
         title: item.title,
-        abstract: abstract.substring(0, 240), // Breve para consumir mínimos tokens por minuto (<300 tokens por prompt)
+        abstract: abstract.substring(0, 1200), // Abstract completo para que la IA no trabaje con fragmentos cortados
+        fullAbstract: abstract,
+        authors,
         journal: item.primary_location?.source?.display_name || 'Journal científico',
         year: item.publication_year || currentYear,
         citations: item.cited_by_count || 0,
@@ -142,11 +159,17 @@ async function fetchTopCandidatePapers(topicQuery) {
         pdfUrl: item.open_access?.oa_url || item.primary_location?.pdf_url || item.doi || item.id
       });
     }
-    // 3 candidatos son ideales para tener diversidad y no saturar el límite TPM de Groq
-    if (validPapers.length >= 3) break;
   }
 
-  return validPapers;
+  // Barajar al azar para no elegir siempre los mismos candidatos
+  for (let i = validPool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [validPool[i], validPool[j]] = [validPool[j], validPool[i]];
+  }
+
+  // Tomar 5 candidatos completos para que la IA elija el mejor
+  const selected5 = validPool.slice(0, 5);
+  return selected5.length > 0 ? selected5 : validPool.slice(0, 3);
 }
 
 /**
@@ -159,31 +182,21 @@ async function callGroqWithRetry(messages, maxRetries = 3) {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_API_KEY}`
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model: modelToUse,
         messages,
-        response_format: { type: 'json_object' },
-        temperature: 0.3
+        temperature: 0.2, // Baja temperatura para máxima fidelidad fáctica y cero alucinaciones
+        max_tokens: 650,
+        response_format: { type: 'json_object' }
       })
     });
 
     if (response.status === 429) {
-      const errJson = await response.json().catch(() => ({}));
-      const msg = errJson.error?.message || '';
-      // Extraer segundos sugeridos por Groq (ej: "Please try again in 15.06s")
-      const waitMatch = msg.match(/in (\d+(\.\d+)?)s/i);
-      const waitSec = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 2 : 15;
-      
-      console.warn(`    ⚠️ [Groq 429 TPM Limit] Esperando ${waitSec}s para liberar cupo (intento ${attempt}/${maxRetries})...`);
-      await new Promise(r => setTimeout(r, waitSec * 1000));
-      
-      if (attempt === 2 && modelToUse !== FALLBACK_MODEL) {
-        console.warn(`    🔄 Conmutando a modelo fallback ${FALLBACK_MODEL}...`);
-        modelToUse = FALLBACK_MODEL;
-      }
+      console.warn(`    ⚠️ Rate limit en Groq (429) intento ${attempt}. Esperando...`);
+      await new Promise(r => setTimeout(r, attempt * 3000));
       continue;
     }
 
@@ -219,28 +232,36 @@ async function summarizeWithGroq(topic, papers, existingStory = null) {
 [CANDIDATO ${idx + 1}]
 Título: ${p.title}
 Revista: ${p.journal} (${p.year})
-Abstract: ${p.abstract}
+Abstract Completo: ${p.abstract}
 `).join('\n---\n');
 
-  const systemPrompt = `Eres un divulgador de élite en psicología científica, neurociencias y psicoterapia.
-Tu misión es seleccionar de una lista de papers el hallazgo MÁS sorprendente o clínicamente relevante para profesionales de la salud mental.
+  const systemPrompt = `Eres un divulgador de élite y psicólogo científico especializado en neurociencias y psicoterapia basada en evidencia.
+Tu misión es seleccionar de una lista de 5 papers candidatos el hallazgo MÁS riguroso, sorprendente y de mayor impacto clínico o conceptual.
+
+REGLAS CRÍTICAS DE FIDELIDAD DE DATOS (CERO ALUCINACIONES):
+- NUNCA inventes, aproximes ni extrapoles números, porcentajes o tamaños de muestra.
+- Solo menciona cifras (porcentajes, N de muestra, años) si aparecen EXPLÍCITAMENTE en el texto del abstract proporcionado.
+- Si el abstract no menciona una cifra o porcentaje exacto, describe la tendencia cualitativa (ej. "aumentó significativamente", "se redujo tras la intervención") sin inventar estadísticas ni porcentajes ficticios.
+- Fidelidad estricta al contenido: describe con exactitud lo que los investigadores encontraron, sin exagerar efectos ni atribuir causalidad a simples correlaciones.
+
+REGLAS DE TERMINOLOGÍA Y TRADUCCIÓN ACADÉMICA EN PSICOLOGÍA:
+- Utiliza la terminología técnica aceptada internacionalmente en la literatura psicológica hispanohablante.
+- NUNCA traduzcas "burnout" como "quemado" ni "estar quemado"; usa "burnout" o "desgaste ocupacional".
+- Conserva términos técnicos estándar: "mindfulness" (o "atención plena"), "insight", "coping" (o "afrontamiento"), "priming", "arousal", "red neuronal por defecto" (default mode network), "ensayo controlado aleatorizado" (RCT), "alianza terapéutica", etc.
+- Escribe SIEMPRE en español neutro, riguroso, elegante y con rigor científico. NUNCA dejes oraciones en inglés sin traducir.
 
 Debes responder ÚNICAMENTE en formato JSON con la siguiente estructura estricta:
 {
   "selectedCandidateIndex": 1,
   "hook": "Pregunta intrigante en español (máximo 12 palabras, ej: '¿El café antes o después de estudiar?')",
-  "headline": "Titular del hallazgo en una sola frase potente en español (máx 15 palabras)",
-  "finding": "Explicación del hallazgo en 2 oraciones claras y atractivas en español (máx 45 palabras)",
-  "takeaway": "Por qué importa este dato o su aplicación clínica en español (máx 40 palabras)",
-  "tags": ["3 etiquetas cortas en español"]
-}
-
-Reglas:
-- Escribe SIEMPRE en español neutro, riguroso y atractivo. NUNCA dejes texto en inglés.
-- Devuelve SOLO el objeto JSON.`;
+  "headline": "Titular del hallazgo en una sola frase potente y veraz en español (máx 15 palabras)",
+  "finding": "Explicación del hallazgo en 2 oraciones claras, fieles al texto y atractivas (máx 50 palabras)",
+  "takeaway": "Por qué importa este dato para la práctica clínica o comprensión psicológica (máx 45 palabras)",
+  "tags": ["3 etiquetas conceptuales en español"]
+}`;
 
   const userPrompt = `Tópico: "${topic.name}".
-Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el JSON en español.`;
+Aquí tienes los 5 candidatos completos:\n${promptPapers}\n\nSelecciona el mejor candidato y genera el JSON riguroso en español.`;
 
   const rawContent = await callGroqWithRetry([
     { role: 'system', content: systemPrompt },
@@ -265,6 +286,9 @@ Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el
     journal: chosenPaper.journal,
     year: chosenPaper.year,
     citations: chosenPaper.citations !== undefined ? chosenPaper.citations : (existingStory?.citations || 0),
+    originalAbstract: chosenPaper.fullAbstract || chosenPaper.abstract || '',
+    abstract: chosenPaper.fullAbstract || chosenPaper.abstract || '',
+    authors: chosenPaper.authors || [],
     doi: chosenPaper.doi,
     url: chosenPaper.url,
     pdfUrl: chosenPaper.pdfUrl,

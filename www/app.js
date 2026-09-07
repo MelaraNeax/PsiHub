@@ -919,14 +919,22 @@ async function openModal(paper, corriente) {
     el.modalSheet.classList.remove('closing');
     document.body.style.overflow = 'hidden';
 
-    // Si el paper no tiene abstract (ej. guardado previo a la actualización), buscarlo en OpenAlex
-    if (!paper.abstract && paper.id) {
+    // Si el paper no tiene abstract o es un resumen sintético previo, buscar el abstract original en OpenAlex
+    const isAiSummary = paper.abstract && paper.abstract.includes('\n\n') && (paper.abstract.startsWith('¿') || paper.abstract.includes('?'));
+    if ((!paper.abstract || isAiSummary) && (paper.id || paper.doi)) {
       const abstractEl = document.getElementById('modal-abstract-text');
-      if (abstractEl) abstractEl.textContent = 'Cargando información completa desde OpenAlex…';
+      if (abstractEl) abstractEl.textContent = 'Cargando abstract original desde OpenAlex…';
       try {
-        const full = await fetchWorkById(paper.id);
+        const lookupId = (paper.doi ? (paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`) : paper.id);
+        const full = await fetchWorkById(lookupId);
         if (full && S.currentPaper?.id === paper.id) {
-          paper.abstract = full.abstract;
+          if (full.abstract) {
+            paper.abstract = full.abstract;
+            paper.abstractEs = null;
+          }
+          if (full.authors?.length && (!paper.authors || !paper.authors.length || paper.authors.length <= 1)) {
+            paper.authors = full.authors;
+          }
           if (full.topics?.length) paper.topics = full.topics;
           if (full.journal) paper.journal = full.journal;
           if (full.firstInstitution) paper.firstInstitution = full.firstInstitution;
@@ -976,9 +984,21 @@ function formatAPAReference(paper) {
   if (!paper) return '';
 
   let authorsStr = '';
+  // Filtrar nombres genéricos que no sean personas o autores reales
+  const genericList = new Set([
+    'psihub', 'psihub research', 'curaduría diaria', 'investigación',
+    'neurociencia', 'tcc & conductual', 'tcc', 'clínica & psicoterapia',
+    'clínica', 'psicoanálisis & dinámica', 'psicoanálisis', 'psicología social',
+    'neuropsicología', 'desarrollo & infantil', 'desarrollo', 'organizacional'
+  ]);
+
   if (Array.isArray(paper.authors) && paper.authors.length > 0) {
-    const formatted = paper.authors.map(a => {
-      if (!a) return '';
+    const validAuthors = paper.authors.filter(a => {
+      if (!a || typeof a !== 'string') return false;
+      return !genericList.has(a.trim().toLowerCase());
+    });
+
+    const formatted = validAuthors.map(a => {
       const parts = a.trim().split(/\s+/);
       if (parts.length >= 2) {
         const lastName = parts[parts.length - 1];
@@ -997,8 +1017,6 @@ function formatAPAReference(paper) {
     } else if (formatted.length > 7) {
       authorsStr = `${formatted.slice(0, 6).join(', ')}, et al.`;
     }
-  } else {
-    authorsStr = 'Psi-hub Research';
   }
 
   const yearStr = paper.year ? `(${paper.year}).` : '(s.f.).';
@@ -1011,6 +1029,12 @@ function formatAPAReference(paper) {
     doiStr = paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`;
   } else if (paper.oaUrl) {
     doiStr = paper.oaUrl;
+  }
+
+  // En APA 7, cuando no hay autor identificado, el título pasa al primer lugar sin agregar 'psihub research':
+  // Título. (Año). Revista. DOI
+  if (!authorsStr) {
+    return [titleStr, yearStr, journalStr, doiStr].filter(Boolean).join(' ');
   }
 
   return [authorsStr, yearStr, titleStr, journalStr, doiStr].filter(Boolean).join(' ');
@@ -1188,14 +1212,35 @@ function updateAvatarInitials(name) {
 function refreshProfile() {
   updateStatBadges();
 
-  // Reparar citas de guardados si quedaron desindexeadas o en 0
+  // Reparar guardados existentes para que tengan el título, autores y abstract original de OpenAlex
   if (Array.isArray(S.bookmarks) && S.bookmarks.length > 0) {
     let touched = false;
     S.bookmarks.forEach(b => {
+      // 1. Si era una historia guardada previamente con el resumen de la IA en vez del abstract original
+      if (Array.isArray(S.stories)) {
+        const match = S.stories.find(s => s.id === b.id || s.id === b.storyId || (s.doi && b.doi && s.doi === b.doi));
+        if (match) {
+          if (match.paperTitle && b.title !== match.paperTitle) {
+            b.title = match.paperTitle;
+            touched = true;
+          }
+          if (match.originalAbstract && (!b.abstract || b.abstract.includes(match.hook))) {
+            b.abstract = match.originalAbstract;
+            b.abstractEs = null; // Para que Google Translate lo traduzca exactamente como los demás
+            touched = true;
+          }
+          if (match.authors?.length && (!b.authors || !b.authors.length || b.authors[0] === match.topicName)) {
+            b.authors = match.authors;
+            touched = true;
+          }
+        }
+      }
+
+      // 2. Reparar citas si quedaron desindexeadas o en 0
       const currentCites = b.citations ?? b.cited_by_count ?? b.citedByCount ?? b.cites ?? 0;
       if (!currentCites || currentCites === 0) {
         if (Array.isArray(S.stories)) {
-          const match = S.stories.find(s => s.id === b.id || (s.doi && b.doi && s.doi === b.doi));
+          const match = S.stories.find(s => s.id === b.id || s.id === b.storyId || (s.doi && b.doi && s.doi === b.doi));
           if (match && (match.citations || match.cited_by_count)) {
             b.citations = match.citations || match.cited_by_count;
             touched = true;
@@ -1882,25 +1927,44 @@ function toggleStoryBookmark() {
   const rawCites = story.citations ?? story.cited_by_count ?? story.citedByCount ?? story.cites ?? 0;
   const numCites = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
 
+  // Extraer título, autores y abstract original del paper científico
+  const paperTitle = story.paperTitle || story.headline || story.hook;
+  const paperAuthors = Array.isArray(story.authors) && story.authors.length ? story.authors : [];
+  const originalAbstract = story.originalAbstract || story.abstract || null;
+
   const paperObj = {
-    id: story.id,
-    title: story.headline || story.hook,
-    titleEs: story.headline || story.hook,
-    authors: [story.topicName],
+    id: story.doi ? `https://doi.org/${story.doi}` : story.id,
+    storyId: story.id,
+    title: paperTitle,
+    titleEs: story.headline || null,
+    authors: paperAuthors,
     year: story.year || new Date().getFullYear(),
     citations: numCites,
     oaUrl: story.pdfUrl || story.url,
     doi: story.doi || null,
-    abstract: `${story.hook}\n\n${story.finding}\n\n${story.takeaway || ''}`,
-    abstractEs: `${story.hook}\n\n${story.finding}\n\n${story.takeaway || ''}`,
+    abstract: originalAbstract,
+    abstractEs: null, // Se traducirá automáticamente con Google Translate al igual que el resto de los papers
     topics: story.tags || [story.topicName],
-    journal: story.journal || 'Curaduría Diaria',
-    firstInstitution: 'PsiHub Science Stories',
+    journal: story.journal || 'Journal Científico',
+    firstInstitution: null,
     corrienteId: story.topicId
   };
 
   toggleBookmark(paperObj);
   updateStorySaveBtnState(story);
+
+  // Si no tenía abstract original embebido, obtenerlo en segundo plano desde OpenAlex
+  if (!originalAbstract && story.doi) {
+    fetchWorkById(`https://doi.org/${story.doi}`).then(full => {
+      if (full && full.abstract) {
+        paperObj.abstract = full.abstract;
+        if (full.authors?.length && (!paperObj.authors || !paperObj.authors.length)) {
+          paperObj.authors = full.authors;
+        }
+        saveData('psyhub_bk', S.bookmarks);
+      }
+    }).catch(() => {});
+  }
 }
 
 async function shareCurrentStory() {

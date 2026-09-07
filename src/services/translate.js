@@ -23,17 +23,33 @@ function persistCache() {
 }
 
 /**
- * Traduce usando Google Translate GTX API (gratuito, sin api key, rápido y sin límite diario)
+ * Traduce usando Google Translate API (motor de alta disponibilidad clients5 + fallback gtx)
  */
 async function translateGoogle(text, from = 'auto', to = 'es') {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Google Translate HTTP ${res.status}`);
-  const data = await res.json();
-  if (!Array.isArray(data) || !Array.isArray(data[0])) {
-    throw new Error('Respuesta inválida de Google Translate');
+  // Motor 1: Google Clients5 Dict API (rápido, sin captcha, sin rate-limit y con CORS *)
+  try {
+    const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${from}&tl=${to}&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url, { headers: { 'Accept': '*/*' } });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        if (typeof data[0] === 'string') return data[0];
+        if (Array.isArray(data[0])) {
+          const combined = data.map(item => Array.isArray(item) ? item[0] : item).join('');
+          if (combined) return combined;
+        }
+      }
+    }
+  } catch (e) {
+    // Fallback a motor 2
   }
-  const translated = data[0].map(item => (item && item[0]) ? item[0] : '').join('');
+
+  // Motor 2: Google Translate GTX fallback
+  const gtxUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
+  const res2 = await fetch(gtxUrl);
+  if (!res2.ok) throw new Error(`Google Translate HTTP ${res2.status}`);
+  const data2 = await res2.json();
+  const translated = (data2[0] || []).map(item => (item && item[0]) ? item[0] : '').join('');
   return translated || text;
 }
 
@@ -56,16 +72,19 @@ async function translateMyMemory(text, langpair) {
 }
 
 /**
- * Heurística para saber si un texto ya está en español
+ * Heurística robusta para saber si un texto ya está en español.
+ * Evita falsos positivos por nombres propios con tilde (ej. 'José', 'García', 'São Paulo').
  */
 function isAlreadySpanish(text) {
-  if (!text) return false;
-  // Letras características del español
-  if (/[áéíóúüñÁÉÍÓÚÜÑ]/.test(text)) return true;
-  // Palabras comunes en español vs inglés
-  const lower = text.toLowerCase();
-  const spanishWords = [' de ', ' la ', ' el ', ' en ', ' y ', ' los ', ' las ', ' del ', ' por ', ' una ', ' con ', ' para ', ' psicoterapia ', ' estudio ', ' salud '];
-  const count = spanishWords.filter(w => lower.includes(w)).length;
+  if (!text || text.length < 15) return false;
+  const lower = ` ${text.toLowerCase()} `;
+  // Marcadores sintácticos inequívocos del español en oraciones
+  const spanishMarkers = [
+    ' de la ', ' del ', ' en los ', ' en las ', ' y el ', ' y la ',
+    ' por el ', ' por la ', ' para el ', ' para la ', ' con el ', ' con la ',
+    ' una ', ' este estudio ', ' los resultados ', ' la terapia '
+  ];
+  const count = spanishMarkers.filter(m => lower.includes(m)).length;
   return count >= 2;
 }
 
@@ -90,7 +109,7 @@ export async function translateToSpanish(text) {
   const clean = text.trim();
   if (!clean) return '';
 
-  // Si ya está en español, evitar llamada innecesaria
+  // Solo evitar llamada si estamos seguros de que ya está redactado en español
   if (isAlreadySpanish(clean)) return clean;
 
   const cacheKey = `es:${clean}`;
@@ -98,7 +117,7 @@ export async function translateToSpanish(text) {
 
   let result = clean;
 
-  // 1. Intentar con Google Translate (motor principal)
+  // 1. Intentar con Google Translate (clients5 + gtx)
   try {
     result = await translateGoogle(clean, 'auto', 'es');
   } catch (errGoogle) {
