@@ -48,25 +48,25 @@
   font-size: 12px;
 }
 
-/* Clínico: Ámbar / Naranja médico cálido */
+/* Clínico: Ámbar sobrio y desaturado */
 .tag-clinico {
-  background: rgba(249, 115, 22, 0.2);
-  color: #fb923c;
-  border: 1px solid rgba(249, 115, 22, 0.5);
+  background: rgba(210, 145, 80, 0.12);
+  color: #cf9b6d;
+  border: 1px solid rgba(210, 145, 80, 0.28);
 }
 
-/* Evidencia: Verde esmeralda científico / datos */
+/* Evidencia: Salvia / Verde musgo sobrio y desaturado */
 .tag-evidencia {
-  background: rgba(16, 185, 129, 0.2);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.5);
+  background: rgba(90, 160, 130, 0.12);
+  color: #7dbba1;
+  border: 1px solid rgba(90, 160, 130, 0.28);
 }
 
-/* Teórico: Violeta / Púrpura conceptual / mente */
+/* Teórico: Lavanda ceniza / Púrpura desaturado y sobrio */
 .tag-teorico {
-  background: rgba(139, 92, 246, 0.22);
-  color: #c084fc;
-  border: 1px solid rgba(139, 92, 246, 0.55);
+  background: rgba(145, 130, 185, 0.12);
+  color: #aaa0c5;
+  border: 1px solid rgba(145, 130, 185, 0.28);
 }
 
 /* ─── Reset ─── */
@@ -344,23 +344,22 @@ ul, ol { list-style: none; }
 .corriente-card:active { transform: scale(0.93); opacity: 0.8; }
 
 .corriente-icon-wrap {
-  width: 60px;
-  height: 60px;
-  border-radius: 18px;
-  background: rgba(255,255,255,0.08);
-  background: color-mix(in srgb, var(--c-color) 20%, transparent);
-  border: 1.5px solid rgba(255,255,255,0.12);
-  border-color: color-mix(in srgb, var(--c-color) 40%, transparent);
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
+  font-size: 28px;
   color: var(--c-color);
-  transition: background 0.18s, transform 0.18s;
+  transition: transform 0.18s var(--ease), opacity 0.18s;
 }
 
 .corriente-card:active .corriente-icon-wrap {
-  background: color-mix(in srgb, var(--c-color) 35%, transparent);
+  transform: scale(0.9);
+  opacity: 0.75;
 }
 
 .corriente-name {

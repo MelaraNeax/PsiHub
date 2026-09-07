@@ -737,7 +737,7 @@ function buildCard(paper, onBookmarkChange) {
       <div class="paper-card-meta">
         ${tags.map(tagBadge).join('')}
         ${paper.year ? `<span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
-        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-quotes"></i>${(paper.citations || 0).toLocaleString('es')}</span>
+        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-quotes"></i>${(paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? 0).toLocaleString('es')}</span>
       </div>
     </div>
   `;
@@ -892,7 +892,8 @@ async function openModal(paper, corriente) {
     // Normalizar datos del paper para prevenir errores
     paper.authors = Array.isArray(paper.authors) ? paper.authors : [];
     paper.topics = Array.isArray(paper.topics) ? paper.topics : [];
-    paper.citations = typeof paper.citations === 'number' ? paper.citations : 0;
+    const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
+    paper.citations = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
 
     S.currentPaper = paper;
     // Solo mostrar la corriente si el paper fue abierto explícitamente desde la sección de corrientes activa
@@ -933,6 +934,7 @@ async function openModal(paper, corriente) {
           if (full.doi && !paper.doi) paper.doi = full.doi;
           if (full.type) paper.type = full.type;
           if (full.mesh?.length) paper.mesh = full.mesh;
+          if (typeof full.citations === 'number' && full.citations > 0) paper.citations = full.citations;
 
           // Re-renderizar modal con la información completa
           const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
@@ -970,6 +972,50 @@ async function openModal(paper, corriente) {
   }
 }
 
+function formatAPAReference(paper) {
+  if (!paper) return '';
+
+  let authorsStr = '';
+  if (Array.isArray(paper.authors) && paper.authors.length > 0) {
+    const formatted = paper.authors.map(a => {
+      if (!a) return '';
+      const parts = a.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        const lastName = parts[parts.length - 1];
+        const initials = parts.slice(0, -1).map(p => p[0] ? `${p[0].toUpperCase()}.` : '').join(' ');
+        return `${lastName}, ${initials}`.trim();
+      }
+      return a.trim();
+    }).filter(Boolean);
+
+    if (formatted.length === 1) {
+      authorsStr = formatted[0];
+    } else if (formatted.length === 2) {
+      authorsStr = `${formatted[0]} & ${formatted[1]}`;
+    } else if (formatted.length > 2 && formatted.length <= 7) {
+      authorsStr = `${formatted.slice(0, -1).join(', ')}, & ${formatted[formatted.length - 1]}`;
+    } else if (formatted.length > 7) {
+      authorsStr = `${formatted.slice(0, 6).join(', ')}, et al.`;
+    }
+  } else {
+    authorsStr = 'Psi-hub Research';
+  }
+
+  const yearStr = paper.year ? `(${paper.year}).` : '(s.f.).';
+  const rawTitle = (paper.title || 'Sin título').trim();
+  const titleStr = rawTitle.endsWith('.') ? rawTitle : `${rawTitle}.`;
+  const journalStr = paper.journal ? `${paper.journal.trim()}.` : '';
+
+  let doiStr = '';
+  if (paper.doi) {
+    doiStr = paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`;
+  } else if (paper.oaUrl) {
+    doiStr = paper.oaUrl;
+  }
+
+  return [authorsStr, yearStr, titleStr, journalStr, doiStr].filter(Boolean).join(' ');
+}
+
 function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, translating) {
   const isCorriente = Boolean(corriente && corriente.label);
   const tagColor = isCorriente ? corriente.color : 'var(--txt-3)';
@@ -980,7 +1026,8 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
 
   const abstractContent = paper.abstract || 'Abstract no disponible en los metadatos de OpenAlex.';
   const authors = Array.isArray(paper.authors) ? paper.authors : [];
-  const citations = typeof paper.citations === 'number' ? paper.citations : 0;
+  const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
+  const citations = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
   const topics = Array.isArray(paper.topics) ? paper.topics : [];
 
   return `
@@ -1020,14 +1067,14 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
 
     <div class="modal-cta">
       ${paper.oaUrl
-        ? `<a class="btn-cta-primary" href="${esc(paper.oaUrl)}" target="_blank" rel="noopener"><i class="ph-bold ph-file-pdf"></i> Leer texto completo (Open Access)</a>`
+        ? `<a class="btn-cta-primary" href="${esc(paper.oaUrl)}" target="_blank" rel="noopener"><i class="ph-bold ph-file-pdf"></i> Leer texto original (Open Access)</a>`
         : ''}
       <button class="btn-cta-secondary" disabled style="opacity:0.4; cursor:not-allowed;">
         <i class="ph-bold ph-translate"></i> Traducir PDF completo <span style="font-size:11px; opacity:0.7;">(próximamente)</span>
       </button>
-      ${paper.doi
-        ? `<a class="btn-cta-secondary" href="${esc(paper.doi)}" target="_blank" rel="noopener"><i class="ph-bold ph-link"></i> Ver DOI original</a>`
-        : ''}
+      <button class="btn-cta-secondary btn-copy-apa" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
+        <i class="ph-bold ph-copy"></i> Copiar cita APA
+      </button>
     </div>
   `;
 }
@@ -1053,13 +1100,15 @@ function toggleBookmark(paper) {
     S.bookmarks = S.bookmarks.filter(b => b.id !== paper.id);
     showToast('Quitado de guardados');
   } else {
+    const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
+    const numCites = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
     S.bookmarks.push({
       id: paper.id,
       title: paper.title || 'Sin título',
       titleEs: paper.titleEs || null,
       authors: Array.isArray(paper.authors) ? paper.authors : [],
       year: paper.year || null,
-      citations: typeof paper.citations === 'number' ? paper.citations : 0,
+      citations: numCites,
       oaUrl: paper.oaUrl || null,
       doi: paper.doi || null,
       abstract: paper.abstract || null,
@@ -1138,6 +1187,28 @@ function updateAvatarInitials(name) {
 
 function refreshProfile() {
   updateStatBadges();
+
+  // Reparar citas de guardados si quedaron desindexeadas o en 0
+  if (Array.isArray(S.bookmarks) && S.bookmarks.length > 0) {
+    let touched = false;
+    S.bookmarks.forEach(b => {
+      const currentCites = b.citations ?? b.cited_by_count ?? b.citedByCount ?? b.cites ?? 0;
+      if (!currentCites || currentCites === 0) {
+        if (Array.isArray(S.stories)) {
+          const match = S.stories.find(s => s.id === b.id || (s.doi && b.doi && s.doi === b.doi));
+          if (match && (match.citations || match.cited_by_count)) {
+            b.citations = match.citations || match.cited_by_count;
+            touched = true;
+          }
+        }
+      } else if (b.citations !== currentCites) {
+        b.citations = currentCites;
+        touched = true;
+      }
+    });
+    if (touched) saveData('psyhub_bk', S.bookmarks);
+  }
+
   if (S.bookmarks.length === 0) {
     if (el.sectionSaved) el.sectionSaved.style.display = 'none';
     if (el.profileEmptySaved) el.profileEmptySaved.style.display = 'flex';
@@ -1317,6 +1388,29 @@ function setupEventListeners() {
   el.btnModalClose.addEventListener('click', closeModal);
   el.modalOverlay.addEventListener('click', e => { if (e.target === el.modalOverlay) closeModal(); });
   el.btnModalBk.addEventListener('click', () => { if (S.currentPaper) toggleBookmark(S.currentPaper); });
+  el.modalBody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('#btn-modal-copy-apa') || e.target.closest('.btn-copy-apa');
+    if (btn && S.currentPaper) {
+      e.stopPropagation();
+      const apaText = formatAPAReference(S.currentPaper);
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(apaText);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = apaText;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        showToast('Cita APA copiada al portapapeles ✓');
+      } catch (err) {
+        console.error('[Copy APA]', err);
+        showToast('No se pudo copiar la cita');
+      }
+    }
+  });
 
   // Swipe modal: permite leer y scrollear el abstract con total comodidad.
   // Solo se cierra si se arrastra desde la manija superior o si está arriba del todo y el deslizamiento hacia abajo es pronunciado (>120px)
@@ -1774,9 +1868,7 @@ function nextStory() {
 
 function prevStory() {
   stopStoryTimer();
-  if (S.storyElapsed > 1500) {
-    renderCurrentStory(S.activeStoryIdx);
-  } else if (S.activeStoryIdx > 0) {
+  if (S.activeStoryIdx > 0) {
     renderCurrentStory(S.activeStoryIdx - 1);
   } else {
     renderCurrentStory(0);
@@ -1787,13 +1879,16 @@ function toggleStoryBookmark() {
   if (!S.stories || !S.stories[S.activeStoryIdx]) return;
   const story = S.stories[S.activeStoryIdx];
 
+  const rawCites = story.citations ?? story.cited_by_count ?? story.citedByCount ?? story.cites ?? 0;
+  const numCites = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
+
   const paperObj = {
     id: story.id,
     title: story.headline || story.hook,
     titleEs: story.headline || story.hook,
     authors: [story.topicName],
     year: story.year || new Date().getFullYear(),
-    citations: 0,
+    citations: numCites,
     oaUrl: story.pdfUrl || story.url,
     doi: story.doi || null,
     abstract: `${story.hook}\n\n${story.finding}\n\n${story.takeaway || ''}`,
