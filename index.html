@@ -197,7 +197,7 @@
         </div>
       </div>
 
-      <!-- Tarjeta Acceso con Google (Cola OpenAlex) -->
+      <!-- Tarjeta Acceso con Google -->
       <div class="profile-card profile-auth-card" id="profile-auth-card">
         <div class="profile-auth-not-connected" id="auth-not-connected">
           <div class="auth-card-header">
@@ -209,13 +209,13 @@
                 <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
               </svg>
             </div>
-            <div>
-              <h3 class="auth-card-title">Ingresar con Google</h3>
-              <p class="auth-card-subtitle">Prioridad en OpenAlex y sincronización</p>
+            <div class="auth-card-meta">
+              <h3 class="auth-card-title">Cuenta de Google</h3>
+              <p class="auth-card-subtitle">Sincronización y consultas en OpenAlex</p>
             </div>
           </div>
           <p class="auth-card-desc">
-            Al conectar tu cuenta de Google, tu correo se utiliza en la cola rápida (<em>Polite Pool</em>) de OpenAlex para responder consultas sin bloqueos anónimos.
+            Conectá tu cuenta de Google para sincronizar tu actividad y optimizar las consultas en OpenAlex.
           </p>
           <button class="btn-google-login" id="btn-google-login">
             <svg width="18" height="18" viewBox="0 0 24 24">
@@ -242,36 +242,13 @@
               <div class="connected-email" id="connected-user-email">usuario@gmail.com</div>
               <div class="connected-status">
                 <span class="status-dot"></span>
-                <span>Cola prioritaria de OpenAlex activa</span>
+                <span>Cuenta vinculada</span>
               </div>
             </div>
           </div>
           <button class="btn-disconnect-google" id="btn-google-logout">
             <i class="ph-bold ph-sign-out"></i> Desconectar
           </button>
-        </div>
-      </div>
-
-      <!-- Tarjeta Conexión Avanzada OpenAlex (API Key opcional) -->
-      <div class="profile-card profile-api-card">
-        <div class="api-card-top">
-          <div class="api-icon-wrap"><i class="ph-bold ph-key"></i></div>
-          <div>
-            <h3 class="api-card-title">Clave API de OpenAlex (Opcional)</h3>
-            <p class="api-card-subtitle">Hasta 100.000 peticiones diarias prioritarias</p>
-          </div>
-        </div>
-        <div class="profile-input-wrap" style="margin-top: 12px;">
-          <input class="profile-input" id="openalex-api-key" type="password" placeholder="Pegá tu API key de OpenAlex…" autocomplete="off">
-          <button class="btn-save-field" id="btn-save-api-key" aria-label="Guardar API Key">
-            <i class="ph-bold ph-check"></i>
-          </button>
-        </div>
-        <div class="api-key-footer">
-          <span class="field-status" id="api-key-status"></span>
-          <a href="https://openalex.org/settings/api" target="_blank" rel="noopener" class="api-key-link">
-            Obtener clave gratuita en openalex.org <i class="ph-bold ph-arrow-square-out"></i>
-          </a>
         </div>
       </div>
 
@@ -282,13 +259,6 @@
           <div class="stat-pill-info">
             <span class="stat-pill-value" id="stat-saved">0</span>
             <span class="stat-pill-label">Guardados</span>
-          </div>
-        </div>
-        <div class="profile-stat-pill">
-          <div class="stat-pill-icon"><i class="ph-bold ph-lightning"></i></div>
-          <div class="stat-pill-info">
-            <span class="stat-pill-value" id="stat-pool-status">Polite</span>
-            <span class="stat-pill-label">Cola OpenAlex</span>
           </div>
         </div>
       </div>

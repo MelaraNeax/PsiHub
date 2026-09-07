@@ -403,11 +403,7 @@ function initDOMRefs() {
     googleLoginForm:      $('google-login-form'),
     googleInputEmail:     $('google-input-email'),
     googleInputName:      $('google-input-name'),
-    openalexApiKey:       $('openalex-api-key'),
-    btnSaveApiKey:        $('btn-save-api-key'),
-    apiKeyStatus:         $('api-key-status'),
     statSaved:            $('stat-saved'),
-    statPoolStatus:       $('stat-pool-status'),
     sectionSaved:         $('section-saved'),
     savedList:            $('saved-list'),
     profileEmptySaved:    $('profile-empty-saved'),
@@ -1033,17 +1029,15 @@ function updateStatBadges() {
 function loadProfile() {
   const googleUser = loadData('psyhub_google_user', null);
   const userEmail = localStorage.getItem('psyhub_user_email') || '';
-  const apiKey = localStorage.getItem('psyhub_openalex_api_key') || '';
 
   if (el.profileName) el.profileName.value = S.profile.name || (googleUser ? googleUser.name : '');
   if (el.profileRole) el.profileRole.value = S.profile.role || '';
-  if (el.openalexApiKey) el.openalexApiKey.value = apiKey;
 
-  updateProfileUI(googleUser, userEmail, apiKey);
+  updateProfileUI(googleUser, userEmail);
   updateStatBadges();
 }
 
-function updateProfileUI(googleUser, userEmail, apiKey) {
+function updateProfileUI(googleUser, userEmail) {
   const name = S.profile.name || (googleUser ? googleUser.name : '') || 'Mi Perfil';
   if (el.displayProfileName) el.displayProfileName.textContent = name;
 
@@ -1068,12 +1062,6 @@ function updateProfileUI(googleUser, userEmail, apiKey) {
   }
   if (el.connectedUserEmail) {
     el.connectedUserEmail.textContent = (googleUser ? googleUser.email : userEmail) || 'usuario@gmail.com';
-  }
-
-  // Estado de cola OpenAlex
-  if (el.statPoolStatus) {
-    el.statPoolStatus.textContent = apiKey ? 'API Key' : (isConnected ? 'Prioritaria' : 'Polite');
-    el.statPoolStatus.style.color = apiKey ? '#38bdf8' : (isConnected ? '#10b981' : 'var(--txt-1)');
   }
 }
 
@@ -1399,19 +1387,13 @@ function setupEventListeners() {
     });
   }
 
-  // Perfil
-  el.profileName.addEventListener('input', () => {
-    S.profile.name = el.profileName.value;
-    saveData('psyhub_profile', S.profile);
-    updateAvatarInitials();
-  });
   // Perfil: nombre y rol
   if (el.profileName) {
     el.profileName.addEventListener('input', () => {
       S.profile.name = el.profileName.value.trim();
       saveData('psyhub_profile', S.profile);
       const googleUser = loadData('psyhub_google_user', null);
-      updateProfileUI(googleUser, localStorage.getItem('psyhub_user_email'), localStorage.getItem('psyhub_openalex_api_key'));
+      updateProfileUI(googleUser, localStorage.getItem('psyhub_user_email'));
     });
   }
 
@@ -1420,7 +1402,7 @@ function setupEventListeners() {
       S.profile.role = el.profileRole.value;
       saveData('psyhub_profile', S.profile);
       const googleUser = loadData('psyhub_google_user', null);
-      updateProfileUI(googleUser, localStorage.getItem('psyhub_user_email'), localStorage.getItem('psyhub_openalex_api_key'));
+      updateProfileUI(googleUser, localStorage.getItem('psyhub_user_email'));
     });
   }
 
@@ -1473,9 +1455,9 @@ function setupEventListeners() {
 
       el.googleModalOverlay.classList.add('hidden');
       loadProfile();
-      showToast('¡Cuenta vinculada! Cola prioritaria de OpenAlex activa ✓');
+      showToast('¡Cuenta vinculada con éxito! ✓');
 
-      // Refrescar recomendaciones con la cola prioritaria activa
+      // Refrescar recomendaciones
       loadRecommendations();
     });
   }
@@ -1486,20 +1468,6 @@ function setupEventListeners() {
       localStorage.removeItem('psyhub_google_user');
       loadProfile();
       showToast('Cuenta de Google desconectada');
-    });
-  }
-
-  // Guardar API Key de OpenAlex
-  if (el.btnSaveApiKey && el.openalexApiKey) {
-    el.btnSaveApiKey.addEventListener('click', () => {
-      const key = el.openalexApiKey.value.trim();
-      localStorage.setItem('psyhub_openalex_api_key', key);
-      if (el.apiKeyStatus) {
-        el.apiKeyStatus.textContent = key ? '✓ Clave guardada (100.000 req/día)' : 'Modo estándar';
-        el.apiKeyStatus.style.color = '#10b981';
-      }
-      loadProfile();
-      showToast(key ? 'Clave API de OpenAlex guardada ✓' : 'Clave eliminada');
     });
   }
 
