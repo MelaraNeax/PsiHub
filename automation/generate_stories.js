@@ -136,6 +136,7 @@ async function fetchTopCandidatePapers(topicQuery) {
         abstract: abstract.substring(0, 240), // Breve para consumir mínimos tokens por minuto (<300 tokens por prompt)
         journal: item.primary_location?.source?.display_name || 'Journal científico',
         year: item.publication_year || currentYear,
+        citations: item.cited_by_count || 0,
         doi: item.doi ? item.doi.replace('https://doi.org/', '') : '',
         url: item.doi || item.primary_location?.landing_page_url || item.id,
         pdfUrl: item.open_access?.oa_url || item.primary_location?.pdf_url || item.doi || item.id
@@ -263,6 +264,7 @@ Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el
     paperTitle: chosenPaper.title,
     journal: chosenPaper.journal,
     year: chosenPaper.year,
+    citations: chosenPaper.citations !== undefined ? chosenPaper.citations : (existingStory?.citations || 0),
     doi: chosenPaper.doi,
     url: chosenPaper.url,
     pdfUrl: chosenPaper.pdfUrl,

@@ -22,7 +22,8 @@
         "Psicodélicos",
         "Plasticidad Neural",
         "Depresión"
-      ]
+      ],
+      "citations": 66
     },
     {
       "id": "tcc-02",
@@ -44,7 +45,8 @@
         "TCC",
         "Salud Digital",
         "Ansiedad"
-      ]
+      ],
+      "citations": 59
     },
     {
       "id": "clinica-03",
@@ -66,7 +68,8 @@
         "Alianza Terapéutica",
         "Psicoterapia",
         "Factores Comunes"
-      ]
+      ],
+      "citations": 42
     },
     {
       "id": "psicoanalisis-04",
@@ -88,7 +91,8 @@
         "Psicodinámica",
         "Mentalización",
         "Apego"
-      ]
+      ],
+      "citations": 277
     },
     {
       "id": "social-05",
@@ -110,7 +114,8 @@
         "Sesgos Cognitivos",
         "Polarización",
         "Juicio Social"
-      ]
+      ],
+      "citations": 58
     },
     {
       "id": "neuropsicologia-06",
@@ -132,7 +137,8 @@
         "Neuropsicología",
         "Memoria de Trabajo",
         "Plasticidad"
-      ]
+      ],
+      "citations": 31
     },
     {
       "id": "desarrollo-07",
@@ -154,7 +160,8 @@
         "Desarrollo",
         "Adolescencia",
         "Factores Protectores"
-      ]
+      ],
+      "citations": 87
     },
     {
       "id": "organizacional-08",
@@ -176,7 +183,8 @@
         "Organizacional",
         "Salud Ocupacional",
         "Burnout"
-      ]
+      ],
+      "citations": 49
     }
   ]
 }
