@@ -69,9 +69,12 @@
   border: 1px solid rgba(145, 130, 185, 0.28);
 }
 
-/* ─── Reset ─── */
+/* ─── Reset & Fluid Touch Engine ─── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { height: 100%; }
+html {
+  height: 100%;
+  touch-action: manipulation;
+}
 body {
   font-family: var(--font);
   background: var(--bg);
@@ -79,8 +82,14 @@ body {
   height: 100%;
   overflow: hidden; /* El scroll ocurre dentro de .page-scroll */
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
 }
 
+a, button, input, select, textarea {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
 a { color: inherit; text-decoration: none; }
 button { cursor: pointer; font-family: var(--font); border: none; background: none; }
 ul, ol { list-style: none; }
@@ -108,6 +117,7 @@ ul, ol { list-style: none; }
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   padding-bottom: calc(28px + var(--safe-bottom));
+  overscroll-behavior-y: contain;
 }
 
 .page-scroll::-webkit-scrollbar { display: none; }
@@ -127,6 +137,8 @@ ul, ol { list-style: none; }
   z-index: 50;
   padding: 0 10px var(--safe-bottom);
   box-sizing: border-box;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .nav-btn {
@@ -163,6 +175,7 @@ ul, ol { list-style: none; }
   background: transparent;
   position: relative;
   z-index: 10;
+  transform: translateZ(0);
 }
 
 .home-header-top {
@@ -990,6 +1003,9 @@ ul, ol { list-style: none; }
   position: relative;
   overflow: hidden;
   list-style: none;
+  touch-action: manipulation;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 140px;
 }
 
 .saved-card:active {
@@ -1370,6 +1386,9 @@ input[type="search"]::-webkit-search-cancel-button {
   border-bottom: 1px solid rgba(255,255,255,0.05);
   transition: background 0.15s;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 130px;
 }
 
 .paper-card:hover { background: rgba(255,255,255,0.04); }
@@ -1492,6 +1511,7 @@ input[type="search"]::-webkit-search-cancel-button {
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  will-change: opacity;
 }
 
 .modal-overlay.hidden { display: none; }
@@ -1510,6 +1530,8 @@ input[type="search"]::-webkit-search-cancel-button {
   animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   overflow: hidden;
   padding-bottom: var(--safe-bottom);
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 @keyframes slideUp {

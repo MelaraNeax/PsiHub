@@ -173,49 +173,108 @@ async function fetchTopCandidatePapers(topicQuery) {
 }
 
 /**
- * Realiza la petición a Groq con reintentos automáticos y backoff en caso de 429
+ * Extrae y parsea un objeto JSON de una cadena de texto, tolerando bloques markdown o texto extra
  */
-async function callGroqWithRetry(messages, maxRetries = 3) {
-  let modelToUse = PRIMARY_MODEL;
+function extractJson(text) {
+  if (!text || typeof text !== 'string') return null;
+  const clean = text.replace(/```(?:json)?\s*/gi, '').replace(/```\s*$/g, '').trim();
+  try {
+    return JSON.parse(clean);
+  } catch {}
+  const match = clean.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]);
+    } catch {}
+  }
+  return null;
+}
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: modelToUse,
-        messages,
-        temperature: 0.2, // Baja temperatura para máxima fidelidad fáctica y cero alucinaciones
-        max_tokens: 650,
-        response_format: { type: 'json_object' }
-      })
-    });
+/**
+ * Realiza la petición a Groq con cascada de modelos, max_tokens ampliado y reintentos automáticos
+ */
+async function callGroqWithRetry(messages) {
+  const models = [
+    process.env.GROQ_MODEL,
+    PRIMARY_MODEL,
+    FALLBACK_MODEL,
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b'
+  ].filter((m, idx, self) => m && self.indexOf(m) === idx);
 
-    if (response.status === 429) {
-      console.warn(`    ⚠️ Rate limit en Groq (429) intento ${attempt}. Esperando...`);
-      await new Promise(r => setTimeout(r, attempt * 3000));
-      continue;
-    }
+  let lastError = null;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      if (attempt < maxRetries && modelToUse !== FALLBACK_MODEL) {
-        console.warn(`    ⚠️ Error con ${modelToUse}: ${errText}. Reintentando con ${FALLBACK_MODEL}...`);
-        modelToUse = FALLBACK_MODEL;
-        await new Promise(r => setTimeout(r, 2000));
-        continue;
+  for (const model of models) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        console.log(`    🤖 Intentando análisis con ${model} (intento ${attempt})...`);
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${GROQ_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: 0.2, // Baja temperatura para máxima fidelidad fáctica y cero alucinaciones
+            max_tokens: 2048, // Margen holgado para evitar que el JSON se corte a mitad de camino
+            response_format: { type: 'json_object' }
+          })
+        });
+
+        if (response.status === 429) {
+          console.warn(`    ⚠️ Rate limit (429) con ${model}. Esperando 5s...`);
+          await new Promise(r => setTimeout(r, 5000));
+          continue;
+        }
+
+        if (!response.ok) {
+          const errText = await response.text();
+          // Si falló específicamente por json_validate_failed, intentar sin response_format estricto
+          if (errText.includes('json_validate_failed')) {
+            console.warn(`    ⚠️ ${model} devolvió json_validate_failed. Reintentando sin response_format forzado...`);
+            const retryNoFormat = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${GROQ_API_KEY}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                model,
+                messages,
+                temperature: 0.2,
+                max_tokens: 2048
+              })
+            });
+            if (retryNoFormat.ok) {
+              const resJson = await retryNoFormat.json();
+              const content = resJson.choices[0]?.message?.content;
+              if (content && extractJson(content)) {
+                return content;
+              }
+            }
+          }
+          throw new Error(`Groq API error (${response.status}) [${model}]: ${errText}`);
+        }
+
+        const resultData = await response.json();
+        const content = resultData.choices[0]?.message?.content;
+        if (content) {
+          const parsed = extractJson(content);
+          if (parsed) return content;
+        }
+      } catch (err) {
+        lastError = err;
+        console.warn(`    ⚠️ Falló ${model}: ${err.message}`);
+        await new Promise(r => setTimeout(r, 1500));
       }
-      throw new Error(`Groq API error (${response.status}): ${errText}`);
     }
-
-    const resultData = await response.json();
-    return resultData.choices[0]?.message?.content || '{}';
   }
 
-  throw new Error('Groq API: Se superó el límite de reintentos tras 429.');
+  throw lastError || new Error('Se agotaron todos los modelos candidatos de Groq sin respuesta válida.');
 }
 
 /**
@@ -250,7 +309,7 @@ REGLAS DE TERMINOLOGÍA Y TRADUCCIÓN ACADÉMICA EN PSICOLOGÍA:
 - Conserva términos técnicos estándar: "mindfulness" (o "atención plena"), "insight", "coping" (o "afrontamiento"), "priming", "arousal", "red neuronal por defecto" (default mode network), "ensayo controlado aleatorizado" (RCT), "alianza terapéutica", etc.
 - Escribe SIEMPRE en español neutro, riguroso, elegante y con rigor científico. NUNCA dejes oraciones en inglés sin traducir.
 
-Debes responder ÚNICAMENTE en formato JSON con la siguiente estructura estricta:
+IMPORTANTE: Debes responder ÚNICAMENTE en formato JSON con la siguiente estructura estricta, comenzando con { y terminando con }. No incluyas bloques de código markdown como \`\`\`json ni texto fuera del JSON:
 {
   "selectedCandidateIndex": 1,
   "hook": "Pregunta intrigante en español (máximo 12 palabras, ej: '¿El café antes o después de estudiar?')",
@@ -261,14 +320,17 @@ Debes responder ÚNICAMENTE en formato JSON con la siguiente estructura estricta
 }`;
 
   const userPrompt = `Tópico: "${topic.name}".
-Aquí tienes los 5 candidatos completos:\n${promptPapers}\n\nSelecciona el mejor candidato y genera el JSON riguroso en español.`;
+Aquí tienes los 5 candidatos completos:\n${promptPapers}\n\nSelecciona el mejor candidato y responde EXCLUSIVAMENTE con el objeto JSON solicitado en español.`;
 
   const rawContent = await callGroqWithRetry([
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userPrompt }
   ]);
 
-  const parsed = JSON.parse(rawContent);
+  const parsed = extractJson(rawContent);
+  if (!parsed) {
+    throw new Error(`No se pudo parsear el JSON generado por Groq: ${rawContent.slice(0, 150)}`);
+  }
   const idx = Math.max(0, Math.min(papers.length - 1, (parsed.selectedCandidateIndex || 1) - 1));
   const chosenPaper = papers[idx];
 
