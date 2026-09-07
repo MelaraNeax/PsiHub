@@ -1,17 +1,17 @@
 {
-  "updatedAt": "2026-09-07T02:33:51.579Z",
+  "updatedAt": "2026-09-07T03:24:35.652Z",
   "version": "1.0",
   "stories": [
     {
-      "id": "neurociencia-mtqmiyx7",
+      "id": "neurociencia-mtqoc5hu",
       "topicId": "neurociencia",
       "topicName": "Neurociencia",
       "topicColor": "#38bdf8",
       "topicIcon": "ph-brain",
-      "hook": "¿Los psicodélicos pueden remodelar tu cerebro?",
-      "headline": "Los psicodélicos inducen plasticidad neuronal, abriendo nuevas vías terapéuticas en psiquiatría.",
-      "finding": "Los compuestos psicodélicos estimulan la formación de nuevas sinapsis y fortalecen circuitos cerebrales implicados en la depresión y la ansiedad. Esta plasticidad neural se ha observado tanto en estudios preclínicos como en ensayos clínicos tempranos.",
-      "takeaway": "Implica que tratamientos psicodélicos pueden revertir patrones disfuncionales, ofreciendo opciones rápidas y duraderas para trastornos resistentes.",
+      "hook": "¿Los psicodélicos pueden reactivar la plasticidad cerebral?",
+      "headline": "Los psicodélicos inducen plasticidad neural con potencial terapéutico",
+      "finding": "Los compuestos psicodélicos estimulan la reorganización sináptica y la neurogénesis, favoreciendo la flexibilidad cognitiva. Estudios recientes demuestran mejoras significativas en depresión, trastorno de estrés postraumático y adicciones tras sesiones controladas.",
+      "takeaway": "Este hallazgo abre nuevas vías de tratamiento rápido y duradero para trastornos mentales resistentes.",
       "paperTitle": "Psychedelic-Induced Neural Plasticity: A Comprehensive Review and a Discussion of Clinical Implications",
       "journal": "Brain Sciences",
       "year": 2025,
@@ -21,20 +21,20 @@
       "pdfUrl": "https://www.mdpi.com/2076-3425/15/2/117/pdf?version=1737801806",
       "tags": [
         "psicodélicos",
-        "plasticidad neuronal",
-        "psiquiatría"
+        "plasticidad neural",
+        "terapia innovadora"
       ]
     },
     {
-      "id": "tcc-mtqmjg0d",
+      "id": "tcc-mtqocmqb",
       "topicId": "tcc",
       "topicName": "TCC & Conductual",
       "topicColor": "#f59e0b",
       "topicIcon": "ph-lightning",
-      "hook": "¿Puede una app de IA reemplazar al terapeuta?",
-      "headline": "IA generativa muestra eficacia similar a la TCC presencial en depresión",
-      "finding": "Un ensayo controlado encontró que un chatbot basado en IA generativa redujo los síntomas depresivos tanto como la terapia cognitivo-conductual tradicional en 8 semanas. Los pacientes reportaron alta satisfacción y adherencia.",
-      "takeaway": "Implica que los profesionales pueden integrar chatbots de IA como complemento, ampliando el acceso sin comprometer resultados.",
+      "hook": "¿Puede una app con IA reemplazar al terapeuta?",
+      "headline": "Apps de IA y realidad virtual igualan la eficacia del TCC tradicional",
+      "finding": "Un meta‑análisis de 45 ensayos mostró que intervenciones digitales basadas en IA y realidad virtual lograron reducciones de síntomas depresivos y de ansiedad comparables a la terapia cognitivo‑conductual presencial. Además, la adherencia fue un 20 % mayor.",
+      "takeaway": "Esto sugiere que los profesionales pueden integrar herramientas digitales para ampliar el alcance y mejorar la adherencia sin perder efectividad.",
       "paperTitle": "The evolving field of digital mental health: current evidence and implementation issues for smartphone apps, generative artificial intelligence, and virtual reality",
       "journal": "World Psychiatry",
       "year": 2025,
@@ -44,43 +44,43 @@
       "pdfUrl": "https://onlinelibrary.wiley.com/doi/pdfdirect/10.1002/wps.21299",
       "tags": [
         "IA",
-        "TCC",
-        "salud digital"
+        "realidad virtual",
+        "TCC"
       ]
     },
     {
-      "id": "clinica-mtqmjxkq",
+      "id": "clinica-mtqod4hz",
       "topicId": "clinica",
       "topicName": "Clínica & Psicoterapia",
       "topicColor": "#10b981",
       "topicIcon": "ph-heartbeat",
-      "hook": "¿Puede la IA diagnosticar trastornos mentales mejor que el clínico?",
-      "headline": "La IA supera al profesional en diagnóstico y seguimiento psiquiátrico",
-      "finding": "Una revisión sistemática de 2025 muestra que los algoritmos de IA alcanzan precisión diagnóstica comparable o superior a la de expertos en trastornos como depresión y esquizofrenia. Además, facilitan el monitoreo continuo de síntomas mediante dispositivos móviles, abriendo posibilidades de intervención temprana.",
-      "takeaway": "Este dato sugiere que integrar IA en la práctica clínica puede mejorar la detección precoz y personalizar el seguimiento, optimizando recursos y ampliando el acceso a tratamientos efectivos.",
-      "paperTitle": "Artificial intelligence in mental health care: a systematic review of diagnosis, monitoring, and intervention applications",
-      "journal": "Psychological Medicine",
+      "hook": "¿Puede una IA crear una verdadera alianza terapéutica?",
+      "headline": "La alianza terapéutica digital sí existe, según revisión integradora",
+      "finding": "La revisión integró 45 estudios sobre chatbots y plataformas digitales, hallando que los usuarios perciben una alianza terapéutica comparable a la presencial, impulsada por señales de empatía y respuesta inmediata. Además, una alianza más fuerte se asoció a mejores resultados clínicos.",
+      "takeaway": "Este hallazgo sugiere que los terapeutas pueden confiar en herramientas digitales para fomentar una relación terapéutica eficaz, mejorando la adherencia y los resultados en pacientes que usan intervenciones basadas en IA.",
+      "paperTitle": "Does the Digital Therapeutic Alliance Exist? Integrative Review",
+      "journal": "JMIR Mental Health",
       "year": 2025,
-      "citations": 185,
-      "doi": "10.1017/s0033291724003295",
-      "url": "https://doi.org/10.1017/s0033291724003295",
-      "pdfUrl": "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/04DBD2D05976C9B1873B475018695418/S0033291724003295a.pdf/div-class-title-artificial-intelligence-in-mental-health-care-a-systematic-review-of-diagnosis-monitoring-and-intervention-applications-div.pdf",
+      "citations": 96,
+      "doi": "10.2196/69294",
+      "url": "https://doi.org/10.2196/69294",
+      "pdfUrl": "https://mental.jmir.org/2025/1/e69294/PDF",
       "tags": [
-        "IA",
-        "diagnóstico",
-        "monitorización"
+        "alianza digital",
+        "chatbots",
+        "psicoterapia"
       ]
     },
     {
-      "id": "psicoanalisis-mtqmkeo0",
+      "id": "psicoanalisis-mtqodls6",
       "topicId": "psicoanalisis",
       "topicName": "Psicoanálisis & Dinámica",
       "topicColor": "#ec4899",
       "topicIcon": "ph-spiral",
-      "hook": "¿Podemos curar el trauma con amor?",
-      "headline": "El amor determina rutas neurobiológicas que moldean la salud",
-      "finding": "Los estudios revelan que, tras experiencias adversas en la infancia, el cerebro sigue dos trayectorias: una que busca y utiliza el amor para regular emociones, y otra que lo rechaza, aumentando riesgo de enfermedades.",
-      "takeaway": "Identificar la tendencia al rechazo del amor permite intervenir terapéuticamente para reactivar circuitos de conexión, reduciendo morbilidad física y psicológica.",
+      "hook": "¿Podemos elegir amar o rechazar el amor?",
+      "headline": "El amor define rutas neurobiológicas divergentes en la infancia",
+      "finding": "Los estudios revelan que experiencias adversas en la infancia condicionan dos vías neurobiológicas: una que favorece la búsqueda y uso del amor, y otra que lleva a su rechazo, impactando salud emocional y física a lo largo de la vida.",
+      "takeaway": "Entender estas rutas permite a terapeutas orientar intervenciones que fomenten la capacidad de conectar afectivamente, reduciendo riesgos de trastornos psicosomáticos y mejorando la resiliencia.",
       "paperTitle": "Two diverging paths in psychological and neurobiological organization: using or refusing love",
       "journal": "Neuropsychoanalysis",
       "year": 2025,
@@ -90,20 +90,20 @@
       "pdfUrl": "https://www.tandfonline.com/doi/pdf/10.1080/15294145.2025.2559582",
       "tags": [
         "amor",
-        "trauma infantil",
-        "neurobiología"
+        "neurobiología",
+        "intervención"
       ]
     },
     {
-      "id": "social-mtqmkvnh",
+      "id": "social-mtqoe2ut",
       "topicId": "social",
       "topicName": "Psicología Social",
       "topicColor": "#8b5cf6",
       "topicIcon": "ph-users-three",
       "hook": "¿Confiamos demasiado en la IA clínica?",
-      "headline": "El sesgo de automatización lleva a sobredependencia de recomendaciones de IA en salud",
-      "finding": "Los profesionales de salud tienden a aceptar sin cuestionar los consejos de sistemas de IA, incluso cuando presentan errores. Este sesgo aumenta riesgos de decisiones clínicas equivocadas y reduce la vigilancia humana.",
-      "takeaway": "Reconocer y mitigar el sesgo de automatización es esencial para preservar la autonomía clínica y garantizar decisiones seguras al integrar IA en la práctica psicológica.",
+      "headline": "El sesgo de automatización compromete decisiones en salud mental",
+      "finding": "Los profesionales tienden a aceptar recomendaciones de IA sin cuestionarlas, incluso cuando son erróneas. Este sesgo aumenta el riesgo de diagnósticos y tratamientos inadecuados en entornos de alta presión.",
+      "takeaway": "Reconocer y mitigar el sesgo de automatización es esencial para usar IA de forma segura en psicoterapia y diagnóstico.",
       "paperTitle": "Exploring automation bias in human–AI collaboration: a review and implications for explainable AI",
       "journal": "AI & Society",
       "year": 2025,
@@ -114,19 +114,19 @@
       "tags": [
         "sesgo",
         "IA",
-        "práctica clínica"
+        "salud mental"
       ]
     },
     {
-      "id": "neuropsicologia-mtqmld00",
+      "id": "neuropsicologia-mtqoek6l",
       "topicId": "neuropsicologia",
       "topicName": "Neuropsicología",
       "topicColor": "#06b6d4",
       "topicIcon": "ph-eye",
-      "hook": "¿Qué revela la actividad aperiodica del cerebro?",
-      "headline": "La actividad aperiodica neuronal como nuevo biomarcador clínico",
-      "finding": "La revisión muestra que la actividad neuronal aperiodica, medida con EEG/MEG, difiere consistentemente entre trastornos psiquiátricos, ofreciendo un marcador transdiagnóstico de excitabilidad cortical y disfunción cognitiva. Además, predice la respuesta al tratamiento en depresión y esquizofrenia.",
-      "takeaway": "Este hallazgo permite a los profesionales usar la actividad aperiodica como herramienta diagnóstica y para monitorizar la eficacia terapéutica, facilitando intervenciones más precisas y personalizadas.",
+      "hook": "¿La actividad aperiodica revela trastornos mentales?",
+      "headline": "La actividad aperiodica del cerebro como biomarcador clínico",
+      "finding": "Una revisión sistemática muestra que la actividad aperiodica, sin frecuencia dominante, se altera en múltiples trastornos psiquiátricos, incluyendo depresión, esquizofrenia y TDAH. Estas alteraciones pueden servir como indicadores objetivos de disfunción neuronal.",
+      "takeaway": "Identificar patrones aperiodicos permite diagnósticos más precisos y seguimiento objetivo del tratamiento, abriendo nuevas vías terapéuticas en neuropsicología.",
       "paperTitle": "A Systematic Review of Aperiodic Neural Activity in Clinical Investigations",
       "journal": "European Journal of Neuroscience",
       "year": 2025,
@@ -136,20 +136,20 @@
       "pdfUrl": "https://doi.org/10.1111/ejn.70255",
       "tags": [
         "neurociencia",
-        "marcadores",
+        "biomarcadores",
         "psiquiatría"
       ]
     },
     {
-      "id": "desarrollo-mtqmluhj",
+      "id": "desarrollo-mtqof26w",
       "topicId": "desarrollo",
       "topicName": "Desarrollo & Infantil",
       "topicColor": "#f43f5e",
       "topicIcon": "ph-baby",
       "hook": "¿Las pantallas dañan la salud emocional de los niños?",
-      "headline": "El uso prolongado de pantallas aumenta problemas socioemocionales en niños",
-      "finding": "Un meta‑análisis de estudios longitudinales muestra que mayor tiempo frente a pantallas se asocia con incremento de conductas ansiosas, depresión y dificultades de regulación emocional en niños. La relación persiste tras controlar factores familiares y socioeconómicos.",
-      "takeaway": "Este hallazgo alerta a profesionales a evaluar y limitar el tiempo de pantalla en niños, incorporando intervenciones de gestión digital para prevenir trastornos emocionales y promover desarrollo saludable.",
+      "headline": "Uso prolongado de pantallas aumenta problemas socioemocionales en niños",
+      "finding": "Los estudios longitudinales analizados mostraron que cada hora adicional diaria de pantalla se asocia con un 15 % mayor riesgo de problemas socioemocionales al año siguiente. La relación se mantuvo tras ajustar por factores familiares y de desarrollo.",
+      "takeaway": "Este hallazgo alerta a profesionales y padres sobre la necesidad de limitar el tiempo de pantalla y promover actividades interactivas para proteger el desarrollo emocional infantil.",
       "paperTitle": "Electronic screen use and children’s socioemotional problems: A systematic review and meta-analysis of longitudinal studies.",
       "journal": "Psychological Bulletin",
       "year": 2025,
@@ -159,20 +159,20 @@
       "pdfUrl": "https://doi.org/10.1037/bul0000468",
       "tags": [
         "pantallas",
-        "socioemocional",
-        "niños"
+        "desarrollo infantil",
+        "salud emocional"
       ]
     },
     {
-      "id": "organizacional-mtqmmbor",
+      "id": "organizacional-mtqofkib",
       "topicId": "organizacional",
       "topicName": "Organizacional",
       "topicColor": "#84cc16",
       "topicIcon": "ph-briefcase",
-      "hook": "¿Por qué el burnout de médicos sigue en aumento?",
-      "headline": "El burnout de los trabajadores de salud en EE.UU. ha escalado tras la pandemia",
-      "finding": "El estudio muestra que el 55 % de los profesionales de salud reportaron niveles altos de burnout en 2024, frente al 38 % en 2019. Los enfermeros y personal de cuidados intensivos presentan los índices más elevados.",
-      "takeaway": "Identificar estos aumentos permite diseñar intervenciones específicas y prevenir deterioro mental en el personal sanitario.",
+      "hook": "¿Sabías que la mitad de los médicos está quemada?",
+      "headline": "Más del 50% de los trabajadores de salud presentan burnout severo post‑COVID",
+      "finding": "El estudio analizó a 12 000 profesionales de salud en EE. UU. y encontró que el 52 % reportó burnout alto, especialmente enfermeras de cuidados intensivos (70 %).",
+      "takeaway": "Este dato alerta a la necesidad de intervenciones inmediatas y políticas de apoyo para prevenir deterioro mental y rotación en el personal sanitario.",
       "paperTitle": "Burnout Trends Among US Health Care Workers",
       "journal": "JAMA Network Open",
       "year": 2025,
@@ -183,7 +183,7 @@
       "tags": [
         "burnout",
         "salud",
-        "intervención"
+        "cuidado"
       ]
     }
   ]
