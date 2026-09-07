@@ -1,6 +1,6 @@
 {
-  "name": "PsyHub — Buscador Científico de Psicoterapia",
-  "short_name": "PsyHub",
+  "name": "PsiHub — Buscador Científico de Psicoterapia",
+  "short_name": "PsiHub",
   "description": "Buscador de papers de psicoterapia en acceso abierto. Powered by OpenAlex.",
   "start_url": "./index.html?utm_source=pwa",
   "display": "standalone",
