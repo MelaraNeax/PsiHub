@@ -19,6 +19,7 @@ import json
 import hashlib
 import tempfile
 import base64
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -321,14 +322,27 @@ async def health():
 # INTERFAZ WEB GRADIO (Para pruebas manuales)
 # ══════════════════════════════════════════════════
 
-async def gradio_translate(pdf_url: str):
-    if not pdf_url or not pdf_url.strip():
-        return "Por favor ingresa una URL de PDF válida."
-    try:
-        res = await process_pdf_translation(pdf_url.strip(), pdf_url.strip())
-        return res.get("markdown", "Sin contenido traducido.")
-    except Exception as e:
-        return f"❌ Error al traducir el PDF: {str(e)}"
+try:
+    # pyrefly: ignore [missing-import]
+    import spaces
+    @spaces.GPU
+    def gradio_translate(pdf_url: str):
+        if not pdf_url or not pdf_url.strip():
+            return "Por favor ingresa una URL de PDF válida."
+        try:
+            res = asyncio.run(process_pdf_translation(pdf_url.strip(), pdf_url.strip()))
+            return res.get("markdown", "Sin contenido traducido.")
+        except Exception as e:
+            return f"❌ Error al traducir el PDF: {str(e)}"
+except ImportError:
+    async def gradio_translate(pdf_url: str):
+        if not pdf_url or not pdf_url.strip():
+            return "Por favor ingresa una URL de PDF válida."
+        try:
+            res = await process_pdf_translation(pdf_url.strip(), pdf_url.strip())
+            return res.get("markdown", "Sin contenido traducido.")
+        except Exception as e:
+            return f"❌ Error al traducir el PDF: {str(e)}"
 
 
 with gr.Blocks(title="PsiHub Reader") as demo:

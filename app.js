@@ -1133,7 +1133,7 @@ function closeModal() {
 // ═══════════════════════════════════════════════════
 
 // URL de tu Hugging Face Space — reemplaza con tu URL real después del deploy
-const HF_SPACE_URL = 'https://TU-USUARIO-psihub-reader.hf.space';
+const HF_SPACE_URL = 'https://naku-melara-psihub-reader.hf.space';
 
 async function openReaderModal(paperUrl, paperId) {
   if (!paperUrl) {
