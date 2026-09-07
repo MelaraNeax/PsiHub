@@ -1,8 +1,9 @@
 /**
- * generate_stories.js — Automatización diaria de historias para PsiHub / Pshi-Hub
+ * generate_stories.js — Automatización diaria de historias para Psi-hub
  * 
  * 1. Consulta OpenAlex para obtener los papers más recientes y relevantes de 8 tópicos.
- * 2. Envía un prompt optimizado y ligero a Groq (Llama 3.3 70B / 8B) para seleccionar y sintetizar la placa snackable.
+ * 2. Envía un prompt ultraligero a Groq (openai/gpt-oss-120b con fallback a openai/gpt-oss-20b)
+ *    para seleccionar y sintetizar la placa snackable.
  * 3. Cuenta con control automático de rate-limits (429), reintentos con backoff y preservación de historias previas.
  * 4. Escribe el resultado en data/stories.json (y www/data/stories.json si existe).
  */
@@ -11,10 +12,10 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const PRIMARY_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
-const FALLBACK_MODEL = 'llama-3.1-8b-instant';
+const PRIMARY_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+const FALLBACK_MODEL = 'openai/gpt-oss-20b';
 
-// 8 Tópicos definidos para PsiHub
+// 8 Tópicos definidos para Psi-hub
 const TOPICS = [
   {
     id: 'neurociencia',
@@ -89,7 +90,7 @@ function reconstructAbstract(invertedIndex) {
 }
 
 /**
- * Busca hasta 4 papers destacados con abstract en OpenAlex (optimizado para no sobrecargar tokens)
+ * Busca hasta 3 papers destacados con abstract en OpenAlex (optimizado para no sobrecargar tokens)
  */
 async function fetchTopCandidatePapers(topicQuery) {
   const currentYear = new Date().getFullYear();
@@ -99,7 +100,7 @@ async function fetchTopCandidatePapers(topicQuery) {
   url.searchParams.set('search', topicQuery);
   url.searchParams.set('filter', `is_oa:true,from_publication_date:${fromYear}-01-01`);
   url.searchParams.set('sort', 'cited_by_count:desc');
-  url.searchParams.set('per-page', '10');
+  url.searchParams.set('per-page', '8');
   url.searchParams.set('mailto', 'psyhub.app.research@gmail.com');
 
   let res;
@@ -128,11 +129,11 @@ async function fetchTopCandidatePapers(topicQuery) {
 
   for (const item of (data.results || [])) {
     const abstract = reconstructAbstract(item.abstract_inverted_index);
-    if (abstract && abstract.length > 100 && item.title) {
+    if (abstract && abstract.length > 80 && item.title) {
       validPapers.push({
         id: item.id,
         title: item.title,
-        abstract: abstract.substring(0, 380), // Conciso para ahorrar TPM en Groq
+        abstract: abstract.substring(0, 240), // Breve para consumir mínimos tokens por minuto (<300 tokens por prompt)
         journal: item.primary_location?.source?.display_name || 'Journal científico',
         year: item.publication_year || currentYear,
         doi: item.doi ? item.doi.replace('https://doi.org/', '') : '',
@@ -140,15 +141,15 @@ async function fetchTopCandidatePapers(topicQuery) {
         pdfUrl: item.open_access?.oa_url || item.primary_location?.pdf_url || item.doi || item.id
       });
     }
-    // Con 4 candidatos es suficiente para variedad sin sobrecargar tokens por minuto
-    if (validPapers.length >= 4) break;
+    // 3 candidatos son ideales para tener diversidad y no saturar el límite TPM de Groq
+    if (validPapers.length >= 3) break;
   }
 
   return validPapers;
 }
 
 /**
- * Realiza la petición a Groq con reintentos automáticos y backoff exponencial en caso de 429
+ * Realiza la petición a Groq con reintentos automáticos y backoff en caso de 429
  */
 async function callGroqWithRetry(messages, maxRetries = 3) {
   let modelToUse = PRIMARY_MODEL;
@@ -164,23 +165,22 @@ async function callGroqWithRetry(messages, maxRetries = 3) {
         model: modelToUse,
         messages,
         response_format: { type: 'json_object' },
-        temperature: 0.4
+        temperature: 0.3
       })
     });
 
     if (response.status === 429) {
       const errJson = await response.json().catch(() => ({}));
       const msg = errJson.error?.message || '';
-      // Intentar extraer el tiempo sugerido por Groq (ej: "Please try again in 15.06s")
+      // Extraer segundos sugeridos por Groq (ej: "Please try again in 15.06s")
       const waitMatch = msg.match(/in (\d+(\.\d+)?)s/i);
-      const waitSec = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 2 : 12;
+      const waitSec = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 2 : 15;
       
       console.warn(`    ⚠️ [Groq 429 TPM Limit] Esperando ${waitSec}s para liberar cupo (intento ${attempt}/${maxRetries})...`);
       await new Promise(r => setTimeout(r, waitSec * 1000));
       
-      // Si el modelo principal está saturado, probar con el modelo fallback de menor tamaño
       if (attempt === 2 && modelToUse !== FALLBACK_MODEL) {
-        console.warn(`    🔄 Conmutando a modelo ultrarrápido ${FALLBACK_MODEL} para evitar límite...`);
+        console.warn(`    🔄 Conmutando a modelo fallback ${FALLBACK_MODEL}...`);
         modelToUse = FALLBACK_MODEL;
       }
       continue;
@@ -189,7 +189,7 @@ async function callGroqWithRetry(messages, maxRetries = 3) {
     if (!response.ok) {
       const errText = await response.text();
       if (attempt < maxRetries && modelToUse !== FALLBACK_MODEL) {
-        console.warn(`    ⚠️ Error con ${modelToUse}. Reintentando con ${FALLBACK_MODEL}...`);
+        console.warn(`    ⚠️ Error con ${modelToUse}: ${errText}. Reintentando con ${FALLBACK_MODEL}...`);
         modelToUse = FALLBACK_MODEL;
         await new Promise(r => setTimeout(r, 2000));
         continue;
@@ -207,28 +207,11 @@ async function callGroqWithRetry(messages, maxRetries = 3) {
 /**
  * Consulta a Groq para elegir el mejor paper y armar la placa "snackable"
  */
-async function summarizeWithGroq(topic, papers) {
+async function summarizeWithGroq(topic, papers, existingStory = null) {
   if (!GROQ_API_KEY) {
-    console.warn(`[!] No se proporcionó GROQ_API_KEY. Usando fallback directo para "${topic.name}".`);
-    const p = papers[0];
-    return {
-      id: `${topic.id}-${Date.now().toString(36)}`,
-      topicId: topic.id,
-      topicName: topic.name,
-      topicColor: topic.color,
-      topicIcon: topic.icon,
-      hook: `¿Qué nos enseña la investigación reciente en ${topic.name}?`,
-      headline: p.title,
-      finding: p.abstract.substring(0, 180) + '...',
-      takeaway: 'La evidencia actual resalta la relevancia de este mecanismo en la práctica clínica y el estudio cognitivo.',
-      paperTitle: p.title,
-      journal: p.journal,
-      year: p.year,
-      doi: p.doi,
-      url: p.url,
-      pdfUrl: p.pdfUrl,
-      tags: [topic.name, 'Evidencia', 'Reciente']
-    };
+    console.warn(`[!] No se proporcionó GROQ_API_KEY. Conservando historia de respaldo para "${topic.name}".`);
+    if (existingStory) return existingStory;
+    throw new Error('No hay API Key ni historia previa para respaldar.');
   }
 
   const promptPapers = papers.map((p, idx) => `
@@ -239,25 +222,24 @@ Abstract: ${p.abstract}
 `).join('\n---\n');
 
   const systemPrompt = `Eres un divulgador de élite en psicología científica, neurociencias y psicoterapia.
-Tu misión es seleccionar de una lista de papers el hallazgo MÁS sorprendente, contraintuitivo o clínicamente relevante para profesionales de la salud mental.
+Tu misión es seleccionar de una lista de papers el hallazgo MÁS sorprendente o clínicamente relevante para profesionales de la salud mental.
 
 Debes responder ÚNICAMENTE en formato JSON con la siguiente estructura estricta:
 {
   "selectedCandidateIndex": 1,
-  "hook": "Pregunta breve e intrigante (máximo 12 palabras, ej: '¿El café antes o después de estudiar?')",
-  "headline": "Titular del hallazgo en una frase potente (máximo 15 palabras)",
-  "finding": "Explicación del hallazgo en 2 o 3 oraciones claras y atractivas (máximo 50 palabras)",
-  "takeaway": "Por qué importa este dato o su aplicación clínica (máximo 45 palabras)",
-  "tags": ["3 etiquetas cortas sobre el tema"]
+  "hook": "Pregunta intrigante en español (máximo 12 palabras, ej: '¿El café antes o después de estudiar?')",
+  "headline": "Titular del hallazgo en una sola frase potente en español (máx 15 palabras)",
+  "finding": "Explicación del hallazgo en 2 oraciones claras y atractivas en español (máx 45 palabras)",
+  "takeaway": "Por qué importa este dato o su aplicación clínica en español (máx 40 palabras)",
+  "tags": ["3 etiquetas cortas en español"]
 }
 
 Reglas:
-- Escribe en español neutro, impecable y riguroso.
-- No uses rodeos como "según este estudio". Ve directo al dato contundente.
+- Escribe SIEMPRE en español neutro, riguroso y atractivo. NUNCA dejes texto en inglés.
 - Devuelve SOLO el objeto JSON.`;
 
   const userPrompt = `Tópico: "${topic.name}".
-Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el JSON.`;
+Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el JSON en español.`;
 
   const rawContent = await callGroqWithRetry([
     { role: 'system', content: systemPrompt },
@@ -274,25 +256,25 @@ Aquí tienes los candidatos:\n${promptPapers}\n\nSelecciona el mejor y genera el
     topicName: topic.name,
     topicColor: topic.color,
     topicIcon: topic.icon,
-    hook: parsed.hook || `¿Qué revela lo último en ${topic.name}?`,
-    headline: parsed.headline || chosenPaper.title,
-    finding: parsed.finding || chosenPaper.abstract.substring(0, 180),
-    takeaway: parsed.takeaway || 'Aporta evidencia significativa para el campo.',
+    hook: parsed.hook || (existingStory ? existingStory.hook : `¿Qué revela lo último en ${topic.name}?`),
+    headline: parsed.headline || (existingStory ? existingStory.headline : chosenPaper.title),
+    finding: parsed.finding || (existingStory ? existingStory.finding : chosenPaper.abstract),
+    takeaway: parsed.takeaway || (existingStory ? existingStory.takeaway : 'Aporta evidencia significativa para la práctica clínica.'),
     paperTitle: chosenPaper.title,
     journal: chosenPaper.journal,
     year: chosenPaper.year,
     doi: chosenPaper.doi,
     url: chosenPaper.url,
     pdfUrl: chosenPaper.pdfUrl,
-    tags: Array.isArray(parsed.tags) && parsed.tags.length ? parsed.tags : [topic.name, 'Investigación']
+    tags: Array.isArray(parsed.tags) && parsed.tags.length ? parsed.tags : (existingStory ? existingStory.tags : [topic.name, 'Investigación'])
   };
 }
 
 async function main() {
-  console.log('🚀 Iniciando curaduría diaria de Historias para Pshi-Hub...');
+  console.log('🚀 Iniciando curaduría diaria de Historias para Psi-hub...');
   console.log(`📅 Fecha: ${new Date().toISOString()}`);
   console.log(`🤖 Modelo Groq Principal: ${PRIMARY_MODEL} (Fallback: ${FALLBACK_MODEL})`);
-  console.log(`🔑 Groq API Key: ${GROQ_API_KEY ? 'Presente ✓' : 'No provista (usando fallback de prueba)'}\n`);
+  console.log(`🔑 Groq API Key: ${GROQ_API_KEY ? 'Presente ✓' : 'No provista (se mantendrán historias previas)'}\n`);
 
   const projectRoot = path.resolve(__dirname, '..');
   const targetPath = path.join(projectRoot, 'data', 'stories.json');
@@ -314,30 +296,29 @@ async function main() {
   const stories = [];
 
   for (const topic of TOPICS) {
+    const existingStory = existingStoriesMap.get(topic.id) || null;
     console.log(`🔍 [${topic.name}] Buscando papers en OpenAlex...`);
     try {
       const papers = await fetchTopCandidatePapers(topic.query);
       if (papers.length === 0) {
-        console.warn(`  ⚠️ No se encontraron papers para "${topic.name}". Usando respaldo previo.`);
-        if (existingStoriesMap.has(topic.id)) {
-          stories.push(existingStoriesMap.get(topic.id));
-        }
+        console.warn(`  ⚠️ No se encontraron papers para "${topic.name}". Conservando respaldo previo.`);
+        if (existingStory) stories.push(existingStory);
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
 
       console.log(`  ✓ Encontrados ${papers.length} candidatos. Analizando con Groq...`);
-      const story = await summarizeWithGroq(topic, papers);
+      const story = await summarizeWithGroq(topic, papers, existingStory);
       stories.push(story);
       console.log(`  ✨ Historia generada: "${story.hook}"`);
       
-      // Pausa estratégica de 4s entre tópicos para respetar TPM (Tokens Per Minute)
-      await new Promise(r => setTimeout(r, 4000));
+      // Pausa estratégica de 20s entre tópicos para respetar TPM (Tokens Per Minute) en la cuota gratuita de Groq
+      await new Promise(r => setTimeout(r, 20000));
     } catch (err) {
       console.error(`  ❌ Error en tópico "${topic.name}":`, err.message);
-      if (existingStoriesMap.has(topic.id)) {
-        console.log(`  🛡️ Conservando historia previa para "${topic.name}" para no dejar huecos.`);
-        stories.push(existingStoriesMap.get(topic.id));
+      if (existingStory) {
+        console.log(`  🛡️ Conservando historia de alta calidad previa para "${topic.name}".`);
+        stories.push(existingStory);
       }
       await new Promise(r => setTimeout(r, 3000));
     }
