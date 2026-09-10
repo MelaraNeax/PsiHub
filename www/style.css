@@ -1980,8 +1980,6 @@ input[type="search"]::-webkit-search-cancel-button {
   background: rgba(255, 255, 255, 0.09);
   color: var(--txt);
 }
-  color: var(--txt);
-}
 
 /* Botones de acción CTA (Sobrios — estilo Perfil / Historias) */
 .modal-cta {
