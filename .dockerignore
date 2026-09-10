@@ -1,0 +1,12 @@
+.git
+.github
+.vscode
+node_modules
+android
+www
+data
+cache
+scratch
+*.pyc
+__pycache__
+.env
