@@ -1497,6 +1497,33 @@ function closeModal() {
 // ═══════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════
 
+function postProcessReaderContent() {
+  if (!el.readerContent) return;
+
+  // Envolver tablas para scroll horizontal exclusivo
+  el.readerContent.querySelectorAll('table').forEach(table => {
+    if (!table.parentElement.classList.contains('reader-table-wrap')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'reader-table-wrap';
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    }
+  });
+
+  // Envolver imágenes y figuras para aislarlas del flujo de texto
+  el.readerContent.querySelectorAll('img').forEach(img => {
+    const p = img.closest('p');
+    if (p) {
+      p.classList.add('reader-image-wrap');
+    } else if (!img.parentElement.classList.contains('reader-image-wrap')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'reader-image-wrap';
+      img.parentNode.insertBefore(wrap, img);
+      wrap.appendChild(img);
+    }
+  });
+}
+
 function renderReaderPaperContent(paper, markdown) {
   if (!markdown) return;
   const rawHtml = marked.parse(markdown);
@@ -1529,6 +1556,7 @@ function renderReaderPaperContent(paper, markdown) {
     `;
   }
   el.readerContent.innerHTML = heroHtml + rawHtml;
+  postProcessReaderContent();
 }
 
 // ═══════════════════════════════════════════════════
@@ -1550,48 +1578,46 @@ function updateReaderProgressBar(pct, stepText) {
     el.readerLoadingPct.textContent = `${rounded}%`;
   }
   if (el.readerLoadingStep && stepText) {
-    el.readerLoadingStep.textContent = stepText;
+    el.readerLoadingStep.innerHTML = `<span class="reader-step-dot"></span> <span>${esc(stepText)}</span>`;
   }
 }
 
 function startReaderLoadingProgress(isLocalFile = false) {
   stopReaderLoadingProgress();
   readerCurrentProgress = 0;
-  const initialStep = isLocalFile ? 'Subiendo y analizando archivo PDF…' : 'Descargando y analizando PDF…';
+  const initialStep = isLocalFile ? 'Subiendo archivo y analizando páginas…' : 'Analizando documento y páginas…';
   updateReaderProgressBar(4, initialStep);
 
   const startTime = Date.now();
 
   readerProgressTimer = setInterval(() => {
     const elapsed = (Date.now() - startTime) / 1000;
-    let target = 0;
+    
+    // Curva de progresión suave, continua y asintótica (nunca se estanca abruptamente en el 90%)
+    // A los 3s: ~15% | 8s: ~34% | 15s: ~53% | 22s: ~67% | 30s: ~77% | 40s: ~85% | 55s: ~91%
+    const target = 94 * (1 - Math.exp(-elapsed / 19));
+    
     let stepText = '';
-
-    if (elapsed < 2.5) {
-      target = 6 + (elapsed / 2.5) * 20; // 6% -> 26%
-      stepText = isLocalFile ? 'Subiendo y analizando archivo PDF…' : 'Descargando y analizando PDF…';
-    } else if (elapsed < 6) {
-      target = 26 + ((elapsed - 2.5) / 3.5) * 24; // 26% -> 50%
-      stepText = 'Extrayendo texto y estructura…';
-    } else if (elapsed < 12) {
-      target = 50 + ((elapsed - 6) / 6) * 24; // 50% -> 74%
-      stepText = 'Traduciendo con IA especializada…';
-    } else if (elapsed < 18) {
-      target = 74 + ((elapsed - 12) / 6) * 15; // 74% -> 89%
-      stepText = 'Adaptando terminología científica…';
+    if (elapsed < 3.5) {
+      stepText = isLocalFile ? 'Subiendo archivo y analizando páginas…' : 'Analizando documento y páginas…';
+    } else if (elapsed < 8) {
+      stepText = 'Extrayendo estructura y figuras del PDF…';
+    } else if (elapsed < 16) {
+      stepText = 'Traduciendo secciones con IA (Gemini)…';
+    } else if (elapsed < 25) {
+      stepText = 'Adaptando conceptos científicos al español…';
+    } else if (elapsed < 36) {
+      stepText = 'Optimizando redacción y terminología…';
     } else {
-      // Avanzar suavemente hacia el 94% mientras el servidor responde
-      const remaining = 95 - readerCurrentProgress;
-      target = readerCurrentProgress + Math.max(0.04, remaining * 0.04);
-      stepText = 'Finalizando formato de lectura…';
+      stepText = 'Compilando formato final para modo lectura…';
     }
 
     if (target > readerCurrentProgress) {
-      readerCurrentProgress = Math.min(94, readerCurrentProgress + (target - readerCurrentProgress) * 0.35);
+      readerCurrentProgress += (target - readerCurrentProgress) * 0.22;
     }
 
     updateReaderProgressBar(readerCurrentProgress, stepText);
-  }, 120);
+  }, 100);
 }
 
 async function finishReaderLoadingProgress() {
@@ -1600,7 +1626,7 @@ async function finishReaderLoadingProgress() {
     readerProgressTimer = null;
   }
   updateReaderProgressBar(100, '¡Traducción completada!');
-  await new Promise(resolve => setTimeout(resolve, 240));
+  await new Promise(resolve => setTimeout(resolve, 260));
 }
 
 function stopReaderLoadingProgress() {
@@ -1611,7 +1637,9 @@ function stopReaderLoadingProgress() {
   readerCurrentProgress = 0;
   if (el.readerLoadingBarFill) el.readerLoadingBarFill.style.width = '0%';
   if (el.readerLoadingPct) el.readerLoadingPct.textContent = '0%';
-  if (el.readerLoadingStep) el.readerLoadingStep.textContent = 'Iniciando traducción…';
+  if (el.readerLoadingStep) {
+    el.readerLoadingStep.innerHTML = '<span class="reader-step-dot"></span> <span>Iniciando traducción…</span>';
+  }
 }
 
 async function openReaderModal(paperUrl, paperId, paperObj) {
@@ -1783,6 +1811,7 @@ async function handleReaderFileUpload(file) {
         </div>
       `;
       el.readerContent.innerHTML = heroHtml + rawHtml;
+      postProcessReaderContent();
     }
   } catch (err) {
     stopReaderLoadingProgress();
@@ -2291,6 +2320,14 @@ function setupEventListeners() {
         el.readerProgressFill.style.width = `${pct}%`;
       }
     }, { passive: true });
+  }
+  if (el.readerContent) {
+    el.readerContent.addEventListener('click', e => {
+      const img = e.target.closest('img');
+      if (img) {
+        img.classList.toggle('reader-img-expanded');
+      }
+    });
   }
   if (el.btnReaderFontToggle) {
     el.btnReaderFontToggle.addEventListener('click', () => {
