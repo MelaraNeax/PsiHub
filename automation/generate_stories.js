@@ -12,66 +12,139 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const PRIMARY_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
-const FALLBACK_MODEL = 'openai/gpt-oss-120b';
+// Exclusivamente gpt-oss-120b con fallback a gpt-oss-20b (ignora modelos Llama obsoletos o inexistentes)
+const PRIMARY_MODEL = (process.env.GROQ_MODEL && !process.env.GROQ_MODEL.toLowerCase().includes('llama'))
+  ? process.env.GROQ_MODEL
+  : 'openai/gpt-oss-120b';
+const FALLBACK_MODEL = 'openai/gpt-oss-20b';
 
-// 8 Tópicos definidos para Psi-hub
+// 18 Tópicos de psicología y salud mental para Psi-hub
 const TOPICS = [
   {
-    id: 'neurociencia',
-    name: 'Neurociencia',
-    color: '#38bdf8',
-    icon: 'ph-brain',
-    query: 'neuroscience neuroplasticity synaptogenesis brain functional connectivity'
+    id: 'depresion',
+    name: 'Depresión & Ánimo',
+    color: '#6366f1',
+    icon: 'ph-cloud-rain',
+    query: 'major depressive disorder depression mood disorders anhedonia antidepressant psychotherapy efficacy'
+  },
+  {
+    id: 'rumiacion',
+    name: 'Rumiación & Sobrepensar',
+    color: '#ec4899',
+    icon: 'ph-arrows-counter-clockwise',
+    query: 'rumination repetitive negative thinking intrusive thoughts cognitive reappraisal worry metacognition'
+  },
+  {
+    id: 'ansiedad',
+    name: 'Ansiedad & Estrés',
+    color: '#f59e0b',
+    icon: 'ph-lightning',
+    query: 'generalized anxiety disorder panic attack social anxiety physiological stress response autonomic nervous system'
   },
   {
     id: 'tcc',
     name: 'TCC & Conductual',
-    color: '#f59e0b',
-    icon: 'ph-lightning',
-    query: 'cognitive behavioral therapy CBT acceptance commitment therapy behavioral activation'
+    color: '#10b981',
+    icon: 'ph-check-circle',
+    query: 'cognitive behavioral therapy CBT behavioral activation cognitive restructuring exposure therapy clinical efficacy'
   },
   {
-    id: 'clinica',
-    name: 'Clínica & Psicoterapia',
-    color: '#10b981',
-    icon: 'ph-heartbeat',
-    query: 'psychotherapy clinical trial therapeutic alliance psychological intervention efficacy'
+    id: 'trauma',
+    name: 'Trauma & Apego',
+    color: '#f43f5e',
+    icon: 'ph-shield-warning',
+    query: 'psychological trauma PTSD adverse childhood experiences attachment style complex trauma somatic experiencing'
   },
   {
     id: 'psicoanalisis',
     name: 'Psicoanálisis & Dinámica',
-    color: '#ec4899',
+    color: '#a855f7',
     icon: 'ph-spiral',
-    query: 'psychoanalysis psychodynamic attachment theory transference defense mechanisms unconscious'
+    query: 'psychoanalysis psychodynamic therapy defense mechanisms transference unconscious mentalization object relations'
+  },
+  {
+    id: 'emociones',
+    name: 'Regulación Emocional',
+    color: '#38bdf8',
+    icon: 'ph-heartbeat',
+    query: 'emotion regulation emotional reactivity cognitive reappraisal alexithymia affective neuroscience distress tolerance'
+  },
+  {
+    id: 'sueno',
+    name: 'Sueño & Salud Mental',
+    color: '#818cf8',
+    icon: 'ph-moon',
+    query: 'sleep quality insomnia circadian rhythm mental health sleep disturbance depression sleep architecture'
+  },
+  {
+    id: 'mindfulness',
+    name: 'Mindfulness & Aceptación',
+    color: '#14b8a6',
+    icon: 'ph-flower-lotus',
+    query: 'mindfulness based meditation acceptance commitment therapy ACT psychological flexibility self-compassion'
+  },
+  {
+    id: 'autoestima',
+    name: 'Autoestima & Compasión',
+    color: '#fb7185',
+    icon: 'ph-heart',
+    query: 'self-esteem self-compassion self-criticism self-efficacy psychological well-being imposter phenomenon'
+  },
+  {
+    id: 'burnout',
+    name: 'Burnout & Trabajo',
+    color: '#fb923c',
+    icon: 'ph-fire',
+    query: 'occupational burnout job exhaustion work-related stress employee well-being compassion fatigue work engagement'
+  },
+  {
+    id: 'pareja',
+    name: 'Relaciones & Vínculos',
+    color: '#e879f9',
+    icon: 'ph-users-three',
+    query: 'interpersonal relationships couple therapy romantic relationships marital satisfaction communication patterns intimacy'
   },
   {
     id: 'social',
     name: 'Psicología Social',
     color: '#8b5cf6',
-    icon: 'ph-users-three',
-    query: 'social psychology cognitive bias heuristics decision making collective behavior'
+    icon: 'ph-globe',
+    query: 'social psychology cognitive bias heuristics decision making collective behavior prosocial empathy'
   },
   {
-    id: 'neuropsicologia',
-    name: 'Neuropsicología',
-    color: '#06b6d4',
-    icon: 'ph-eye',
-    query: 'neuropsychology executive functions working memory cognitive aging neurodevelopment'
+    id: 'habitos',
+    name: 'Hábitos & Conducta',
+    color: '#84cc16',
+    icon: 'ph-target',
+    query: 'habit formation behavioral change self-control impulse control delayed gratification decision making nudging'
+  },
+  {
+    id: 'duelo',
+    name: 'Duelo & Resiliencia',
+    color: '#94a3b8',
+    icon: 'ph-feather',
+    query: 'prolonged grief disorder bereavement loss adaptation mourning psychological resilience coping strategies'
+  },
+  {
+    id: 'tdah',
+    name: 'TDAH & Atención',
+    color: '#eab308',
+    icon: 'ph-crosshair',
+    query: 'attention deficit hyperactivity disorder ADHD executive functions working memory inhibitory control attentional focus'
   },
   {
     id: 'desarrollo',
-    name: 'Desarrollo & Infantil',
-    color: '#f43f5e',
+    name: 'Desarrollo & Crianza',
+    color: '#2dd4bf',
     icon: 'ph-baby',
-    query: 'developmental psychology child development adolescence attachment parenting autism'
+    query: 'child development developmental psychology parenting styles adolescent mental health emotional development'
   },
   {
-    id: 'organizacional',
-    name: 'Organizacional',
-    color: '#84cc16',
-    icon: 'ph-briefcase',
-    query: 'organizational psychology occupational health leadership burnout employee well-being'
+    id: 'neurociencia',
+    name: 'Neurociencia & Plasticidad',
+    color: '#0ea5e9',
+    icon: 'ph-brain',
+    query: 'neuroplasticity synaptogenesis brain functional connectivity prefrontal cortex hippocampus neurogenesis'
   }
 ];
 
@@ -95,7 +168,7 @@ function reconstructAbstract(invertedIndex) {
 async function fetchTopCandidatePapers(topicQuery) {
   const currentYear = new Date().getFullYear();
   const fromYear = currentYear - 2; // Últimos 2-3 años para garantizar actualidad y rotación continua
-  
+
   // Aleatorizar ordenamiento y página para explorar papers diversos en cada ejecución
   const sortOptions = ['cited_by_count:desc', 'relevance_score:desc', 'publication_date:desc'];
   const randomSort = sortOptions[Math.floor(Math.random() * sortOptions.length)];
@@ -180,12 +253,12 @@ function extractJson(text) {
   const clean = text.replace(/```(?:json)?\s*/gi, '').replace(/```\s*$/g, '').trim();
   try {
     return JSON.parse(clean);
-  } catch {}
+  } catch { }
   const match = clean.match(/\{[\s\S]*\}/);
   if (match) {
     try {
       return JSON.parse(match[0]);
-    } catch {}
+    } catch { }
   }
   return null;
 }
@@ -221,8 +294,8 @@ async function callGroqWithRetry(messages) {
         });
 
         if (response.status === 429) {
-          console.warn(`    ⚠️ Rate limit (429) con ${model}. Esperando 5s...`);
-          await new Promise(r => setTimeout(r, 5000));
+          console.warn(`    ⚠️ Rate limit (429) con ${model}. Esperando 15s para regeneración de cuota...`);
+          await new Promise(r => setTimeout(r, 15000));
           continue;
         }
 
@@ -310,9 +383,9 @@ IMPORTANTE: Debes responder ÚNICAMENTE en formato JSON con la siguiente estruct
   "selectedCandidateIndex": 1,
   "hook": "Pregunta intrigante en español (máximo 12 palabras, ej: '¿El café antes o después de estudiar?')",
   "headline": "Titular del hallazgo en una sola frase potente y veraz en español (máx 15 palabras)",
-  "finding": "Explicación del hallazgo en 2 oraciones claras, fieles al texto y atractivas (máx 50 palabras)",
+  "finding": "Explicación del hallazgo en 2 oraciones claras, fieles al texto y atractivas, resumiendo (máx 50 palabras)",
   "takeaway": "Por qué importa este dato para la práctica clínica o comprensión psicológica (máx 45 palabras)",
-  "tags": ["3 etiquetas conceptuales en español"]
+  "tags": ["3 etiquetas conceptuales en español. Inicial en mayúscula."]
 }`;
 
   const userPrompt = `Tópico: "${topic.name}".
@@ -395,7 +468,7 @@ async function main() {
       const story = await summarizeWithGroq(topic, papers, existingStory);
       stories.push(story);
       console.log(`  ✨ Historia generada: "${story.hook}"`);
-      
+
       // Pausa estratégica de 20s entre tópicos para respetar TPM (Tokens Per Minute) en la cuota gratuita de Groq
       await new Promise(r => setTimeout(r, 20000));
     } catch (err) {

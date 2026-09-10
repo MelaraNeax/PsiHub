@@ -12,63 +12,63 @@ import { translateToSpanish, translateBatch, translateToEnglish } from './src/se
 
 const QUERY_EXPANSION = {
   // Psicopatología (con y sin tildes)
-  'depresion':     'depression depressive disorder psychotherapy',
-  'depresión':     'depression depressive disorder psychotherapy',
-  'ansiedad':      'anxiety anxiety disorder psychotherapy',
-  'estres':        'stress burnout psychological distress',
-  'estrés':        'stress burnout psychological distress',
-  'trauma':        'trauma PTSD post-traumatic stress psychotherapy',
-  'fobia':         'phobia anxiety disorder exposure therapy',
+  'depresion': 'depression depressive disorder psychotherapy',
+  'depresión': 'depression depressive disorder psychotherapy',
+  'ansiedad': 'anxiety anxiety disorder psychotherapy',
+  'estres': 'stress burnout psychological distress',
+  'estrés': 'stress burnout psychological distress',
+  'trauma': 'trauma PTSD post-traumatic stress psychotherapy',
+  'fobia': 'phobia anxiety disorder exposure therapy',
   'esquizofrenia': 'schizophrenia psychosis psychotherapy',
-  'bipolar':       'bipolar disorder mood disorder',
-  'borderline':    'borderline personality disorder BPD DBT',
-  'tlp':           'borderline personality disorder BPD DBT',
-  'toc':           'OCD obsessive compulsive disorder ERP',
-  'trastorno':     'disorder mental health',
-  'duelo':         'grief bereavement loss counseling',
-  'autoestima':    'self-esteem self-concept psychotherapy',
-  'apego':         'attachment theory psychotherapy adult attachment',
-  'pareja':        'couples therapy relationship psychotherapy',
-  'familia':       'family therapy systemic intervention',
-  'infancia':      'child psychotherapy developmental mental health',
-  'adolescencia':  'adolescent psychotherapy youth mental health',
-  'adulto mayor':  'geriatric psychology elderly mental health',
-  'suicidio':      'suicide prevention suicidal ideation crisis',
-  'adicciones':    'addiction substance abuse psychotherapy',
-  'adiccion':      'addiction substance abuse psychotherapy',
-  'adicción':      'addiction substance abuse psychotherapy',
+  'bipolar': 'bipolar disorder mood disorder',
+  'borderline': 'borderline personality disorder BPD DBT',
+  'tlp': 'borderline personality disorder BPD DBT',
+  'toc': 'OCD obsessive compulsive disorder ERP',
+  'trastorno': 'disorder mental health',
+  'duelo': 'grief bereavement loss counseling',
+  'autoestima': 'self-esteem self-concept psychotherapy',
+  'apego': 'attachment theory psychotherapy adult attachment',
+  'pareja': 'couples therapy relationship psychotherapy',
+  'familia': 'family therapy systemic intervention',
+  'infancia': 'child psychotherapy developmental mental health',
+  'adolescencia': 'adolescent psychotherapy youth mental health',
+  'adulto mayor': 'geriatric psychology elderly mental health',
+  'suicidio': 'suicide prevention suicidal ideation crisis',
+  'adicciones': 'addiction substance abuse psychotherapy',
+  'adiccion': 'addiction substance abuse psychotherapy',
+  'adicción': 'addiction substance abuse psychotherapy',
   // Corrientes
   'psicoanalisis': 'psychoanalysis psychoanalytic therapy',
   'psicoanálisis': 'psychoanalysis psychoanalytic therapy',
-  'cognitiva':     'cognitive therapy CBT',
-  'conductual':    'behavioral therapy',
-  'tcc':           'cognitive behavioral therapy CBT',
-  'cbt':           'cognitive behavioral therapy CBT',
-  'humanista':     'humanistic person-centered therapy',
-  'existencial':   'existential therapy logotherapy',
-  'sistémica':    'systemic family therapy',
-  'sistemica':     'systemic family therapy',
-  'gestalt':       'gestalt therapy',
-  'mindfulness':   'mindfulness based intervention meditation',
-  'act':           'acceptance commitment therapy ACT',
-  'dbt':           'dialectical behavior therapy DBT',
-  'emdr':          'EMDR trauma therapy',
-  'tercera ola':   'third wave CBT mindfulness ACT DBT',
+  'cognitiva': 'cognitive therapy CBT',
+  'conductual': 'behavioral therapy',
+  'tcc': 'cognitive behavioral therapy CBT',
+  'cbt': 'cognitive behavioral therapy CBT',
+  'humanista': 'humanistic person-centered therapy',
+  'existencial': 'existential therapy logotherapy',
+  'sistémica': 'systemic family therapy',
+  'sistemica': 'systemic family therapy',
+  'gestalt': 'gestalt therapy',
+  'mindfulness': 'mindfulness based intervention meditation',
+  'act': 'acceptance commitment therapy ACT',
+  'dbt': 'dialectical behavior therapy DBT',
+  'emdr': 'EMDR trauma therapy',
+  'tercera ola': 'third wave CBT mindfulness ACT DBT',
   // Términos clínicos
-  'psicoterapia':  'psychotherapy psychological treatment',
-  'terapia':       'psychotherapy psychological treatment',
-  'alianza':       'therapeutic alliance working alliance',
+  'psicoterapia': 'psychotherapy psychological treatment',
+  'terapia': 'psychotherapy psychological treatment',
+  'alianza': 'therapeutic alliance working alliance',
   'alianza terapeutica': 'therapeutic alliance working alliance',
   'alianza terapéutica': 'therapeutic alliance working alliance',
-  'sesión':       'psychotherapy session clinical process',
-  'sesion':        'psychotherapy session clinical process',
-  'eficacia':      'efficacy effectiveness psychotherapy outcomes',
-  'evidencia':     'evidence randomized controlled trial meta-analysis',
-  'protocolo':     'clinical protocol intervention manual',
-  'caso clinico':  'clinical case study psychotherapy',
-  'caso clínico':  'clinical case study psychotherapy',
-  'diagnóstico':   'diagnosis diagnostic criteria DSM clinical',
-  'diagnostico':   'diagnosis diagnostic criteria DSM clinical',
+  'sesión': 'psychotherapy session clinical process',
+  'sesion': 'psychotherapy session clinical process',
+  'eficacia': 'efficacy effectiveness psychotherapy outcomes',
+  'evidencia': 'evidence randomized controlled trial meta-analysis',
+  'protocolo': 'clinical protocol intervention manual',
+  'caso clinico': 'clinical case study psychotherapy',
+  'caso clínico': 'clinical case study psychotherapy',
+  'diagnóstico': 'diagnosis diagnostic criteria DSM clinical',
+  'diagnostico': 'diagnosis diagnostic criteria DSM clinical',
 };
 
 /**
@@ -101,16 +101,16 @@ async function smartExpandQuery(rawQuery) {
 // ═══════════════════════════════════════════════════
 
 const CORRIENTES = [
-  { id: 'neurociencia',  label: 'Neurociencia',    abbr: 'NEU', icon: 'ph-brain',                 query: 'neuroscience neurobiology cognitive neuroscience brain', color: '#E91E63' },
-  { id: 'tcc',           label: 'TCC / CBT',       abbr: 'TCC', icon: 'ph-grid-four',             query: 'cognitive behavioral therapy CBT',                      color: '#1565C0' },
-  { id: 'tercera_ola',   label: 'Tercera Ola',     abbr: '3°',  icon: 'ph-waves',                 query: 'third wave ACT DBT mindfulness acceptance',             color: '#1DB954' },
-  { id: 'sistemica',     label: 'Sistémica',       abbr: 'SIS', icon: 'ph-graph',                 query: 'systemic family therapy',                               color: '#00838F' },
-  { id: 'psicoanalisis', label: 'Psicoanálisis',   abbr: 'PSA', icon: 'ph-couch',                 query: 'psychoanalysis psychoanalytic therapy',                 color: '#7B2D8B' },
-  { id: 'humanismo',     label: 'Humanismo',       abbr: 'HUM', icon: 'ph-person-arms-spread',    query: 'humanistic person-centered therapy Rogers',             color: '#C17900' },
-  { id: 'gestalt',       label: 'Gestalt',         abbr: 'GES', icon: 'ph-eye',                   query: 'gestalt therapy awareness contact',                     color: '#2E7D32' },
-  { id: 'existencial',   label: 'Existencial',     abbr: 'EXI', icon: 'ph-infinity',              query: 'existential therapy logotherapy meaning Frankl',        color: '#4527A0' },
-  { id: 'fenomenologia', label: 'Fenomenología',   abbr: 'FEN', icon: 'ph-spiral',                query: 'phenomenological existential psychotherapy',             color: '#5B3FE0' },
-  { id: 'segunda_ola',   label: 'Segunda Ola',     abbr: '2°',  icon: 'ph-lightning',             query: 'rational emotive behavior REBT cognitive therapy',      color: '#E65C00' },
+  { id: 'neurociencia', label: 'Neurociencia', abbr: 'NEU', icon: 'ph-brain', query: 'neuroscience neurobiology cognitive neuroscience brain', color: '#E91E63' },
+  { id: 'tcc', label: 'TCC / CBT', abbr: 'TCC', icon: 'ph-grid-four', query: 'cognitive behavioral therapy CBT', color: '#1565C0' },
+  { id: 'tercera_ola', label: 'Tercera Ola', abbr: '3°', icon: 'ph-waves', query: 'third wave ACT DBT mindfulness acceptance', color: '#1DB954' },
+  { id: 'sistemica', label: 'Sistémica', abbr: 'SIS', icon: 'ph-graph', query: 'systemic family therapy', color: '#00838F' },
+  { id: 'psicoanalisis', label: 'Psicoanálisis', abbr: 'PSA', icon: 'ph-couch', query: 'psychoanalysis psychoanalytic therapy', color: '#7B2D8B' },
+  { id: 'humanismo', label: 'Humanismo', abbr: 'HUM', icon: 'ph-person-arms-spread', query: 'humanistic person-centered therapy Rogers', color: '#C17900' },
+  { id: 'gestalt', label: 'Gestalt', abbr: 'GES', icon: 'ph-eye', query: 'gestalt therapy awareness contact', color: '#2E7D32' },
+  { id: 'existencial', label: 'Existencial', abbr: 'EXI', icon: 'ph-infinity', query: 'existential therapy logotherapy meaning Frankl', color: '#4527A0' },
+  { id: 'fenomenologia', label: 'Fenomenología', abbr: 'FEN', icon: 'ph-spiral', query: 'phenomenological existential psychotherapy', color: '#5B3FE0' },
+  { id: 'segunda_ola', label: 'Segunda Ola', abbr: '2°', icon: 'ph-lightning', query: 'rational emotive behavior REBT cognitive therapy', color: '#E65C00' },
 ];
 
 // ═══════════════════════════════════════════════════
@@ -254,8 +254,8 @@ function classifyPaper(paper) {
   const scores = getPaperSubtypeScores(paper);
   const ranked = [
     { tag: 'evidencia', score: scores.evidencia },
-    { tag: 'clinico',   score: scores.clinico },
-    { tag: 'teorico',   score: scores.teorico }
+    { tag: 'clinico', score: scores.clinico },
+    { tag: 'teorico', score: scores.teorico }
   ].sort((a, b) => b.score - a.score);
 
   if (ranked[0].score > 0) {
@@ -282,33 +282,33 @@ function classifyPaper(paper) {
 // ═══════════════════════════════════════════════════
 
 const S = {
-  activePage:      'home',
-  resultsOpen:     false,
-  baseQuery:       '',
-  activeSubtype:   'all',
+  activePage: 'home',
+  resultsOpen: false,
+  baseQuery: '',
+  activeSubtype: 'all',
   activeCorriente: null,
-  sort:            null,
-  page:            1,
-  perPage:         10,
-  total:           0,
-  papers:          [],     // papers actuales en la vista de resultados
-  loading:         false,
-  searchTimeout:   null,
-  bookmarks:       loadData('psyhub_bk', []),
-  profile:         loadData('psyhub_profile', { name: '', role: '' }),
-  searches:        loadData('psyhub_searches_count', 0),
-  currentPaper:    null,
+  sort: null,
+  page: 1,
+  perPage: 10,
+  total: 0,
+  papers: [],     // papers actuales en la vista de resultados
+  loading: false,
+  searchTimeout: null,
+  bookmarks: loadData('psyhub_bk', []),
+  profile: loadData('psyhub_profile', { name: '', role: '' }),
+  searches: loadData('psyhub_searches_count', 0),
+  currentPaper: null,
   deferredInstall: null,
 
   // Historias / Explorar
-  stories:         [],
-  activeStoryIdx:  0,
-  storyAnimFrame:  null,
-  storyStartTime:  0,
-  storyElapsed:    0,
-  storyDuration:   8000,   // 8 segundos por historia
-  storyPaused:     false,
-  watchedStories:  loadData('psyhub_watched_stories', []),
+  stories: [],
+  activeStoryIdx: 0,
+  storyAnimFrame: null,
+  storyStartTime: 0,
+  storyElapsed: 0,
+  storyDuration: 8000,   // 8 segundos por historia
+  storyPaused: false,
+  watchedStories: loadData('psyhub_watched_stories', []),
 };
 
 // ═══════════════════════════════════════════════════
@@ -321,106 +321,135 @@ let el = {};
 function initDOMRefs() {
   el = {
     // Páginas
-    pageHome:    $('page-home'),
+    pageHome: $('page-home'),
     pageExplore: $('page-explore'),
+    pageLibrary: $('page-library'),
+    pageSearch: $('page-search'),
     pageProfile: $('page-profile'),
 
     // Home
-    btnSearchOpen:       $('btn-search-open'),
+    btnSearchOpen: $('btn-search-open'),
     searchInlineWrapper: $('search-inline-wrapper'),
-    searchInput:         $('search-input'),
-    btnClearSearch:      $('btn-clear-search'),
-    corrientesRow:       $('corrientes-row'),
-    recsList:            $('recs-list'),
-    recsSubtitle:        $('recs-subtitle'),
-    btnRefreshRecs:      $('btn-refresh-recs'),
+    searchInput: $('search-input'),
+    btnClearSearch: $('btn-clear-search'),
+    corrientesRow: $('corrientes-row'),
+    recsList: $('recs-list'),
+    recsSubtitle: $('recs-subtitle'),
+    btnRefreshRecs: $('btn-refresh-recs'),
 
     // Explorar
-    exploreBgGlow:         $('explore-bg-glow'),
+    exploreBgGlow: $('explore-bg-glow'),
     exploreStoryContainer: $('explore-story-container'),
-    storyProgressBar:      $('story-progress-bar'),
-    btnStoryPause:         $('btn-story-pause'),
-    btnRefreshStories:     $('btn-refresh-stories'),
-    storyTapPrev:          $('story-tap-prev'),
-    storyTapNext:          $('story-tap-next'),
-    exploreStoryCard:      $('explore-story-card'),
-    exploreJournalCite:    $('explore-journal-cite'),
-    exploreStoryHook:      $('explore-story-hook'),
-    exploreFindingText:    $('explore-finding-text'),
-    exploreTakeawayBox:    $('explore-takeaway-box'),
-    exploreTakeawayText:   $('explore-takeaway-text'),
-    exploreTagsRow:        $('explore-tags-row'),
-    btnStoryRead:          $('btn-story-read'),
-    btnStoryTranslate:     $('btn-story-translate'),
-    btnStorySave:          $('btn-story-save'),
-    btnStorySaveTxt:       $('btn-story-save-txt'),
-    btnStoryShare:         $('btn-story-share'),
+    storyProgressBar: $('story-progress-bar'),
+    btnStoryPause: $('btn-story-pause'),
+    btnRefreshStories: $('btn-refresh-stories'),
+    storyTapPrev: $('story-tap-prev'),
+    storyTapNext: $('story-tap-next'),
+    exploreStoryCard: $('explore-story-card'),
+    exploreJournalCite: $('explore-journal-cite'),
+    exploreStoryHook: $('explore-story-hook'),
+    exploreFindingText: $('explore-finding-text'),
+    exploreTakeawayBox: $('explore-takeaway-box'),
+    exploreTakeawayText: $('explore-takeaway-text'),
+    exploreTagsRow: $('explore-tags-row'),
+    btnStoryRead: $('btn-story-read'),
+    btnStorySave: $('btn-story-save'),
+    btnStorySaveTxt: $('btn-story-save-txt'),
+    btnStoryShare: $('btn-story-share'),
 
     // Nav
     navBtns: document.querySelectorAll('.nav-btn'),
 
-    // Resultados
-    resultsView:       $('results-view'),
-    resultsHeader:     $('results-header'),
-    resultsHeaderLabel:$('results-header-label'),
-    resultsHeaderTitle:$('results-header-title'),
-    btnResultsBack:    $('btn-results-back'),
-    resultsBgGlow:     $('results-bg-glow'),
-    subtabBtns:        document.querySelectorAll('.subtab'),
-    resultsSort:       $('results-sort'),
-    resultsCount:      $('results-count'),
-    resultsLoading:    $('results-loading'),
-    resultsEmpty:      $('results-empty'),
-    resultsError:      $('results-error'),
-    resultsErrorMsg:   $('results-error-msg'),
-    btnResultsRetry:   $('btn-results-retry'),
-    paperList:         $('paper-list'),
-    btnLoadMore:       $('btn-load-more'),
+    // Search Page & Resultados
+    resultsHeader: $('results-header'),
+    resultsHeaderLabel: $('results-header-label'),
+    resultsHeaderTitle: $('results-header-title'),
+    searchPageWrapper: $('search-page-wrapper'),
+    searchPageInput: $('search-page-input'),
+    btnClearSearchPage: $('btn-clear-search-page'),
+    btnDoSearchPage: $('btn-do-search-page'),
+    searchInitial: $('search-initial'),
+    searchInitialChips: $('search-initial-chips'),
+    searchResultsScroll: $('search-results-scroll'),
+    searchSubtabsBar: $('search-subtabs-bar'),
+    searchFilterBar: $('search-filter-bar'),
+    resultsBgGlow: $('results-bg-glow'),
+    subtabBtns: document.querySelectorAll('.subtab'),
+    resultsSort: $('results-sort'),
+    resultsCount: $('results-count'),
+    resultsLoading: $('results-loading'),
+    resultsEmpty: $('results-empty'),
+    resultsError: $('results-error'),
+    resultsErrorMsg: $('results-error-msg'),
+    btnResultsRetry: $('btn-results-retry'),
+    paperList: $('paper-list'),
+    infiniteScrollContainer: $('infinite-scroll-container'),
+    resultsEndNotice: $('results-end-notice'),
+    scrollRetryContainer: $('scroll-retry-container'),
+    btnLoadMoreRetry: $('btn-load-more-retry'),
+    btnLoadMore: $('btn-load-more'),
 
     // Modal
-    modalOverlay:  $('modal-overlay'),
-    modalSheet:    $('modal-sheet'),
-    modalBody:     $('modal-body'),
+    modalOverlay: $('modal-overlay'),
+    modalSheet: $('modal-sheet'),
+    modalBody: $('modal-body'),
     btnModalClose: $('btn-modal-close'),
-    btnModalBk:    $('btn-modal-bk'),
+    btnModalBk: $('btn-modal-bk'),
+
+    // Biblioteca
+    librarySavedCard: $('library-saved-card'),
+    librarySavedHeader: $('library-saved-header'),
+    librarySavedContainer: $('library-saved-container'),
+    iconToggleSaved: $('icon-toggle-saved'),
+    libraryFileUpload: $('library-file-upload'),
 
     // Perfil
-    profileAvatar:        $('profile-avatar'),
-    profileAvatarImg:     $('profile-avatar-img'),
-    avatarInitials:       $('avatar-initials'),
-    profileName:          $('profile-name'),
-    profileRole:          $('profile-role'),
-    displayProfileName:   $('display-profile-name'),
-    displayProfileRole:   $('display-profile-role'),
-    displayRoleText:      $('display-role-text'),
-    authNotConnected:     $('auth-not-connected'),
-    authConnected:        $('auth-connected'),
-    btnGoogleLogin:       $('btn-google-login'),
-    btnGoogleLogout:      $('btn-google-logout'),
-    connectedUserEmail:   $('connected-user-email'),
-    googleModalOverlay:   $('google-modal-overlay'),
-    googleModalSheet:     $('google-modal-sheet'),
-    btnCloseGoogleModal:  $('btn-close-google-modal'),
-    googleLoginForm:      $('google-login-form'),
-    googleInputEmail:     $('google-input-email'),
-    googleInputName:      $('google-input-name'),
-    statSaved:            $('stat-saved'),
-    sectionSaved:         $('section-saved'),
-    savedList:            $('saved-list'),
-    profileEmptySaved:    $('profile-empty-saved'),
-    btnClearAllSaved:     $('btn-clear-all-saved'),
+    profileAvatar: $('profile-avatar'),
+    profileAvatarImg: $('profile-avatar-img'),
+    avatarInitials: $('avatar-initials'),
+    profileName: $('profile-name'),
+    profileRole: $('profile-role'),
+    displayProfileName: $('display-profile-name'),
+    displayProfileRole: $('display-profile-role'),
+    displayRoleText: $('display-role-text'),
+    authNotConnected: $('auth-not-connected'),
+    authConnected: $('auth-connected'),
+    btnGoogleLogin: $('btn-google-login'),
+    btnGoogleLogout: $('btn-google-logout'),
+    connectedUserEmail: $('connected-user-email'),
+    googleModalOverlay: $('google-modal-overlay'),
+    googleModalSheet: $('google-modal-sheet'),
+    btnCloseGoogleModal: $('btn-close-google-modal'),
+    googleLoginForm: $('google-login-form'),
+    googleInputEmail: $('google-input-email'),
+    psihubOptionsOverlay: $('psihub-options-overlay'),
+    psihubOptionsSheet: $('psihub-options-sheet'),
+    btnClosePsihubOptions: $('btn-close-psihub-options'),
+    btnPsihubReadEs: $('btn-psihub-read-es'),
+    btnPsihubSummarize: $('btn-psihub-summarize'),
+    googleInputName: $('google-input-name'),
+    statSaved: $('stat-saved'),
+    sectionSaved: $('section-saved'),
+    savedList: $('saved-list'),
+    profileEmptySaved: $('profile-empty-saved'),
+    btnClearAllSaved: $('btn-clear-all-saved'),
 
     // Toast
     toast: $('toast'),
 
     // Modo Lectura
     readerOverlay: $('reader-overlay'),
-    readerModal:   $('reader-modal'),
-    btnReaderClose:$('btn-reader-close'),
+    readerModal: $('reader-modal'),
+    btnReaderClose: $('btn-reader-close'),
     readerLoading: $('reader-loading'),
-    readerError:   $('reader-error'),
-    readerErrorMsg:$('reader-error-msg'),
+    readerError: $('reader-error'),
+    readerErrorMsg: $('reader-error-msg'),
     readerContent: $('reader-content'),
+    readerFileUpload: $('reader-file-upload'),
+    readerScroll: $('reader-scroll'),
+    readerProgressFill: $('reader-progress-fill'),
+    btnReaderFontToggle: $('btn-reader-font-toggle'),
+    btnReaderCopyText: $('btn-reader-copy-text'),
   };
 }
 
@@ -446,12 +475,12 @@ function registerSW() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(regs => {
       regs.forEach(r => r.unregister());
-    }).catch(() => {});
+    }).catch(() => { });
   }
   if ('caches' in window) {
     caches.keys().then(keys => {
       keys.forEach(k => caches.delete(k));
-    }).catch(() => {});
+    }).catch(() => { });
   }
 }
 
@@ -473,7 +502,6 @@ function resetInlineSearch() {
 }
 
 function navigateTo(page) {
-  closeResults(false);
   resetInlineSearch();
 
   // Pausar reproducción si sale de Explorar
@@ -483,11 +511,11 @@ function navigateTo(page) {
   }
 
   S.activePage = page;
-  const pages = { home: el.pageHome, explore: el.pageExplore, profile: el.pageProfile };
+  const pages = { home: el.pageHome, explore: el.pageExplore, library: el.pageLibrary, search: el.pageSearch, profile: el.pageProfile };
   Object.values(pages).forEach(p => p.classList.add('hidden'));
   pages[page].classList.remove('hidden');
   el.navBtns.forEach(b => b.classList.toggle('active', b.dataset.page === page));
-  if (page === 'profile') refreshProfile();
+  if (page === 'profile' || page === 'library') refreshProfile();
   if (page === 'explore') {
     if (!S.stories || S.stories.length === 0) {
       loadStories();
@@ -534,16 +562,34 @@ function renderCorrientes() {
 }
 
 function openCorriente(corriente) {
+  // Cancelar inmediatamente cualquier consulta previa en curso
+  if (currentFetchController) {
+    try { currentFetchController.abort(); } catch { }
+  }
+
   S.activeCorriente = corriente;
-  S.baseQuery       = corriente.query;
-  S.activeSubtype   = 'all';
-  S.sort            = 'cited_by_count:desc';
-  S.page            = 1;
-  S.papers          = [];
+  S.baseQuery = corriente.query;
+  S.activeSubtype = 'all';
+  S.sort = 'cited_by_count:desc';
+  S.page = 1;
+  S.papers = [];
+  S.hasMore = false;
+
+  // Limpiar inmediatamente el DOM anterior para que no queden restos
+  if (el.paperList) el.paperList.innerHTML = '';
+  if (el.resultsCount) el.resultsCount.textContent = '';
+  if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+  if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+  if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+  if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  if (el.searchPageInput) {
+    el.searchPageInput.value = '';
+    if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
+  }
 
   el.resultsHeader.style.background = ''; // Remover fondo para que se vea solo la nebula
-  el.resultsHeaderLabel.textContent  = 'Corriente psicoterapéutica';
-  el.resultsHeaderTitle.textContent  = corriente.label;
+  el.resultsHeaderLabel.textContent = 'Corriente psicoterapéutica';
+  el.resultsHeaderTitle.textContent = corriente.label;
   if (el.resultsSort) el.resultsSort.value = 'cited_by_count:desc';
 
   el.subtabBtns.forEach(b => b.classList.toggle('active', b.dataset.type === 'all'));
@@ -558,26 +604,48 @@ function openCorriente(corriente) {
 // ═══════════════════════════════════════════════════
 
 async function doSearch(query) {
-  if (!query.trim()) return;
+  if (!query || !query.trim()) {
+    resetSearchToInitial();
+    return;
+  }
+
+  // Cancelar inmediatamente cualquier consulta previa en curso
+  if (currentFetchController) {
+    try { currentFetchController.abort(); } catch { }
+  }
 
   // Guardar la query ORIGINAL para mostrar al usuario
   const displayQuery = query.trim();
 
   S.activeCorriente = null;
-  S.activeSubtype   = 'all';
-  S.sort            = null; // Relevancia por defecto en búsquedas
-  S.page            = 1;
-  S.papers          = [];
+  S.activeSubtype = 'all';
+  S.sort = null; // Relevancia por defecto en búsquedas
+  S.page = 1;
+  S.papers = [];
+  S.hasMore = false;
   S.searches++;
   saveData('psyhub_searches_count', S.searches);
-  
+
+  // Limpiar inmediatamente el DOM anterior para que no queden restos
+  if (el.paperList) el.paperList.innerHTML = '';
+  if (el.resultsCount) el.resultsCount.textContent = '';
+  if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+  if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+  if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+  if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+
   if (el.resultsSort) el.resultsSort.value = '';
 
   // UI: mostrar la query original del usuario
   el.resultsHeader.style.background = '';
-  el.resultsHeaderLabel.textContent  = 'Búsqueda';
-  el.resultsHeaderTitle.textContent  = `"${displayQuery}"`;
+  el.resultsHeaderLabel.textContent = 'Búsqueda';
+  el.resultsHeaderTitle.textContent = `"${displayQuery}"`;
   el.subtabBtns.forEach(b => b.classList.toggle('active', b.dataset.type === 'all'));
+
+  if (el.searchPageInput) {
+    el.searchPageInput.value = displayQuery;
+    if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'flex';
+  }
 
   updateGlow();
   showResults();
@@ -585,60 +653,114 @@ async function doSearch(query) {
 
   // Traducir/expandir la query a inglés sin mostrarla al usuario
   const englishQuery = await smartExpandQuery(displayQuery);
+
+  // Si el usuario ya cambió de búsqueda mientras traducía, abortar
+  if (el.searchPageInput && el.searchPageInput.value.trim() !== displayQuery) {
+    return;
+  }
+
   S.baseQuery = englishQuery; // OpenAlex recibe la versión en inglés
 
   await doFetch();
 }
 
 // ═══════════════════════════════════════════════════
-// RESULTADOS
+// RESULTADOS & ESTADO INICIAL
 // ═══════════════════════════════════════════════════
 
+function resetSearchToInitial() {
+  if (currentFetchController) {
+    try { currentFetchController.abort(); } catch { }
+    currentFetchController = null;
+  }
+  S.loading = false;
+  S.baseQuery = '';
+  S.papers = [];
+  S.hasMore = false;
+  S.page = 1;
+  S.activeCorriente = null;
+  S.activeSubtype = 'all';
+
+  if (el.paperList) el.paperList.innerHTML = '';
+  if (el.searchInitial) el.searchInitial.style.display = 'flex';
+  if (el.resultsHeader) el.resultsHeader.style.display = 'none';
+  if (el.searchSubtabsBar) el.searchSubtabsBar.style.display = 'none';
+  if (el.searchFilterBar) el.searchFilterBar.style.display = 'none';
+  if (el.resultsLoading) el.resultsLoading.style.display = 'none';
+  if (el.resultsEmpty) el.resultsEmpty.style.display = 'none';
+  if (el.resultsError) el.resultsError.style.display = 'none';
+  if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+  if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+  if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
+  if (el.resultsCount) el.resultsCount.textContent = '';
+  if (el.searchPageInput && !el.searchPageInput.value) {
+    if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
+  }
+}
+
 function showResults() {
-  el.resultsView.classList.remove('hidden');
-  el.resultsView.offsetHeight; // reflow
-  el.resultsView.classList.add('visible');
+  if (S.activePage !== 'search') {
+    navigateTo('search');
+  }
   S.resultsOpen = true;
+  
+  if (el.searchInitial) el.searchInitial.style.display = 'none';
+  if (el.resultsHeader) el.resultsHeader.style.display = 'flex';
+  if (el.searchSubtabsBar) el.searchSubtabsBar.style.display = 'flex';
+  if (el.searchFilterBar) el.searchFilterBar.style.display = 'flex';
 }
 
 function closeResults(animated = true) {
-  if (!S.resultsOpen) return;
-  if (animated) {
-    el.resultsView.classList.remove('visible');
-    setTimeout(() => el.resultsView.classList.add('hidden'), 300);
-  } else {
-    el.resultsView.classList.remove('visible');
-    el.resultsView.classList.add('hidden');
-  }
+  if (!S.resultsOpen && !S.baseQuery) return;
   S.resultsOpen = false;
-  S.activeSubtype = 'all';
-  S.papers = [];
-  el.paperList.innerHTML = '';
-  el.btnLoadMore.style.display = 'none';
+  resetSearchToInitial();
+  if (el.searchPageInput) el.searchPageInput.value = '';
   resetInlineSearch();
 }
 
 let currentFetchController = null;
 
 async function doFetch() {
+  if (!S.baseQuery || !S.baseQuery.trim()) {
+    resetSearchToInitial();
+    return;
+  }
+
   if (currentFetchController) {
-    try { currentFetchController.abort(); } catch {}
+    try { currentFetchController.abort(); } catch { }
   }
   currentFetchController = new AbortController();
   const signal = currentFetchController.signal;
 
   S.loading = true;
-  showResultsState('loading');
+  const isFirstPage = S.page === 1;
+
+  if (isFirstPage) {
+    showResultsState('loading');
+    if (el.paperList) el.paperList.innerHTML = '';
+    if (el.resultsCount) el.resultsCount.textContent = '';
+    if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+    if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+    if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+    if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  } else {
+    // Al scrollear hacia abajo, mostramos el círculo de carga elegante al pie
+    if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'flex';
+    if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  }
 
   try {
     const { results, meta } = await fetchPapers({
-      query:   S.baseQuery,
+      query: S.baseQuery,
       subtype: S.activeSubtype,
-      sort:    S.sort || null,
+      sort: S.sort || null,
       perPage: S.perPage,
-      page:    S.page,
+      page: S.page,
       signal
     });
+
+    if (signal.aborted) return;
 
     let finalResults = results;
     if (S.activeSubtype && S.activeSubtype !== 'all') {
@@ -649,44 +771,64 @@ async function doFetch() {
       finalResults = filtered.length > 0 ? filtered : results;
     }
 
-    S.total  = meta.count;
-    S.papers = S.page === 1 ? finalResults : [...S.papers, ...finalResults];
-    
-    if (el.resultsCount) {
+    if (signal.aborted) return;
+
+    S.total = meta.count;
+    S.papers = isFirstPage ? finalResults : [...S.papers, ...finalResults];
+
+    if (el.resultsCount && !signal.aborted) {
       el.resultsCount.textContent = `${S.total.toLocaleString('es')} resultados`;
     }
 
     if (S.papers.length === 0) {
-      showResultsState('empty');
-      S.loading = false;
+      if (!signal.aborted) {
+        showResultsState('empty');
+        S.loading = false;
+        S.hasMore = false;
+        if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+      }
       return;
     }
 
     // Traducir títulos y snippets en lote antes de mostrar
     const titles = finalResults.map(p => p.title);
     const abstracts = finalResults.map(p => p.abstract ? p.abstract.slice(0, 150) : '');
-    
+
     const [translatedTitles, translatedAbstracts] = await Promise.all([
       translateBatch(titles),
       translateBatch(abstracts)
     ]);
-    
-    finalResults.forEach((p, i) => { 
-      p.titleEs = translatedTitles[i]; 
+
+    if (signal.aborted) return;
+
+    finalResults.forEach((p, i) => {
+      p.titleEs = translatedTitles[i];
       if (abstracts[i]) p.abstractEs = translatedAbstracts[i] + '...';
     });
 
-    renderPapers(finalResults, S.page > 1);
+    if (signal.aborted) return;
+
+    renderPapers(finalResults, !isFirstPage);
     showResultsState('results');
 
     const hasMore = S.papers.length < S.total && results.length === S.perPage;
-    el.btnLoadMore.style.display = hasMore ? 'flex' : 'none';
+    S.hasMore = hasMore;
+
+    if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+    if (el.resultsEndNotice) {
+      el.resultsEndNotice.style.display = (!hasMore && S.papers.length >= 10) ? 'flex' : 'none';
+    }
 
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError' || signal.aborted) return;
     console.error('[PsiHub fetch]', err);
-    el.resultsErrorMsg.textContent = err.message || 'Error de conexión con OpenAlex.';
-    showResultsState('error');
+    if (isFirstPage) {
+      el.resultsErrorMsg.textContent = err.message || 'Error de conexión con OpenAlex.';
+      showResultsState('error');
+    } else {
+      if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+      if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'flex';
+    }
   } finally {
     if (!signal.aborted) {
       S.loading = false;
@@ -695,29 +837,149 @@ async function doFetch() {
 }
 
 async function loadMore() {
+  if (S.loading || !S.hasMore || !S.baseQuery) return;
   S.page++;
-  el.btnLoadMore.disabled = true;
-  el.btnLoadMore.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0;"></div>';
   await doFetch();
-  el.btnLoadMore.disabled = false;
-  el.btnLoadMore.innerHTML = '<i class="ph-bold ph-arrow-circle-down"></i> Cargar más';
 }
 
 function showResultsState(state) {
   el.resultsLoading.style.display = state === 'loading' ? 'flex' : 'none';
-  el.resultsEmpty.style.display   = state === 'empty'   ? 'flex' : 'none';
-  el.resultsError.style.display   = state === 'error'   ? 'flex' : 'none';
+  el.resultsEmpty.style.display = state === 'empty' ? 'flex' : 'none';
+  el.resultsError.style.display = state === 'error' ? 'flex' : 'none';
+}
+
+function initInfiniteScroll() {
+  const scrollContainer = el.searchResultsScroll;
+  if (!scrollContainer) return;
+
+  scrollContainer.addEventListener('scroll', () => {
+    if (S.loading || !S.hasMore || !S.baseQuery) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+    if (scrollTop + clientHeight >= scrollHeight - 280) {
+      loadMore();
+    }
+  }, { passive: true });
+
+  if ('IntersectionObserver' in window && el.infiniteScrollContainer) {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && !S.loading && S.hasMore && S.baseQuery) {
+        loadMore();
+      }
+    }, {
+      root: scrollContainer,
+      rootMargin: '250px 0px',
+      threshold: 0.05
+    });
+    observer.observe(el.infiniteScrollContainer);
+  }
+
+  if (el.btnLoadMoreRetry) {
+    el.btnLoadMoreRetry.addEventListener('click', (e) => {
+      e.stopPropagation();
+      loadMore();
+    });
+  }
+
+  if (el.btnLoadMore) {
+    el.btnLoadMore.addEventListener('click', loadMore);
+  }
 }
 
 // ═══════════════════════════════════════════════════
-// CARDS DE RESULTADOS
+// CARDS DE RESULTADOS & VERIFICACIÓN PDF
 // ═══════════════════════════════════════════════════
+
+const HF_SPACE_URL = 'https://mi-servidor-api-42204102300.southamerica-east1.run.app';
+const checkedPdfUrls = new Map(); // url -> { isAutomatic: boolean, status: string, pending: boolean }
+const paperTranslations = new Map(); // id/url -> markdown
+
+function updatePaperAutomaticBadges(paper) {
+  if (!paper || !paper.isAutomatic) return;
+
+  // 1. Actualizar badges en las tarjetas del DOM
+  const badges = document.querySelectorAll('.auto-badge-container');
+  badges.forEach(b => {
+    if (b.dataset.id === paper.id) {
+      b.innerHTML = `<span class="auto-badge" style="font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:3px;"><i class="ph-bold ph-lightning"></i>Automático</span>`;
+    }
+  });
+
+  // 2. Si el modal abierto corresponde a este paper, actualizar subtítulo y badge en opciones
+  if (S.currentPaper && S.currentPaper.id === paper.id) {
+    const sub = document.getElementById('modal-psihub-btn-sub');
+    if (sub) {
+      sub.textContent = '⚡ Traducción automática';
+    }
+    const badgeEs = document.getElementById('btn-psihub-read-es-badge');
+    if (badgeEs) {
+      badgeEs.style.display = 'inline-block';
+    }
+  }
+}
+
+async function checkPaperPdf(paper) {
+  if (!paper) return;
+  const url = paper.pdfUrl || paper.oaUrl;
+  if (!url) {
+    paper.pdfChecked = true;
+    paper.isAutomatic = false;
+    return;
+  }
+
+  // Si ya fue chequeado en este objeto
+  if (paper.pdfChecked && paper.isAutomatic !== undefined) {
+    if (paper.isAutomatic) updatePaperAutomaticBadges(paper);
+    return;
+  }
+
+  // Si la URL ya fue consultada previamente en la sesión
+  if (checkedPdfUrls.has(url)) {
+    const cached = checkedPdfUrls.get(url);
+    if (!cached.pending) {
+      paper.isAutomatic = cached.isAutomatic;
+      paper.pdfChecked = true;
+      if (paper.isAutomatic) updatePaperAutomaticBadges(paper);
+    }
+    return;
+  }
+
+  // Marcar como pendiente para no enviar múltiples peticiones simultáneas de la misma URL
+  checkedPdfUrls.set(url, { isAutomatic: false, status: 'checking', pending: true });
+  paper.pdfChecked = true;
+
+  try {
+    const res = await fetch(`${HF_SPACE_URL}/api/check-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    const isAuto = (data.status === 'ok');
+    checkedPdfUrls.set(url, { isAutomatic: isAuto, status: data.status, pending: false });
+    paper.isAutomatic = isAuto;
+    if (isAuto) {
+      updatePaperAutomaticBadges(paper);
+    }
+  } catch (err) {
+    checkedPdfUrls.set(url, { isAutomatic: false, status: 'error', pending: false });
+    paper.isAutomatic = false;
+  }
+}
+
+function validatePdfUrls(papers) {
+  if (!Array.isArray(papers)) return;
+  // Solo verificar papers que no hayan sido revisados antes
+  const papersToCheck = papers.filter(p => !p.pdfChecked && (p.pdfUrl || p.oaUrl));
+  papersToCheck.forEach(p => checkPaperPdf(p));
+}
 
 function renderPapers(papers, append) {
   const frag = document.createDocumentFragment();
   papers.forEach(p => frag.appendChild(buildCard(p)));
   if (!append) el.paperList.innerHTML = '';
   el.paperList.appendChild(frag);
+  
+  validatePdfUrls(papers);
 }
 
 function buildCard(paper, onBookmarkChange) {
@@ -726,13 +988,13 @@ function buildCard(paper, onBookmarkChange) {
 
   const isCorrienteView = Boolean(S.resultsOpen && S.activeCorriente && el.resultsHeaderLabel?.textContent?.toLowerCase().includes('corriente'));
   const corriente = isCorrienteView ? S.activeCorriente : null;
-  const isBk        = isBookmarked(paper.id);
+  const isBk = isBookmarked(paper.id);
   const displayTitle = paper.titleEs || paper.title;
-  const snippet      = paper.abstractEs || (paper.abstract ? paper.abstract.slice(0, 150) + '...' : '');
+  const snippet = paper.abstractEs || (paper.abstract ? paper.abstract.slice(0, 150) + '...' : '');
   const firstAuthor = Array.isArray(paper.authors) ? (paper.authors[0] || '') : (paper.authors || '');
   const moreAuthors = Array.isArray(paper.authors) && paper.authors.length > 1 ? ` +${paper.authors.length - 1}` : '';
   const isFilterActiveInResults = Boolean(S.resultsOpen && S.activeSubtype && S.activeSubtype !== 'all');
-  const tags        = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
+  const tags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
 
   li.innerHTML = `
     <div class="paper-card-body" style="padding-left: 0;">
@@ -748,6 +1010,7 @@ function buildCard(paper, onBookmarkChange) {
         ${tags.map(tagBadge).join('')}
         ${paper.year ? `<span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
         <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-quotes"></i>${(paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? 0).toLocaleString('es')}</span>
+        ${paper.isAutomatic ? `<span class="auto-badge" style="margin-left:auto;font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:3px;"><i class="ph-bold ph-lightning"></i>Automático</span>` : `<div class="auto-badge-container" data-id="${esc(paper.id)}" data-url="${esc(paper.pdfUrl || paper.oaUrl || '')}" style="margin-left:auto;"></div>`}
       </div>
     </div>
   `;
@@ -771,9 +1034,9 @@ function buildCard(paper, onBookmarkChange) {
 
 function tagBadge(t) {
   const configs = {
-    clinico:   { label: 'Clínico',   icon: 'ph-stethoscope',   cls: 'tag-clinico' },
+    clinico: { label: 'Clínico', icon: 'ph-stethoscope', cls: 'tag-clinico' },
     evidencia: { label: 'Evidencia', icon: 'ph-chart-line-up', cls: 'tag-evidencia' },
-    teorico:   { label: 'Teórico',   icon: 'ph-brain',         cls: 'tag-teorico' }
+    teorico: { label: 'Teórico', icon: 'ph-brain', cls: 'tag-teorico' }
   };
   const c = configs[t] || { label: t, icon: 'ph-tag', cls: 'tag-teorico' };
   return `<span class="tag-pill ${c.cls}"><i class="ph-bold ${c.icon}"></i><span>${c.label}</span></span>`;
@@ -862,7 +1125,7 @@ async function loadRecommendations() {
     }
 
     // Traducir títulos y snippets en lote
-    const titles   = results.map(p => p.title);
+    const titles = results.map(p => p.title);
     const snippets = results.map(p => p.abstract ? p.abstract.slice(0, 150) : '');
 
     const [translatedTitles, translatedSnippets] = await Promise.all([
@@ -871,7 +1134,7 @@ async function loadRecommendations() {
     ]);
 
     results.forEach((p, i) => {
-      p.titleEs   = translatedTitles[i];
+      p.titleEs = translatedTitles[i];
       p.abstractEs = translatedSnippets[i] + '...';
     });
 
@@ -929,6 +1192,28 @@ async function openModal(paper, corriente) {
     el.modalSheet.classList.remove('closing');
     document.body.style.overflow = 'hidden';
 
+    // Verificar soporte de descarga directa una sola vez o actualizar badge si ya está confirmado
+    if (!paper.pdfChecked && (paper.pdfUrl || paper.oaUrl)) {
+      checkPaperPdf(paper);
+    } else if (paper.isAutomatic) {
+      updatePaperAutomaticBadges(paper);
+    }
+
+    // Traducir título al español con Google Translate si todavía está en inglés
+    if (!paper.titleEs && paper.title) {
+      translateToSpanish(paper.title).then(transTitle => {
+        if (transTitle && transTitle.trim() && S.currentPaper?.id === paper.id) {
+          paper.titleEs = transTitle;
+          const titleEl = el.modalBody.querySelector('.modal-title');
+          if (titleEl) {
+            titleEl.textContent = transTitle;
+          }
+        }
+      }).catch(err => {
+        console.warn('[openModal] No se pudo traducir título:', err);
+      });
+    }
+
     // Si el paper no tiene abstract o es un resumen sintético previo, buscar el abstract original en OpenAlex
     const isAiSummary = paper.abstract && paper.abstract.includes('\n\n') && (paper.abstract.startsWith('¿') || paper.abstract.includes('?'));
     if ((!paper.abstract || isAiSummary) && (paper.id || paper.doi)) {
@@ -936,11 +1221,21 @@ async function openModal(paper, corriente) {
       if (abstractEl) abstractEl.textContent = 'Cargando abstract original desde OpenAlex…';
       try {
         const lookupId = (paper.doi ? (paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`) : paper.id);
-        const full = await fetchWorkById(lookupId);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const full = await fetchWorkById(lookupId, controller.signal).finally(() => clearTimeout(timeoutId));
+
         if (full && S.currentPaper?.id === paper.id) {
           if (full.abstract) {
             paper.abstract = full.abstract;
             paper.abstractEs = null;
+          } else {
+            const absEl = document.getElementById('modal-abstract-text');
+            if (absEl && S.currentPaper?.id === paper.id) {
+              absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">OpenAlex no incluyó el abstract original para este artículo.</span>';
+              const langEl = document.getElementById('modal-abstract-lang');
+              if (langEl) langEl.style.display = 'none';
+            }
           }
           if (full.authors?.length && (!paper.authors || !paper.authors.length || paper.authors.length <= 1)) {
             paper.authors = full.authors;
@@ -949,17 +1244,37 @@ async function openModal(paper, corriente) {
           if (full.journal) paper.journal = full.journal;
           if (full.firstInstitution) paper.firstInstitution = full.firstInstitution;
           if (full.oaUrl && !paper.oaUrl) paper.oaUrl = full.oaUrl;
+          if (full.pdfUrl && !paper.pdfUrl) paper.pdfUrl = full.pdfUrl;
           if (full.doi && !paper.doi) paper.doi = full.doi;
+          if (!paper.pdfChecked && (paper.pdfUrl || paper.oaUrl)) {
+            checkPaperPdf(paper);
+          }
           if (full.type) paper.type = full.type;
           if (full.mesh?.length) paper.mesh = full.mesh;
           if (typeof full.citations === 'number' && full.citations > 0) paper.citations = full.citations;
 
-          // Re-renderizar modal con la información completa
-          const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
-          el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, updatedTags, displayTitle, paper.abstractEs, false);
+          if (full.abstract) {
+            // Re-renderizar modal con la información completa
+            const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
+            const currentTitle = paper.titleEs || paper.title || 'Sin título';
+            el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, updatedTags, currentTitle, paper.abstractEs, false);
+          }
+        } else if (!full && S.currentPaper?.id === paper.id) {
+          const absEl = document.getElementById('modal-abstract-text');
+          if (absEl) {
+            absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">OpenAlex no incluyó el abstract original para este artículo.</span>';
+            const langEl = document.getElementById('modal-abstract-lang');
+            if (langEl) langEl.style.display = 'none';
+          }
         }
       } catch (errOpenAlex) {
         console.warn('[openModal] No se pudo obtener detalle de OpenAlex:', errOpenAlex);
+        const absEl = document.getElementById('modal-abstract-text');
+        if (absEl && S.currentPaper?.id === paper.id) {
+          absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">OpenAlex no incluyó el abstract original para este artículo.</span>';
+          const langEl = document.getElementById('modal-abstract-lang');
+          if (langEl) langEl.style.display = 'none';
+        }
       }
     }
 
@@ -968,7 +1283,7 @@ async function openModal(paper, corriente) {
       try {
         const langEl = document.getElementById('modal-abstract-lang');
         if (langEl) {
-          langEl.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;border-radius:50%;margin:0;animation:spin 0.7s linear infinite;"></div> Traduciendo al español…';
+          langEl.innerHTML = '<span class="modal-lang-badge translating"><div class="spinner modal-spinner-mini"></div> Traduciendo…</span>';
         }
         const abstractEs = await translateToSpanish(paper.abstract);
         paper.abstractEs = abstractEs;
@@ -976,12 +1291,12 @@ async function openModal(paper, corriente) {
         const langElUpdated = document.getElementById('modal-abstract-lang');
         if (abstractEl && S.currentPaper?.id === paper.id) {
           abstractEl.textContent = abstractEs;
-          if (langElUpdated) langElUpdated.innerHTML = '<i class="ph-bold ph-translate" style="font-size:12px;"></i> Traducción automática al español';
+          if (langElUpdated) langElUpdated.innerHTML = '<span class="modal-lang-badge"><i class="ph-bold ph-translate"></i> Traducido al español</span>';
         }
       } catch (errTrans) {
         console.warn('[openModal] Falló traducción:', errTrans);
         const langEl = document.getElementById('modal-abstract-lang');
-        if (langEl) langEl.innerHTML = '<i class="ph-bold ph-translate" style="font-size:12px;"></i> Original en inglés';
+        if (langEl) langEl.innerHTML = '<span class="modal-lang-badge en"><i class="ph-bold ph-translate"></i> Original en inglés</span>';
       }
     }
   } catch (err) {
@@ -1052,68 +1367,116 @@ function formatAPAReference(paper) {
 
 function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, translating) {
   const isCorriente = Boolean(corriente && corriente.label);
-  const tagColor = isCorriente ? corriente.color : 'var(--txt-3)';
-  const tagLabel_ = isCorriente ? corriente.label : 'Artículo';
-  const tagStyle = isCorriente
-    ? `background:${tagColor}22; color:${tagColor}; border:1px solid ${tagColor}55;`
-    : `background:rgba(255,255,255,0.06); color:var(--txt-3); border:1px solid rgba(255,255,255,0.1);`;
+  let tagsHtml = '';
+  if (isCorriente) {
+    const tagColor = corriente.color || 'var(--txt-3)';
+    const tagStyle = `background:${tagColor}1c; color:${tagColor}; border:1px solid ${tagColor}44;`;
+    tagsHtml += `<span class="modal-tag" style="${tagStyle}"><i class="ph-bold ph-bookmarks" style="font-size:11px; margin-right:3px;"></i>${esc(corriente.label)}</span>`;
+  }
+  if (tags && tags.length) {
+    const validTag = tags.find(t => t && !t.toLowerCase().includes('articulo') && !t.toLowerCase().includes('artículo'));
+    if (validTag && (!isCorriente || validTag !== corriente.label)) {
+      tagsHtml += tagBadge(validTag);
+    }
+  }
 
-  const abstractContent = paper.abstract || 'Abstract no disponible en los metadatos de OpenAlex.';
+  const abstractContent = paper.abstract || 'OpenAlex no incluyó el abstract original para este artículo.';
   const authors = Array.isArray(paper.authors) ? paper.authors : [];
+  let authorsStr = '';
+  if (authors.length > 0) {
+    authorsStr = authors.length > 2 ? `${authors.slice(0, 2).join(', ')} et al.` : authors.join(', ');
+  }
+  const sourceStr = paper.journal || paper.firstInstitution || '';
+
   const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
   const citations = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
-  const topics = Array.isArray(paper.topics) ? paper.topics : [];
+
+  // Limitar a máximo 3 palabras clave y acortar strings largos
+  const rawTopics = Array.isArray(paper.topics) ? paper.topics : [];
+  const shortTopics = rawTopics.slice(0, 3).map(t => {
+    const s = String(t).trim();
+    return s.length > 22 ? s.slice(0, 21) + '…' : s;
+  });
 
   return `
-    <div class="modal-tags">
-      <span class="modal-tag" style="${tagStyle}">${esc(tagLabel_)}</span>
-      ${(tags || []).map(tagBadge).join('')}
-      ${paper.year ? `<span class="modal-tag" style="background:rgba(255,255,255,0.06); color:var(--txt-3); border:1px solid rgba(255,255,255,0.08);">${paper.year}</span>` : ''}
-    </div>
+    ${tagsHtml ? `<div class="modal-tags">${tagsHtml}</div>` : ''}
 
     <h2 class="modal-title">${esc(displayTitle || 'Sin título')}</h2>
 
-    <p class="modal-authors">${esc(authors.join(', ') || 'Autores no disponibles')}</p>
-    ${paper.firstInstitution ? `<p class="modal-journal"><i class="ph-bold ph-buildings" style="margin-right:4px;"></i>${esc(paper.firstInstitution)}</p>` : ''}
-    ${paper.journal ? `<p class="modal-journal"><i class="ph-bold ph-newspaper" style="margin-right:4px;"></i>${esc(paper.journal)}</p>` : ''}
-
-    <div class="modal-stats-row">
-      <span><i class="ph-bold ph-quotes"></i>${citations.toLocaleString('es')} citas</span>
-      ${paper.year ? `<span><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
-      ${paper.doi ? `<span><i class="ph-bold ph-fingerprint"></i>DOI disponible</span>` : ''}
+    <div class="modal-meta-row">
+      ${authorsStr ? `
+        <span class="modal-meta-item">
+          <i class="ph-bold ph-users"></i>
+          <span>${esc(authorsStr)}</span>
+        </span>
+      ` : ''}
+      ${sourceStr ? `
+        <span class="modal-meta-item">
+          <i class="ph-bold ph-book"></i>
+          <span>${esc(sourceStr)}</span>
+        </span>
+      ` : ''}
+      <div class="modal-meta-subrow">
+        ${paper.year ? `
+          <span class="modal-meta-item">
+            <i class="ph-bold ph-calendar-blank"></i>
+            <span>${paper.year}</span>
+          </span>
+        ` : ''}
+        <span class="modal-meta-item">
+          <i class="ph-bold ph-quotes"></i>
+          <span>${citations.toLocaleString('es')} ${citations === 1 ? 'cita' : 'citas'}</span>
+        </span>
+      </div>
     </div>
 
-    <p class="modal-section-label">Abstract</p>
-    <p id="modal-abstract-lang" class="modal-abstract-lang">
-      ${translating && paper.abstract
-        ? '<div class="spinner" style="width:12px;height:12px;border-width:2px;border-radius:50%;margin:0;animation:spin 0.7s linear infinite;"></div> Traduciendo al español…'
-        : '<i class="ph-bold ph-translate" style="font-size:12px;"></i> Traducción automática al español'
-      }
-    </p>
-    <p id="modal-abstract-text" class="modal-abstract">${esc(abstractEs || abstractContent)}</p>
+    <div class="modal-abstract-section">
+      <div class="modal-abstract-header">
+        <span class="modal-abstract-label">Resumen</span>
+        <div id="modal-abstract-lang" class="modal-abstract-lang">
+          ${(paper.abstract || abstractEs) ? (
+            translating && paper.abstract
+              ? '<span class="modal-lang-badge translating"><div class="spinner modal-spinner-mini"></div> Traduciendo…</span>'
+              : '<span class="modal-lang-badge"><i class="ph-bold ph-translate"></i> Traducido</span>'
+          ) : ''}
+        </div>
+      </div>
+      <p id="modal-abstract-text" class="modal-abstract">${esc(abstractEs || abstractContent)}</p>
+    </div>
 
-    ${topics.length > 0 ? `
-      <p class="modal-section-label" style="margin-top:20px;">Tópicos</p>
-      <div class="modal-topics">
-        ${topics.map(t => `<span class="modal-topic-chip">${esc(t)}</span>`).join('')}
+    ${shortTopics.length > 0 ? `
+      <div class="modal-topics-section">
+        <div class="modal-topics">
+          ${shortTopics.map(t => `<span class="modal-topic-chip">${esc(t)}</span>`).join('')}
+        </div>
       </div>
     ` : ''}
 
-    <div class="modal-cta">
-      ${paper.oaUrl
-        ? `<a class="btn-cta-primary" href="${esc(paper.oaUrl)}" target="_blank" rel="noopener"><i class="ph-bold ph-file-pdf"></i> Leer texto original (Open Access)</a>`
+    <div class="explore-actions-bar" style="padding: 0; margin-top: 16px;">
+      <div class="explore-actions-bar-row">
+        <button class="btn-cta-primary explore-action-read" id="btn-modal-psihub-options" style="flex-direction: column; gap: 2px;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <i class="ph-bold ph-book-open"></i> Leer en PsiHub
+          </div>
+          <span id="modal-psihub-btn-sub" style="font-size: 10px; opacity: 0.8; font-weight: normal;">${paper.isAutomatic ? '⚡ Traducción automática' : 'incluye traducción'}</span>
+        </button>
+        ${paper.oaUrl || paper.pdfUrl
+        ? `<a class="btn-cta-secondary" href="${esc(paper.oaUrl || paper.pdfUrl)}" target="_blank" rel="noopener" style="flex: 1; text-decoration: none; cursor: pointer;">
+             <i class="ph-bold ph-file-pdf"></i> Leer PDF
+           </a>`
         : ''}
-      ${paper.oaUrl
-        ? `<button class="btn-cta-secondary" id="btn-modal-translate-pdf">
-             <i class="ph-bold ph-translate"></i> Traducir PDF a Modo Lectura
-           </button>`
-        : `<button class="btn-cta-secondary" disabled style="opacity:0.4; cursor:not-allowed;" title="Solo disponible para Open Access">
-             <i class="ph-bold ph-translate"></i> Traducir PDF (Requiere Open Access)
-           </button>`
-      }
-      <button class="btn-cta-secondary btn-copy-apa" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
-        <i class="ph-bold ph-copy"></i> Copiar cita APA
-      </button>
+      </div>
+      <div class="explore-actions-bar-row">
+        <button class="explore-action-save btn-copy-apa" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
+          <i class="ph-bold ph-copy"></i> APA
+        </button>
+        <button class="explore-action-save btn-copy-doi" id="btn-modal-copy-doi" title="Copiar DOI" ${!paper.doi ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
+          <i class="ph-bold ph-link"></i> DOI
+        </button>
+        <button class="explore-action-save" id="btn-modal-share" title="Compartir (próximamente)" disabled style="opacity: 0.5; cursor: not-allowed;">
+          <i class="ph-bold ph-share-network"></i> Compartir
+        </button>
+      </div>
     </div>
   `;
 }
@@ -1129,64 +1492,206 @@ function closeModal() {
 }
 
 // ═══════════════════════════════════════════════════
-// MODO LECTURA (TRADUCCIÓN PDF)
 // ═══════════════════════════════════════════════════
 
-// URL de tu Hugging Face Space — reemplaza con tu URL real después del deploy
-const HF_SPACE_URL = 'https://naku-melara-psihub-reader.hf.space';
+function renderReaderPaperContent(paper, markdown) {
+  if (!markdown) return;
+  const rawHtml = marked.parse(markdown);
 
-async function openReaderModal(paperUrl, paperId) {
+  let heroHtml = '';
+  if (paper) {
+    const displayTitle = paper.titleEs || paper.title || 'Artículo científico';
+    const rawAuthors = Array.isArray(paper.authors) ? paper.authors : [];
+    let authorsStr = '';
+    if (rawAuthors.length > 0) {
+      authorsStr = rawAuthors.length > 2 ? `${rawAuthors.slice(0, 2).join(', ')} et al.` : rawAuthors.join(', ');
+    }
+    const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
+    const citations = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
+    const sourceStr = paper.journal || paper.firstInstitution || '';
+
+    heroHtml = `
+      <div class="reader-hero-card">
+        <h1 class="reader-hero-title">${esc(displayTitle)}</h1>
+        <div class="modal-meta-row" style="margin-top: 10px;">
+          ${authorsStr ? `<span class="modal-meta-item"><i class="ph-bold ph-users"></i> <span>${esc(authorsStr)}</span></span>` : ''}
+          ${sourceStr ? `<span class="modal-meta-item"><i class="ph-bold ph-book"></i> <span>${esc(sourceStr)}</span></span>` : ''}
+          <div class="modal-meta-subrow">
+            ${paper.year ? `<span class="modal-meta-item"><i class="ph-bold ph-calendar-blank"></i> <span>${paper.year}</span></span>` : ''}
+            ${citations > 0 ? `<span class="modal-meta-item"><i class="ph-bold ph-quotes"></i> <span>${citations.toLocaleString('es')} citas</span></span>` : ''}
+          </div>
+        </div>
+        <div class="reader-hero-divider"></div>
+      </div>
+    `;
+  }
+  el.readerContent.innerHTML = heroHtml + rawHtml;
+}
+
+async function openReaderModal(paperUrl, paperId, paperObj) {
+  const paper = paperObj || S.currentPaper;
+  const effectiveId = paperId || paper?.id || paperUrl;
+
   if (!paperUrl) {
-    showToast('El paper no tiene un link Open Access disponible.');
+    showToast('El paper no tiene un link de descarga directa disponible.');
     return;
   }
-  
-  // Pause stories if viewing from explore
+
+  // Anclar el visor estrictamente a este paper en específico
+  S.readerPaperId = effectiveId;
+
+  // Pausar historias si se ve desde explore
   if (!el.pageExplore.classList.contains('hidden') && !S.storyPaused) {
     pauseStory();
   }
 
   el.readerOverlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  
-  el.readerLoading.style.display = 'flex';
-  el.readerError.style.display = 'none';
+
+  // Reset scroll y progreso
+  if (el.readerScroll) el.readerScroll.scrollTop = 0;
+  if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+
+  // SIEMPRE limpiar el contenido para que jamás se filtre la traducción de otro paper
   el.readerContent.innerHTML = '';
-  
+  el.readerError.style.display = 'none';
+
+  // Verificar si ya existe traducción en memoria para este paper específico
+  const cachedMarkdown = paperTranslations.get(effectiveId) || paper?.translatedMarkdown;
+  if (cachedMarkdown) {
+    el.readerLoading.style.display = 'none';
+    renderReaderPaperContent(paper, cachedMarkdown);
+    return;
+  }
+
+  // Si no está en memoria, iniciar la traducción del PDF de este paper
+  el.readerLoading.style.display = 'flex';
+
   try {
     const apiUrl = `${HF_SPACE_URL}/api/translate`;
     const res = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: paperUrl, id: paperId })
+      body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
     });
     const data = await res.json();
-    
+
     if (!res.ok) throw new Error(data.detail || data.error || 'Error desconocido del servidor');
-    
+
+    // Verificar que el usuario no haya salido o abierto otro paper mientras traducía
+    if (S.readerPaperId !== effectiveId) return;
+
+    // Almacenar en caché vinculado a este paper
+    paperTranslations.set(effectiveId, data.markdown);
+    if (paper) {
+      paper.translatedMarkdown = data.markdown;
+      paper.isAutomatic = true;
+      updatePaperAutomaticBadges(paper);
+    }
+
     el.readerLoading.style.display = 'none';
-    
-    // Renderizar Markdown a HTML con marked.js
-    const rawHtml = marked.parse(data.markdown);
-    el.readerContent.innerHTML = rawHtml;
-    
+    renderReaderPaperContent(paper, data.markdown);
+
   } catch (error) {
+    if (S.readerPaperId !== effectiveId) return;
     console.error('Translation error:', error);
     el.readerLoading.style.display = 'none';
+    el.readerContent.innerHTML = ''; // Asegurar que quede vacío
     el.readerError.style.display = 'flex';
-    el.readerErrorMsg.textContent = error.message || 'Error de conexión con el servidor de traducción.';
+    el.readerErrorMsg.style.display = 'block';
+    const errorIcon = el.readerError.querySelector('.ph-warning-diamond');
+    if (errorIcon) errorIcon.style.display = 'block';
+
+    const uploadDesc = document.getElementById('reader-upload-desc');
+    if (uploadDesc) {
+      uploadDesc.innerHTML = 'El servidor de la revista bloqueó la descarga automática directa del PDF.<br><br>Puedes descargar el PDF manualmente y adjuntarlo aquí para traducirlo:';
+    }
+
+    el.readerErrorMsg.innerHTML = error.message || 'Error al traducir el artículo.';
   }
 }
 
 function closeReaderModal() {
   el.readerOverlay.classList.add('hidden');
-  // Only restore overflow if paper modal is not open beneath it
+  el.readerContent.innerHTML = '';
+  S.readerPaperId = null;
+  // Solo restaurar scroll si el modal del paper no está abierto debajo
   if (el.modalOverlay.classList.contains('hidden')) {
     document.body.style.overflow = '';
   }
-  // Resume stories if viewing from explore
+  // Reanudar historias si se ve desde explore
   if (!el.pageExplore.classList.contains('hidden') && S.storyPaused) {
     resumeStory();
+  }
+}
+
+async function handleReaderFileUpload(file) {
+  if (!file) return;
+  const paper = S.currentPaper;
+  const effectiveId = paper?.id || file.name;
+  S.readerPaperId = effectiveId;
+
+  el.readerLoading.style.display = 'flex';
+  el.readerError.style.display = 'none';
+  el.readerContent.innerHTML = '';
+  if (el.readerScroll) el.readerScroll.scrollTop = 0;
+  if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (paper?.id) {
+      formData.append('paper_id', paper.id);
+      formData.append('id', paper.id);
+    }
+
+    const apiUrl = `${HF_SPACE_URL}/api/translate-file`;
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.error || 'Error procesando el archivo PDF');
+
+    if (S.readerPaperId !== effectiveId) return;
+
+    el.readerLoading.style.display = 'none';
+    
+    // Anclar a este paper
+    paperTranslations.set(effectiveId, data.markdown);
+    if (paper) paper.translatedMarkdown = data.markdown;
+
+    if (paper) {
+      renderReaderPaperContent(paper, data.markdown);
+    } else {
+      const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
+      const rawHtml = marked.parse(data.markdown);
+      const heroHtml = `
+        <div class="reader-hero-card">
+          <div class="reader-hero-badges">
+            <span class="reader-hero-pill"><i class="ph-bold ph-file-pdf"></i> Archivo Local</span>
+            <span class="reader-hero-pill"><i class="ph-bold ph-translate"></i> Traducido al español</span>
+          </div>
+          <h1 class="reader-hero-title">${esc(fileName)}</h1>
+          <div class="reader-hero-divider"></div>
+        </div>
+      `;
+      el.readerContent.innerHTML = heroHtml + rawHtml;
+    }
+  } catch (err) {
+    if (S.readerPaperId !== effectiveId) return;
+    console.error('File translation error:', err);
+    el.readerLoading.style.display = 'none';
+    el.readerContent.innerHTML = '';
+    el.readerError.style.display = 'flex';
+    el.readerErrorMsg.style.display = 'block';
+    const errorIcon = el.readerError.querySelector('.ph-warning-diamond');
+    if (errorIcon) errorIcon.style.display = 'block';
+
+    const uploadDesc = document.getElementById('reader-upload-desc');
+    if (uploadDesc) uploadDesc.innerHTML = 'Si el servidor de la revista bloqueó la descarga directa, puedes subir el archivo PDF desde tu dispositivo:';
+
+    el.readerErrorMsg.innerHTML = err.message || 'Error al traducir el archivo PDF subido.';
   }
 }
 
@@ -1281,7 +1786,7 @@ function updateAvatarInitials(name) {
   const cleanName = (name || S.profile.name || '').trim();
   const parts = cleanName.split(' ').filter(Boolean);
   const initials = parts.length >= 2
-    ? (parts[0][0] + parts[parts.length-1][0]).toUpperCase()
+    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
     : (cleanName ? cleanName.slice(0, 2).toUpperCase() : 'P');
   if (el.avatarInitials) el.avatarInitials.textContent = initials;
 }
@@ -1347,7 +1852,6 @@ function refreshProfile() {
         if (!saved) refreshProfile();
       }));
     });
-    el.savedList.appendChild(frag);
   }
 }
 
@@ -1385,8 +1889,126 @@ window.removeSavedPaperByIndex = removeSavedPaperByIndex;
 // ═══════════════════════════════════════════════════
 
 function setupEventListeners() {
-  // Nav
-  el.navBtns.forEach(btn => btn.addEventListener('click', () => navigateTo(btn.dataset.page)));
+  // Nav con doble toque en la lupa para reiniciar
+  let lastNavSearchClick = 0;
+  el.navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetPage = btn.dataset.page;
+      if (targetPage === 'search') {
+        const now = Date.now();
+        // Si se presiona 2 veces seguidas (dentro de 600ms) o si ya está activa la página de búsqueda
+        if ((now - lastNavSearchClick < 600) || (S.activePage === 'search' && (S.baseQuery || S.papers.length > 0 || (el.searchPageInput && el.searchPageInput.value)))) {
+          resetSearchToInitial();
+          if (el.searchPageInput) {
+            el.searchPageInput.value = '';
+            el.searchPageInput.focus();
+          }
+          if (el.searchResultsScroll) {
+            el.searchResultsScroll.scrollTop = 0;
+          }
+          showToast('Búsqueda reiniciada');
+        }
+        lastNavSearchClick = now;
+      }
+      navigateTo(targetPage);
+    });
+  });
+
+  // Biblioteca
+  if (el.librarySavedHeader) {
+    el.librarySavedHeader.addEventListener('click', () => {
+      const isHidden = el.librarySavedContainer.style.display === 'none';
+      el.librarySavedContainer.style.display = isHidden ? 'block' : 'none';
+      if (el.iconToggleSaved) {
+        el.iconToggleSaved.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+      }
+    });
+  }
+
+  if (el.libraryFileUpload) {
+    el.libraryFileUpload.addEventListener('change', e => {
+      const f = e.target.files?.[0];
+      if (f) {
+        if (el.readerOverlay) el.readerOverlay.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        handleReaderFileUpload(f);
+      }
+    });
+  }
+
+  // Página Buscar
+  function triggerSearchPage() {
+    if (!el.searchPageInput) return;
+    const q = el.searchPageInput.value.trim();
+    if (q) {
+      if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
+      doSearch(q);
+    } else {
+      resetSearchToInitial();
+    }
+  }
+
+  if (el.searchPageInput) {
+    el.searchPageInput.addEventListener('input', () => {
+      const v = el.searchPageInput.value;
+      if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = v ? 'flex' : 'none';
+      if (!v.trim()) {
+        resetSearchToInitial();
+      }
+    });
+    el.searchPageInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        triggerSearchPage();
+      }
+    });
+  }
+
+  if (el.btnClearSearchPage) {
+    el.btnClearSearchPage.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (el.searchPageInput) el.searchPageInput.value = '';
+      resetSearchToInitial();
+    });
+  }
+
+  let lastSearchPageBtnClick = 0;
+  if (el.btnDoSearchPage) {
+    el.btnDoSearchPage.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const now = Date.now();
+      if (now - lastSearchPageBtnClick < 600) {
+        // Doble toque a la lupa: reiniciar búsqueda
+        lastSearchPageBtnClick = 0;
+        resetSearchToInitial();
+        if (el.searchPageInput) {
+          el.searchPageInput.value = '';
+          el.searchPageInput.focus();
+        }
+        if (el.searchResultsScroll) {
+          el.searchResultsScroll.scrollTop = 0;
+        }
+        showToast('Búsqueda reiniciada');
+        return;
+      }
+      lastSearchPageBtnClick = now;
+      triggerSearchPage();
+    });
+  }
+
+  // Chips sugeridos de búsqueda inicial
+  if (el.searchInitialChips) {
+    el.searchInitialChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.search-chip');
+      if (chip && chip.dataset.query) {
+        if (el.searchPageInput) {
+          el.searchPageInput.value = chip.dataset.query;
+          if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'flex';
+        }
+        doSearch(chip.dataset.query);
+      }
+    });
+  }
 
   // Guardados (Delegación de respaldo)
   el.savedList.addEventListener('click', e => {
@@ -1413,8 +2035,19 @@ function setupEventListeners() {
     }
   }
 
+  let lastSearchOpenClick = 0;
   el.btnSearchOpen.addEventListener('click', (e) => {
     e.stopPropagation();
+    const now = Date.now();
+    if (now - lastSearchOpenClick < 600) {
+      lastSearchOpenClick = 0;
+      resetInlineSearch();
+      resetSearchToInitial();
+      showToast('Búsqueda reiniciada');
+      return;
+    }
+    lastSearchOpenClick = now;
+
     const isActive = el.searchInlineWrapper.classList.contains('active');
     if (isActive) {
       // Si hay texto, buscar; si no, resetear y cerrar
@@ -1430,8 +2063,8 @@ function setupEventListeners() {
   });
 
   document.addEventListener('click', e => {
-    if (el.searchInlineWrapper && el.searchInlineWrapper.classList.contains('active') && 
-        !el.searchInlineWrapper.contains(e.target)) {
+    if (el.searchInlineWrapper && el.searchInlineWrapper.classList.contains('active') &&
+      !el.searchInlineWrapper.contains(e.target)) {
       if (!el.searchInput.value.trim()) {
         resetInlineSearch();
       } else {
@@ -1462,16 +2095,24 @@ function setupEventListeners() {
   });
 
   // Resultados
-  el.btnResultsBack.addEventListener('click', () => closeResults());
   el.subtabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
+      if (!S.baseQuery) return; // Si la búsqueda está vacía, no dispara nada
+      if (currentFetchController) {
+        try { currentFetchController.abort(); } catch { }
+      }
       S.activeSubtype = btn.dataset.type;
       S.page = 1;
       S.papers = [];
+      S.hasMore = false;
       el.subtabBtns.forEach(b => b.classList.toggle('active', b === btn));
       el.paperList.innerHTML = '';
-      el.btnLoadMore.style.display = 'none';
-      
+      if (el.resultsCount) el.resultsCount.textContent = '';
+      if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+      if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+      if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+      if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+
       // El filtro de orden (S.sort) se mantiene independiente de la etiqueta seleccionada
       updateGlow();
       doFetch();
@@ -1479,11 +2120,20 @@ function setupEventListeners() {
   });
   if (el.resultsSort) {
     el.resultsSort.addEventListener('change', () => {
+      if (!S.baseQuery) return; // Si la búsqueda está vacía, no dispara nada
+      if (currentFetchController) {
+        try { currentFetchController.abort(); } catch { }
+      }
       S.sort = el.resultsSort.value || null;
       S.page = 1;
       S.papers = [];
+      S.hasMore = false;
       el.paperList.innerHTML = '';
-      el.btnLoadMore.style.display = 'none';
+      if (el.resultsCount) el.resultsCount.textContent = '';
+      if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+      if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+      if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+      if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
       doFetch();
     });
   }
@@ -1495,13 +2145,18 @@ function setupEventListeners() {
       if (e.target !== el.resultsSort) {
         el.resultsSort.focus();
         if (typeof el.resultsSort.showPicker === 'function') {
-          try { el.resultsSort.showPicker(); } catch {}
+          try { el.resultsSort.showPicker(); } catch { }
         }
       }
     });
   }
-  el.btnLoadMore.addEventListener('click', loadMore);
-  el.btnResultsRetry.addEventListener('click', () => { S.page = 1; S.papers = []; doFetch(); });
+  initInfiniteScroll();
+  el.btnResultsRetry.addEventListener('click', () => { 
+    if (!S.baseQuery) return;
+    S.page = 1; 
+    S.papers = []; 
+    doFetch(); 
+  });
 
   // Recomendaciones
   el.btnRefreshRecs.addEventListener('click', loadRecommendations);
@@ -1509,10 +2164,61 @@ function setupEventListeners() {
   // Modal
   el.btnModalClose.addEventListener('click', closeModal);
   el.modalOverlay.addEventListener('click', e => { if (e.target === el.modalOverlay) closeModal(); });
-  
+
   // Reader Modal
   el.btnReaderClose.addEventListener('click', closeReaderModal);
   el.readerOverlay.addEventListener('click', e => { if (e.target === el.readerOverlay) closeReaderModal(); });
+  if (el.readerFileUpload) {
+    el.readerFileUpload.addEventListener('change', e => {
+      const f = e.target.files?.[0];
+      if (f) handleReaderFileUpload(f);
+      e.target.value = '';
+    });
+  }
+  if (el.readerScroll && el.readerProgressFill) {
+    el.readerScroll.addEventListener('scroll', () => {
+      const maxScroll = el.readerScroll.scrollHeight - el.readerScroll.clientHeight;
+      if (maxScroll > 0) {
+        const pct = Math.min(100, Math.max(0, (el.readerScroll.scrollTop / maxScroll) * 100));
+        el.readerProgressFill.style.width = `${pct}%`;
+      }
+    }, { passive: true });
+  }
+  if (el.btnReaderFontToggle) {
+    el.btnReaderFontToggle.addEventListener('click', () => {
+      if (el.readerModal) {
+        const isLarge = el.readerModal.classList.toggle('font-large');
+        el.btnReaderFontToggle.classList.toggle('active', isLarge);
+        showToast(isLarge ? 'Texto grande activado' : 'Texto estándar activado');
+      }
+    });
+  }
+  if (el.btnReaderCopyText) {
+    el.btnReaderCopyText.addEventListener('click', async () => {
+      if (!el.readerContent) return;
+      const textToCopy = el.readerContent.innerText || '';
+      if (!textToCopy.trim()) {
+        showToast('No hay contenido para copiar');
+        return;
+      }
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(textToCopy);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = textToCopy;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        showToast('Texto copiado al portapapeles ✓');
+      } catch (err) {
+        console.error('[Copy Reader]', err);
+        showToast('No se pudo copiar el texto');
+      }
+    });
+  }
   el.btnModalBk.addEventListener('click', () => { if (S.currentPaper) toggleBookmark(S.currentPaper); });
   el.modalBody.addEventListener('click', async (e) => {
     const btnCopy = e.target.closest('#btn-modal-copy-apa') || e.target.closest('.btn-copy-apa');
@@ -1538,12 +2244,159 @@ function setupEventListeners() {
       return;
     }
 
-    const btnTranslate = e.target.closest('#btn-modal-translate-pdf');
-    if (btnTranslate && S.currentPaper) {
+    const btnPsihubOptions = e.target.closest('#btn-modal-psihub-options');
+    if (btnPsihubOptions && S.currentPaper) {
       e.stopPropagation();
-      openReaderModal(S.currentPaper.oaUrl, S.currentPaper.id);
+      if (el.psihubOptionsOverlay && el.psihubOptionsSheet) {
+        const badgeEs = document.getElementById('btn-psihub-read-es-badge');
+        if (badgeEs) {
+          badgeEs.style.display = S.currentPaper.isAutomatic ? 'inline-block' : 'none';
+        }
+        el.psihubOptionsOverlay.classList.remove('hidden');
+        el.psihubOptionsSheet.classList.remove('closing');
+      }
+      return;
+    }
+
+    const btnCopyDoi = e.target.closest('#btn-modal-copy-doi');
+    if (btnCopyDoi && S.currentPaper && S.currentPaper.doi) {
+      e.stopPropagation();
+      const doiLink = S.currentPaper.doi.startsWith('http') ? S.currentPaper.doi : `https://doi.org/${S.currentPaper.doi}`;
+      try {
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(doiLink);
+        }
+        showToast('DOI copiado al portapapeles ✓');
+      } catch (err) {
+        showToast('No se pudo copiar el DOI');
+      }
+      return;
+    }
+
+    const btnTranslateManual = e.target.closest('#btn-modal-translate-pdf-manual');
+    if (btnTranslateManual && S.currentPaper) {
+      e.stopPropagation();
+      el.readerOverlay.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      el.readerLoading.style.display = 'none';
+      el.readerContent.innerHTML = '';
+      el.readerError.style.display = 'flex';
+
+      // Hide the generic "Error" text and icon since this is an intended manual upload
+      el.readerErrorMsg.style.display = 'none';
+      const errorIcon = el.readerError.querySelector('.ph-warning-diamond');
+      if (errorIcon) errorIcon.style.display = 'none';
+
+      const lookupId = (S.currentPaper.doi ? (S.currentPaper.doi.startsWith('http') ? S.currentPaper.doi : `https://doi.org/${S.currentPaper.doi}`) : null);
+
+      const uploadDesc = document.getElementById('reader-upload-desc');
+      if (uploadDesc) {
+        uploadDesc.innerHTML = lookupId
+          ? `PDF Privado o sin enlace directo gratuito.<br><br>Por favor, <a href="${lookupId}" target="_blank" style="color:var(--txt-1); text-decoration:underline; font-weight:600;">descarga el PDF manualmente desde la página oficial aquí</a> y luego adjunta el archivo debajo:`
+          : `PDF Privado o sin enlace directo gratuito.<br><br>Por favor, descárgalo manualmente y luego adjunta el archivo debajo:`;
+      }
+      return;
     }
   });
+
+  // Opciones de PsiHub Modal
+  function closePsihubOptions() {
+    if (!el.psihubOptionsOverlay || el.psihubOptionsOverlay.classList.contains('hidden')) return;
+    if (el.psihubOptionsSheet) el.psihubOptionsSheet.classList.add('closing');
+    setTimeout(() => {
+      if (el.psihubOptionsOverlay) el.psihubOptionsOverlay.classList.add('hidden');
+      if (el.psihubOptionsSheet) el.psihubOptionsSheet.classList.remove('closing');
+    }, 200);
+  }
+
+  // Cerrar al tocar fuera del visor (en el overlay)
+  if (el.psihubOptionsOverlay) {
+    el.psihubOptionsOverlay.addEventListener('click', (e) => {
+      if (e.target === el.psihubOptionsOverlay) {
+        closePsihubOptions();
+      }
+    });
+  }
+
+  // Cerrar con botón X
+  if (el.btnClosePsihubOptions) {
+    el.btnClosePsihubOptions.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closePsihubOptions();
+    });
+  }
+
+  // Evitar que hacer clic en el cuerpo del visor propague al overlay o cause efectos secundarios
+  if (el.psihubOptionsSheet) {
+    el.psihubOptionsSheet.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+  }
+
+  // Deslizar (swipe down) para cerrar el mini visor
+  let optionsTouchStartY = 0;
+  let optionsTouchStartX = 0;
+
+  if (el.psihubOptionsSheet) {
+    el.psihubOptionsSheet.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      optionsTouchStartY = touch.clientY;
+      optionsTouchStartX = touch.clientX;
+    }, { passive: true });
+
+    el.psihubOptionsSheet.addEventListener('touchend', (e) => {
+      const touch = e.changedTouches[0];
+      const deltaY = touch.clientY - optionsTouchStartY;
+      const deltaX = Math.abs(touch.clientX - optionsTouchStartX);
+
+      // Deslizamiento vertical hacia abajo > 45px cierra el mini visor
+      if (deltaY > 45 && deltaY > deltaX * 1.1) {
+        closePsihubOptions();
+      }
+    }, { passive: true });
+  }
+
+  if (el.btnPsihubReadEs) {
+    el.btnPsihubReadEs.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!S.currentPaper) return;
+      closePsihubOptions();
+
+      const paper = S.currentPaper;
+      const paperUrl = paper.pdfUrl || paper.oaUrl;
+      const paperId = paper.id;
+
+      if (paperUrl) {
+        // Iniciar directamente la traducción de este PDF específico
+        openReaderModal(paperUrl, paperId, paper);
+      } else {
+        // Si no tiene enlace disponible, abrir modal de subida manual para este paper
+        el.readerOverlay.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        el.readerLoading.style.display = 'none';
+        el.readerContent.innerHTML = '';
+        el.readerError.style.display = 'flex';
+        el.readerErrorMsg.style.display = 'none';
+        const errorIcon = el.readerError.querySelector('.ph-warning-diamond');
+        if (errorIcon) errorIcon.style.display = 'none';
+
+        const uploadDesc = document.getElementById('reader-upload-desc');
+        if (uploadDesc) {
+          const lookupId = (paper.doi ? (paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`) : null);
+          uploadDesc.innerHTML = lookupId
+            ? `PDF sin enlace directo disponible.<br><br>Por favor, <a href="${lookupId}" target="_blank" style="color:var(--txt-1); text-decoration:underline; font-weight:600;">descarga el PDF manualmente desde la revista aquí</a> y adjúntalo a continuación:`
+            : `PDF sin enlace directo disponible.<br><br>Por favor, descarga el PDF y adjúntalo a continuación:`;
+        }
+      }
+    });
+  }
+
+  if (el.btnPsihubSummarize) {
+    el.btnPsihubSummarize.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showToast('Resumir artículo estará disponible próximamente');
+    });
+  }
 
   // Swipe modal: permite leer y scrollear el abstract con total comodidad.
   // Solo se cierra si se arrastra desde la manija superior o si está arriba del todo y el deslizamiento hacia abajo es pronunciado (>120px)
@@ -1560,7 +2413,7 @@ function setupEventListeners() {
     touchStartX = touch.clientX;
     const target = e.target;
     const isTopArea = (modalHandle && (target === modalHandle || modalHandle.contains(target))) ||
-                      (modalHeader && (target === modalHeader || modalHeader.contains(target)));
+      (modalHeader && (target === modalHeader || modalHeader.contains(target)));
     const isScrollAtTop = el.modalBody.scrollTop <= 2;
     canSwipeModal = isTopArea || isScrollAtTop;
   }, { passive: true });
@@ -1579,7 +2432,12 @@ function setupEventListeners() {
   }, { passive: true });
 
   // Manejo del botón atrás de Android y gestos atrás del sistema
-  window.handleAndroidBack = function() {
+  window.handleAndroidBack = function () {
+    // -1. Si el mini visor de opciones de PsiHub está abierto, cerrarlo
+    if (el.psihubOptionsOverlay && !el.psihubOptionsOverlay.classList.contains('hidden')) {
+      closePsihubOptions();
+      return true;
+    }
     // 0. Si el visor de historias está abierto, cerrarlo
     if (el.storyModal && !el.storyModal.classList.contains('hidden')) {
       closeStory();
@@ -1595,17 +2453,12 @@ function setupEventListeners() {
       resetInlineSearch();
       return true;
     }
-    // 3. Si la vista de resultados está abierta, cerrarla y volver al home
-    if (S.resultsOpen) {
-      closeResults();
-      return true;
-    }
-    // 4. Si está en otra pestaña (Explorar o Perfil), volver al Inicio
+    // 3. Si está en otra pestaña, volver al Inicio
     if (S.activePage !== 'home') {
       navigateTo('home');
       return true;
     }
-    // 5. Si ya está en el Home sin nada abierto, retornar false para salir
+    // 4. Si ya está en el Home sin nada abierto, retornar false para salir
     return false;
   };
 
@@ -1630,17 +2483,29 @@ function setupEventListeners() {
     });
   }
 
-  if (el.storyTapNext)  el.storyTapNext.addEventListener('click', (e) => { e.stopPropagation(); nextStory(); });
-  if (el.storyTapPrev)  el.storyTapPrev.addEventListener('click', (e) => { e.stopPropagation(); prevStory(); });
-  if (el.btnStorySave)  el.btnStorySave.addEventListener('click', (e) => { e.stopPropagation(); toggleStoryBookmark(); });
+  if (el.storyTapNext) el.storyTapNext.addEventListener('click', (e) => { e.stopPropagation(); nextStory(); });
+  if (el.storyTapPrev) el.storyTapPrev.addEventListener('click', (e) => { e.stopPropagation(); prevStory(); });
+  if (el.btnStorySave) el.btnStorySave.addEventListener('click', (e) => { e.stopPropagation(); toggleStoryBookmark(); });
   if (el.btnStoryShare) el.btnStoryShare.addEventListener('click', (e) => { e.stopPropagation(); shareCurrentStory(); });
-  if (el.btnStoryTranslate) {
-    el.btnStoryTranslate.addEventListener('click', (e) => {
+  if (el.btnStoryRead) {
+    el.btnStoryRead.addEventListener('click', (e) => {
       e.stopPropagation();
       const currentStory = S.stories[S.activeStoryIdx];
-      if (currentStory && currentStory.paper) {
-        const id = currentStory.paper.id || currentStory.id;
-        openReaderModal(currentStory.paper.oaUrl || currentStory.paper.doi, id);
+      if (currentStory) {
+        const paperForModal = {
+          ...currentStory,
+          title: currentStory.paperTitle || currentStory.title || currentStory.headline,
+          titleEs: currentStory.titleEs || null,
+          abstract: currentStory.originalAbstract || currentStory.abstract,
+          journal: currentStory.journal || '',
+          authors: currentStory.authors || [],
+          year: currentStory.year || '',
+          citations: currentStory.citations || 0,
+          doi: currentStory.doi,
+          pdfUrl: currentStory.pdfUrl,
+          topics: currentStory.tags || [currentStory.topicName]
+        };
+        openModal(paperForModal, null);
       }
     });
   }
@@ -1789,7 +2654,7 @@ function setupEventListeners() {
 // SECCIÓN EXPLORAR — HISTORIAS DIRECTAS CON NEBULA
 // ═══════════════════════════════════════════════════
 
-const GITHUB_STORIES_REMOTE_URL = window.PSYHUB_STORIES_REMOTE_URL || 
+const GITHUB_STORIES_REMOTE_URL = window.PSYHUB_STORIES_REMOTE_URL ||
   'https://raw.githubusercontent.com/MelaraNeax/PsiHub/main/data/stories.json';
 
 async function loadStories(forceRefresh = false) {
@@ -1890,7 +2755,7 @@ function renderCurrentStory(index) {
   }
 
   if (el.exploreTagsRow) {
-    el.exploreTagsRow.innerHTML = (story.tags || [story.topicName]).map(t => 
+    el.exploreTagsRow.innerHTML = (story.tags || [story.topicName]).map(t =>
       `<span style="display:inline-block; margin-right:6px; font-size:10px; padding:4px 10px; background:rgba(255,255,255,0.15); border-radius:100px; font-weight:700; color:var(--txt);">${esc(t)}</span>`
     ).join('');
   }
@@ -1913,8 +2778,6 @@ function renderCurrentStory(index) {
 
   // 5. Botón de lectura (PDF / DOI) — color neutro permanente
   if (el.btnStoryRead) {
-    const paperUrl = story.pdfUrl || story.url || (story.doi ? `https://doi.org/${story.doi}` : '#');
-    el.btnStoryRead.href = paperUrl;
     el.btnStoryRead.style.background = '';
   }
 
@@ -2061,7 +2924,7 @@ function toggleStoryBookmark() {
         }
         saveData('psyhub_bk', S.bookmarks);
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }
 }
 
@@ -2077,7 +2940,7 @@ async function shareCurrentStory() {
   if (navigator.share) {
     try {
       await navigator.share(shareData);
-    } catch {}
+    } catch { }
   } else if (navigator.clipboard) {
     try {
       await navigator.clipboard.writeText(`${shareData.text}\n${shareData.url}`);
@@ -2107,8 +2970,8 @@ function showToast(msg) {
 // ═══════════════════════════════════════════════════
 
 function loadData(k, def) { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } }
-function saveData(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+function saveData(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } }
 function esc(str) {
   return String(str || '')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

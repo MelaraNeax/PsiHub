@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="style.css?v=17">
+  <link rel="stylesheet" href="style.css?v=20">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -124,15 +124,11 @@
 
       <!-- Barra de Acciones Inferior FIJA en altura para todas las historias -->
       <div class="explore-actions-bar" id="explore-actions-bar">
-        <!-- Fila 1: Leer + Traducir -->
+        <!-- Fila 1: Ver artículo -->
         <div class="explore-actions-bar-row">
-          <a class="btn-cta-primary explore-action-read" id="btn-story-read" href="#" target="_blank" rel="noopener">
-            <i class="ph-bold ph-file-pdf"></i>
-            <span>Leer Paper</span>
-          </a>
-          <button class="btn-cta-secondary explore-action-translate" id="btn-story-translate" title="Traducir PDF a Modo Lectura">
-            <i class="ph-bold ph-translate"></i>
-            <span>Traducir</span>
+          <button class="btn-cta-primary explore-action-read" id="btn-story-read">
+            <i class="ph-bold ph-article"></i>
+            <span>Ver artículo</span>
           </button>
         </div>
         <!-- Fila 2: Guardar + Compartir -->
@@ -264,46 +260,112 @@
         </div>
       </div>
 
-      <!-- Artículos guardados -->
-      <section class="section profile-section" id="section-saved" style="display:none; padding-top: 10px;">
-        <div class="saved-section-header">
-          <h3 class="subsection-title" style="margin-bottom:0;">Artículos guardados</h3>
-          <button class="btn-clear-saved-text" id="btn-clear-all-saved">Vaciar</button>
-        </div>
-        <ul class="saved-list paper-list" id="saved-list"></ul>
-      </section>
+    </div>
+  </div>
 
-      <div class="profile-empty-saved" id="profile-empty-saved">
-        <div class="empty-icon-wrap"><i class="ph-bold ph-bookmark-simple"></i></div>
-        <p class="empty-title">Sin artículos guardados</p>
-        <p class="empty-subtitle">Guardá artículos desde el inicio o resultados para consultarlos aquí sin conexión.</p>
+  <!-- ══════════════════════════════════════
+       BIBLIOTECA
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-library">
+    <div class="results-bg-glow library-bg-glow"></div>
+
+    <header class="home-header">
+      <div class="home-header-top">
+        <h1 class="app-title">Biblioteca</h1>
+      </div>
+    </header>
+
+    <div class="page-scroll profile-scroll">
+      
+      <!-- Botón para abrir Guardados -->
+      <div class="profile-card library-action-card" id="library-saved-card">
+        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;" id="library-saved-header">
+          <div class="google-badge-icon" style="color: var(--green); background: rgba(29, 185, 84, 0.1); border-color: rgba(29, 185, 84, 0.2);">
+            <i class="ph-bold ph-bookmark-simple" style="font-size: 20px;"></i>
+          </div>
+          <div class="auth-card-meta">
+            <h3 class="auth-card-title">Artículos guardados</h3>
+            <p class="auth-card-subtitle">Tus papers almacenados sin conexión</p>
+          </div>
+          <button class="btn-modal-close" style="background: rgba(255,255,255,0.05); pointer-events: none;">
+            <i class="ph-bold ph-caret-down" id="icon-toggle-saved"></i>
+          </button>
+        </div>
+        
+        <div class="library-saved-container" id="library-saved-container" style="display: none; margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
+          <!-- Artículos guardados -->
+          <section class="section profile-section" id="section-saved" style="display:none; padding: 0;">
+            <div class="saved-section-header" style="margin-bottom: 12px;">
+              <h3 class="subsection-title" style="margin-bottom:0; font-size: 14px;">Lista de lectura</h3>
+              <button class="btn-clear-saved-text" id="btn-clear-all-saved">Vaciar</button>
+            </div>
+            <ul class="saved-list paper-list" id="saved-list"></ul>
+          </section>
+
+          <div class="profile-empty-saved" id="profile-empty-saved" style="padding: 20px 0;">
+            <div class="empty-icon-wrap"><i class="ph-bold ph-bookmark-simple"></i></div>
+            <p class="empty-title" style="font-size: 14px;">Sin artículos guardados</p>
+            <p class="empty-subtitle">Guardá artículos desde el inicio o resultados para consultarlos aquí sin conexión.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tarjeta de Modo Lector -->
+      <div class="profile-card library-action-card" id="library-reader-card">
+        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px;">
+          <div class="google-badge-icon" style="color: #4e9ef7; background: rgba(78, 158, 247, 0.1); border-color: rgba(78, 158, 247, 0.2);">
+            <i class="ph-bold ph-file-pdf" style="font-size: 20px;"></i>
+          </div>
+          <div class="auth-card-meta">
+            <h3 class="auth-card-title">Modo Lector</h3>
+            <p class="auth-card-subtitle">Traducir un PDF para leerlo</p>
+          </div>
+        </div>
+        <p class="auth-card-desc" style="margin: 12px 0 16px;">
+          Sube un archivo PDF para extraer el texto y traducirlo al instante de forma automática.
+        </p>
+        <label class="btn-google-login" style="cursor: pointer; background: rgba(255,255,255,0.1); color: var(--txt); border: 1px solid rgba(255,255,255,0.15); font-weight: 600;">
+          <i class="ph-bold ph-upload-simple" style="font-size: 18px; margin-right: 4px;"></i> Subir archivo PDF
+          <input type="file" id="library-file-upload" accept=".pdf" style="display: none;">
+        </label>
       </div>
 
     </div>
   </div>
 
   <!-- ══════════════════════════════════════
-       VISTA DE RESULTADOS
+       PÁGINA BUSCAR
   ══════════════════════════════════════ -->
-  <div class="results-view hidden" id="results-view">
+  <div class="page hidden" id="page-search">
     <div class="results-bg-glow" id="results-bg-glow"></div>
     
-    <div class="results-header" id="results-header">
-      <button class="btn-back" id="btn-results-back"><i class="ph-bold ph-arrow-left"></i></button>
+    <header class="home-header">
+      <div class="home-header-top" style="gap: 12px; margin-bottom: 8px;">
+        <div class="search-inline-wrapper active" id="search-page-wrapper" style="width: 100%; display: flex;">
+          <input type="search" id="search-page-input" class="search-inline-input" placeholder="Buscar papers..." autocomplete="off" enterkeyhint="search" style="opacity: 1; padding: 0 6px 0 14px;">
+          <button class="btn-clear-search" id="btn-clear-search-page" style="display:none;"><i class="ph-bold ph-x"></i></button>
+          <button class="icon-btn search-inline-trigger" id="btn-do-search-page" aria-label="Buscar">
+            <i class="ph-bold ph-magnifying-glass"></i>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="results-header" id="results-header" style="display: none; padding-top: 8px;">
       <div class="results-header-info">
         <span class="results-header-label" id="results-header-label">Corriente</span>
         <h2 class="results-header-title" id="results-header-title">Resultados</h2>
       </div>
     </div>
 
-    <div class="subtabs-bar">
+    <div class="subtabs-bar" id="search-subtabs-bar" style="display: none;">
       <button class="subtab active" data-type="all">Todo</button>
       <button class="subtab" data-type="teorico">Teórico</button>
       <button class="subtab" data-type="evidencia">Evidencia</button>
       <button class="subtab" data-type="clinico">Clínico</button>
     </div>
 
-    <div class="filter-bar">
+    <div class="filter-bar" id="search-filter-bar" style="display: none;">
       <label class="filter-sort-wrapper" for="results-sort">
         <i class="ph-bold ph-faders"></i>
         <select id="results-sort" class="sort-select">
@@ -316,7 +378,24 @@
       <span class="results-count" id="results-count"></span>
     </div>
 
-    <div class="results-scroll">
+    <div class="page-scroll results-scroll" id="search-results-scroll">
+      
+      <!-- Búsqueda inicial vacía -->
+      <div class="search-initial-box" id="search-initial" style="display:flex;">
+        <div class="search-initial-icon-wrap">
+          <i class="ph-bold ph-magnifying-glass"></i>
+        </div>
+        <h3 class="search-initial-title">Explorá la literatura científica</h3>
+        <p class="search-initial-desc">Ingresá un término para buscar o elegí una corriente psicoterapéutica.</p>
+        <div class="search-initial-chips" id="search-initial-chips">
+          <button class="search-chip" data-query="Terapia Cognitivo Conductual">TCC</button>
+          <button class="search-chip" data-query="Neurociencia cognitiva">Neurociencia</button>
+          <button class="search-chip" data-query="Psicoanálisis y psicodinámica">Psicoanálisis</button>
+          <button class="search-chip" data-query="Mindfulness y compasión">Mindfulness</button>
+          <button class="search-chip" data-query="Trastornos de ansiedad">Ansiedad</button>
+        </div>
+      </div>
+
       <div class="state-loading" id="results-loading" style="display:none;">
         <div class="spinner"></div>
         <p>Buscando en OpenAlex…</p>
@@ -331,6 +410,29 @@
         <button class="btn-retry" id="btn-results-retry">Reintentar</button>
       </div>
       <ul class="paper-list" id="paper-list"></ul>
+
+      <!-- Scroll Infinito / Círculo cargando más estilo PsiHub -->
+      <div class="infinite-scroll-container" id="infinite-scroll-container" style="display:none;">
+        <div class="scroll-spinner-wrapper">
+          <div class="scroll-spinner-circle"></div>
+        </div>
+        <p class="scroll-loading-text">Cargando más papers…</p>
+      </div>
+
+      <!-- Aviso de fin de resultados -->
+      <div class="results-end-notice" id="results-end-notice" style="display:none;">
+        <i class="ph-bold ph-check-circle"></i>
+        <span>Has llegado al final de los resultados</span>
+      </div>
+
+      <!-- Reintento si falla al cargar más con scroll -->
+      <div class="scroll-retry-container" id="scroll-retry-container" style="display:none;">
+        <p>No se pudieron cargar más papers</p>
+        <button class="btn-scroll-retry" id="btn-load-more-retry">
+          <i class="ph-bold ph-arrow-clockwise"></i> Reintentar
+        </button>
+      </div>
+
       <button class="btn-load-more" id="btn-load-more" style="display:none;">
         <i class="ph-bold ph-arrow-circle-down"></i> Cargar más
       </button>
@@ -360,6 +462,12 @@
     </button>
     <button class="nav-btn" data-page="explore" id="nav-explore">
       <i class="ph-bold ph-compass"></i>
+    </button>
+    <button class="nav-btn" data-page="library" id="nav-library">
+      <i class="ph-bold ph-books"></i>
+    </button>
+    <button class="nav-btn" data-page="search" id="nav-search">
+      <i class="ph-bold ph-magnifying-glass"></i>
     </button>
     <button class="nav-btn" data-page="profile" id="nav-profile">
       <i class="ph-bold ph-user-circle"></i>
@@ -399,27 +507,70 @@
     </div>
   </div>
 
+  <!-- Modal Opciones PsiHub -->
+  <div class="modal-overlay hidden" id="psihub-options-overlay" style="z-index: 1500;">
+    <div class="modal-sheet" id="psihub-options-sheet" style="background: rgba(13, 13, 16, 0.94); backdrop-filter: blur(32px); -webkit-backdrop-filter: blur(32px); border-top: 1px solid rgba(255,255,255,0.12); touch-action: pan-y;">
+      <div class="modal-handle" id="psihub-options-handle"></div>
+      <div class="modal-header" style="justify-content: flex-end;">
+        <button class="btn-modal-close" id="btn-close-psihub-options" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <div style="padding: 0 20px 30px; display: flex; flex-direction: column; gap: 12px;">
+        <button class="btn-cta-primary explore-action-read" id="btn-psihub-read-es" style="background: #fff; color: #000; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
+          <i class="ph-bold ph-translate"></i>
+          <span>Leer artículo en español</span>
+          <span id="btn-psihub-read-es-badge" style="display: none; font-size: 10px; padding: 2px 8px; border-radius: 100px; background: rgba(0,0,0,0.08); color: #16a34a; font-weight: 700;">Automático</span>
+        </button>
+        <button class="btn-cta-secondary" id="btn-psihub-summarize" type="button" style="opacity: 0.6; cursor: pointer; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <i class="ph-bold ph-magic-wand"></i> Resumir artículo (próximamente)
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- ══════════════════════════════════════
        MODAL MODO LECTURA (TRADUCCIÓN)
   ══════════════════════════════════════ -->
   <div class="reader-overlay hidden" id="reader-overlay">
     <div class="reader-modal" id="reader-modal">
+      <div class="reader-progress-bar"><div class="reader-progress-fill" id="reader-progress-fill"></div></div>
       <div class="reader-header">
         <button class="btn-reader-close" id="btn-reader-close" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
         <div class="reader-header-info">
-          <span class="reader-title-badge">Modo Lectura</span>
+          <span class="reader-title-badge"><i class="ph-fill ph-book-open"></i> Modo Lectura</span>
+        </div>
+        <div class="reader-header-actions">
+          <button class="btn-reader-tool" id="btn-reader-font-toggle" aria-label="Tamaño de texto" title="Tamaño de texto">
+            <i class="ph-bold ph-text-t"></i>
+          </button>
+          <button class="btn-reader-tool" id="btn-reader-copy-text" aria-label="Copiar texto" title="Copiar texto">
+            <i class="ph-bold ph-copy"></i>
+          </button>
         </div>
       </div>
       
-      <div class="reader-scroll">
+      <div class="reader-scroll" id="reader-scroll">
         <div class="reader-loading" id="reader-loading" style="display:none;">
-          <div class="spinner"></div>
-          <p>Traduciendo y procesando PDF...<br><small>Esto puede tardar unos segundos.</small></p>
+          <div class="reader-spinner-wrapper">
+            <div class="reader-spinner-circle"></div>
+          </div>
+          <p class="reader-loading-title">Traduciendo y adaptando PDF…</p>
+          <p class="reader-loading-desc">Procesando el artículo científico con IA</p>
         </div>
         
         <div class="reader-error" id="reader-error" style="display:none;">
-          <i class="ph-bold ph-warning-diamond"></i>
-          <p id="reader-error-msg">Error al traducir.</p>
+          <div class="reader-error-icon-wrap">
+            <i class="ph-bold ph-warning-diamond"></i>
+          </div>
+          <p id="reader-error-msg" class="reader-error-msg">Error al traducir.</p>
+          <div id="reader-upload-box" class="reader-upload-box">
+            <p id="reader-upload-desc" class="reader-upload-desc">
+              Si el servidor de la revista bloqueó la descarga directa, puedes subir el archivo PDF desde tu dispositivo:
+            </p>
+            <label class="btn-cta-primary reader-upload-btn" style="cursor: pointer;">
+              <i class="ph-bold ph-upload-simple"></i> Subir archivo PDF
+              <input type="file" id="reader-file-upload" accept=".pdf" style="display: none;">
+            </label>
+          </div>
         </div>
 
         <div class="reader-content" id="reader-content">
@@ -430,6 +581,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=15"></script>
+  <script type="module" src="app.js?v=22"></script>
 </body>
 </html>

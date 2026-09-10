@@ -6,10 +6,10 @@ const BASE = 'https://api.openalex.org/works';
 
 // Términos adicionales por subtipo para modificar la query
 const SUBTYPE_TERMS = {
-  all:       '',
-  teorico:   'theory theoretical framework conceptual epistemology review',
+  all: '',
+  teorico: 'theory theoretical framework conceptual epistemology review',
   evidencia: 'randomized controlled trial meta-analysis systematic review efficacy outcome empirical',
-  clinico:   'clinical case study psychotherapy intervention treatment patient counseling'
+  clinico: 'clinical case study psychotherapy intervention treatment patient counseling'
 };
 
 function getPoliteEmail() {
@@ -18,7 +18,7 @@ function getPoliteEmail() {
     if (userEmail && userEmail.includes('@')) return userEmail.trim();
     const saved = localStorage.getItem('psyhub_tr_email');
     if (saved && saved.includes('@')) return saved.trim();
-  } catch {}
+  } catch { }
   return 'psyhub.app.research@gmail.com';
 }
 
@@ -26,30 +26,33 @@ function getOpenAlexApiKey() {
   try {
     const key = localStorage.getItem('psyhub_openalex_api_key');
     if (key && key.trim()) return key.trim();
-  } catch {}
+  } catch { }
   return '';
 }
 
+// Eliminado blacklist y validaciones manuales.
+// Ahora se valida el PDF asincrónicamente contra el backend.
+
 // Mapeo inteligente para fallback en caso de que el cluster de búsqueda anónima de OpenAlex arroje 503
 const TOPIC_FALLBACKS = {
-  neuro:        'C169760540',
-  tcc:          'T10853',
-  cbt:          'T10853',
-  cognit:       'T10853',
-  conduct:      'T10853',
-  mindfulness:  'T10708',
-  act:          'T10708',
-  dbt:          'T10708',
-  tercera:      'T10708',
-  sistem:       'T14295',
-  familiar:     'T14295',
-  psicoan:      'T12889',
-  humanis:      'T10214',
-  gestalt:      'T10214',
-  existenc:     'T10214',
-  fenomen:      'T10214',
-  segunda:      'T10853',
-  default:      'T10214|T10853|T10708|T12889|T14295'
+  neuro: 'C169760540',
+  tcc: 'T10853',
+  cbt: 'T10853',
+  cognit: 'T10853',
+  conduct: 'T10853',
+  mindfulness: 'T10708',
+  act: 'T10708',
+  dbt: 'T10708',
+  tercera: 'T10708',
+  sistem: 'T14295',
+  familiar: 'T14295',
+  psicoan: 'T12889',
+  humanis: 'T10214',
+  gestalt: 'T10214',
+  existenc: 'T10214',
+  fenomen: 'T10214',
+  segunda: 'T10853',
+  default: 'T10214|T10853|T10708|T12889|T14295'
 };
 
 function getFallbackFilterForQuery(query) {
@@ -110,20 +113,20 @@ export function reconstructAbstract(invertedIndex) {
  * @param {AbortSignal} opts.signal - para cancelar peticiones obsoletas
  */
 export async function fetchPapers({
-  query    = 'psychotherapy',
-  subtype  = 'all',
-  sort     = null,
-  perPage  = 20,
-  page     = 1,
-  signal   = null
+  query = 'psychotherapy',
+  subtype = 'all',
+  sort = null,
+  perPage = 10,
+  page = 1,
+  signal = null
 } = {}) {
   const extras = SUBTYPE_TERMS[subtype] || '';
   const fullQuery = extras ? `${query} ${extras}` : query;
   const apiKey = getOpenAlexApiKey();
-  const email  = getPoliteEmail();
+  const email = getPoliteEmail();
 
   const params = new URLSearchParams({
-    filter:     'is_oa:true',
+    filter: 'is_oa:true',
     'per-page': perPage,
     page
   });
@@ -149,10 +152,10 @@ export async function fetchPapers({
     console.warn('[OpenAlex 503] Búsqueda anónima pausada por sobrecarga en OpenAlex. Activando fallback por topics/filtros...');
     const fallbackFilter = getFallbackFilterForQuery(query);
     const fallbackParams = new URLSearchParams({
-      filter:     `${fallbackFilter},is_oa:true`,
+      filter: `${fallbackFilter},is_oa:true`,
       'per-page': perPage,
       page,
-      sort:       sort || 'cited_by_count:desc'
+      sort: sort || 'cited_by_count:desc'
     });
     if (apiKey) fallbackParams.set('api_key', apiKey);
     else if (email) fallbackParams.set('mailto', email);
@@ -174,38 +177,39 @@ export async function fetchPapers({
 
   const results = data.results.map(w => {
     const abstract = reconstructAbstract(w.abstract_inverted_index);
-    const authors  = (w.authorships || []).map(a => a.author?.display_name).filter(Boolean);
-    const source   = w.primary_location?.source;
-    const oaUrl    = w.open_access?.oa_url || null;
+    const authors = (w.authorships || []).map(a => a.author?.display_name).filter(Boolean);
+    const source = w.primary_location?.source;
+    const oaUrl = w.open_access?.oa_url || null;
     const primaryTopic = w.primary_topic?.display_name;
-    const subfield     = w.primary_topic?.subfield?.display_name;
-    const topicList    = (w.topics || []).map(t => t.display_name);
-    const conceptList  = (w.concepts || []).filter(c => c.score > 0.35).map(c => c.display_name);
-    const topics       = Array.from(new Set([primaryTopic, subfield, ...topicList, ...conceptList].filter(Boolean)));
+    const subfield = w.primary_topic?.subfield?.display_name;
+    const topicList = (w.topics || []).map(t => t.display_name);
+    const conceptList = (w.concepts || []).filter(c => c.score > 0.35).map(c => c.display_name);
+    const topics = Array.from(new Set([primaryTopic, subfield, ...topicList, ...conceptList].filter(Boolean)));
 
     return {
-      id:            w.id,
-      doi:           w.doi || null,
-      title:         w.title || 'Sin título',
+      id: w.id,
+      doi: w.doi || null,
+      title: w.title || 'Sin título',
       authors,
       firstInstitution: w.authorships?.[0]?.institutions?.[0]?.display_name || null,
-      journal:       source?.display_name || null,
-      year:          w.publication_year || null,
-      isOa:          w.open_access?.is_oa ?? false,
+      journal: source?.display_name || null,
+      year: w.publication_year || null,
+      isOa: w.open_access?.is_oa ?? false,
       oaUrl,
-      citations:     w.cited_by_count ?? 0,
+      pdfUrl: w.primary_location?.pdf_url || w.best_oa_location?.pdf_url || (oaUrl && oaUrl.toLowerCase().endsWith('.pdf') ? oaUrl : null),
+      citations: w.cited_by_count ?? 0,
       abstract,
       topics,
-      type:          w.type || null,
-      mesh:          (w.mesh || []).map(m => `${m.descriptor_name || ''} ${m.qualifier_name || ''}`.trim()).filter(Boolean)
+      type: w.type || null,
+      mesh: (w.mesh || []).map(m => `${m.descriptor_name || ''} ${m.qualifier_name || ''}`.trim()).filter(Boolean)
     };
   });
 
   return {
     results,
     meta: {
-      count:   data.meta?.count ?? 0,
-      page:    data.meta?.page  ?? page,
+      count: data.meta?.count ?? 0,
+      page: data.meta?.page ?? page,
       perPage: data.meta?.per_page ?? perPage
     }
   };
@@ -218,6 +222,10 @@ export async function fetchPapers({
  */
 export async function fetchWorkById(id, signal = null) {
   if (!id) return null;
+  let cleanId = String(id).trim();
+  if (cleanId.startsWith('https://openalex.org/')) {
+    cleanId = cleanId.replace('https://openalex.org/', '');
+  }
   const email = getPoliteEmail();
   const apiKey = getOpenAlexApiKey();
   const params = new URLSearchParams();
@@ -228,29 +236,30 @@ export async function fetchWorkById(id, signal = null) {
   if (!res.ok) throw new Error(`OpenAlex ${res.status}: ${res.statusText}`);
   const w = await res.json();
   const abstract = reconstructAbstract(w.abstract_inverted_index);
-  const authors  = (w.authorships || []).map(a => a.author?.display_name).filter(Boolean);
-  const source   = w.primary_location?.source;
-  const oaUrl    = w.open_access?.oa_url || null;
+  const authors = (w.authorships || []).map(a => a.author?.display_name).filter(Boolean);
+  const source = w.primary_location?.source;
+  const oaUrl = w.open_access?.oa_url || null;
   const primaryTopic = w.primary_topic?.display_name;
-  const subfield     = w.primary_topic?.subfield?.display_name;
-  const topicList    = (w.topics || []).map(t => t.display_name);
-  const conceptList  = (w.concepts || []).filter(c => c.score > 0.35).map(c => c.display_name);
-  const topics       = Array.from(new Set([primaryTopic, subfield, ...topicList, ...conceptList].filter(Boolean)));
+  const subfield = w.primary_topic?.subfield?.display_name;
+  const topicList = (w.topics || []).map(t => t.display_name);
+  const conceptList = (w.concepts || []).filter(c => c.score > 0.35).map(c => c.display_name);
+  const topics = Array.from(new Set([primaryTopic, subfield, ...topicList, ...conceptList].filter(Boolean)));
 
   return {
-    id:               w.id,
-    doi:              w.doi || null,
-    title:            w.title || 'Sin título',
+    id: w.id,
+    doi: w.doi || null,
+    title: w.title || 'Sin título',
     authors,
     firstInstitution: w.authorships?.[0]?.institutions?.[0]?.display_name || null,
-    journal:          source?.display_name || null,
-    year:             w.publication_year || null,
-    isOa:             w.open_access?.is_oa ?? false,
+    journal: source?.display_name || null,
+    year: w.publication_year || null,
+    isOa: w.open_access?.is_oa ?? false,
     oaUrl,
-    citations:        w.cited_by_count ?? 0,
+    pdfUrl: w.primary_location?.pdf_url || w.best_oa_location?.pdf_url || (oaUrl && oaUrl.toLowerCase().endsWith('.pdf') ? oaUrl : null),
+    citations: w.cited_by_count ?? 0,
     abstract,
     topics,
-    type:             w.type || null,
-    mesh:             (w.mesh || []).map(m => `${m.descriptor_name || ''} ${m.qualifier_name || ''}`.trim()).filter(Boolean)
+    type: w.type || null,
+    mesh: (w.mesh || []).map(m => `${m.descriptor_name || ''} ${m.qualifier_name || ''}`.trim()).filter(Boolean)
   };
 }

@@ -7,8 +7,8 @@ Esta carpeta contiene todo el sistema que busca papers científicos automáticam
 ## 🧭 ¿Cómo funciona?
 
 1. **GitHub Actions** despierta una computadora en la nube todos los días a las 05:00 UTC (o cuando tú toques el botón "Run workflow").
-2. Consulta la API pública de **OpenAlex** y descarga los 10 papers más recientes y citados de 6 tópicos de psicología y neurociencias.
-3. Se conecta a **Groq (Llama 3.3 70B)** con tu API Key gratuita.
+2. Consulta la API pública de **OpenAlex** y descarga los 5 papers más recientes y citados de 18 tópicos de psicología clínica, cognitiva y emocional.
+3. Se conecta a **Groq (GPT-OSS 120B / 20B)** con tu API Key gratuita.
 4. Groq selecciona el paper más llamativo y redacta la "placa" en formato *snackable* (gancho, hallazgo, conclusión y links al paper).
 5. Se guarda en `data/stories.json` y se sube automáticamente a tu repositorio de GitHub.
 6. La app PsyHub lee ese archivo y muestra las historias actualizadas a todos los usuarios.

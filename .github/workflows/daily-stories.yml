@@ -25,7 +25,6 @@ jobs:
       - name: 🤖 Ejecutar script de curaduría con Groq y OpenAlex
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: 'llama-3.3-70b-versatile'
         run: |
           node automation/generate_stories.js
 

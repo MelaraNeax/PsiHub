@@ -5,3 +5,7 @@ dist/
 build/
 .DS_Store
 *.log
+.env
+hf-space/.env
+cache/
+hf-space/cache/
