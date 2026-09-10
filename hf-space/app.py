@@ -245,11 +245,11 @@ def replace_image_refs_with_base64(markdown: str, images: dict[str, str]) -> str
 # TRADUCCIÓN CON GEMINI FLASH
 # ══════════════════════════════════════════════════
 
-def chunk_markdown(markdown: str, max_chars: int = 15000) -> list[str]:
+def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
     """
-    Divide el Markdown en chunks muy grandes (~15000 caracteres, aprox 3000-4000 tokens).
-    Gemini 1.5 Flash soporta hasta 1M tokens de entrada, pero lo dividimos para asegurar
-    que la respuesta no supere el límite de salida (8192 tokens).
+    Divide el Markdown en chunks controlados (~12000 caracteres) respetando párrafos y páginas.
+    Esto garantiza que las primeras páginas (título, autores, abstract, introducción)
+    tengan su propio chunk y NUNCA sean omitidas ni resumidas por Gemini.
     """
     paragraphs = markdown.split('\n\n')
     chunks = []
@@ -263,8 +263,6 @@ def chunk_markdown(markdown: str, max_chars: int = 15000) -> list[str]:
 
         if len(current) + len(p) > max_chars and current:
             chunks.append(current.strip())
-            # Al iniciar un nuevo chunk, inyectar el último marcador de página
-            # para que la IA no pierda el contexto (sino asumirá la pág 1)
             current = f"<!-- PAGE:{last_seen_page} -->\n\n"
             
         current += p + "\n\n"
@@ -275,7 +273,7 @@ def chunk_markdown(markdown: str, max_chars: int = 15000) -> list[str]:
     return chunks
 
 
-async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models: list[str] | None = None, max_retries: int = 3) -> str:
+async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models: list[str] | None = None, max_retries: int = 3, chunk_num: int = 1, total_chunks: int = 1) -> str:
     """Traduce un bloque de Markdown usando Gemini, con timeout y reintentos en cascada entre varios modelos."""
     if not chunk or not chunk.strip():
         return ""
@@ -284,24 +282,23 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
         active_models = list(MODELS)
 
     system_instruction = (
-        "Eres un traductor académico experto. Traduce TODO el texto científico al español de forma fiel, rigurosa y fluida. No deben haber frases/parrafos enteros en inglés.\n\n"
-        "REGLAS CRÍTICAS DE LIMPIEZA Y FORMATO:\n"
-        "1. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, etc). NUNCA uses etiquetas literales como `[H1]`, `[H2]`, etc.\n"
-        "2. MARCADORES DE PÁGINA: El texto contiene marcadores ocultos `<!-- PAGE:X -->` que indican la página original del PDF.\n"
-        "3. SECCIONES A OMITIR (Referencias, Bibliografía, Agradecimientos): NO las traduzcas. Sustitúyelas por `[Ver sección en PDF original - pág. N](#page=N)` (reemplazando N por el número exacto del último marcador PAGE visto) y CONTINÚA traduciendo el resto del documento.\n"
-        "4. ARREGLA ERRORES DE OCR: Corrige consistencia en letras y mayúsculas en títulos. Elimina símbolos o letras rotas.\n"
-        "5. PRESERVA EXACTAMENTE las tablas e imágenes (las que queden en el texto) y sus enlaces en su posición original.\n"
-        "6. Al inicio, aclara título, autor, fecha (si incluye), revista (si incluye) y cualquier información relevante como presentación del documento, si un titulo se repite constantemente a lo largo del documento, solo aclaralo al inicio.\n"
-        "7. En cuanto a la calidad de redacción, asegurate de que el texto sea fluído y natural, evita repeticiones y redundancias, asegúrate de que el texto sea coherente y tenga sentido, corrige errores gramaticales y ortográficos.\n"
-        "8. Si encuentras tablas, asegurate de preservar el formato de tablas sin errores ni desorganización, mantenla humanamente legible.\n"
-        "NO resumas el contenido. NO agregues notas adicionales al inicio o final de tu respuesta."
+        "Eres un traductor académico profesional y exhaustivo. Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
+        "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
+        "1. INTEGRIDAD TOTAL (DESDE LA PÁGINA 1): Está TERMINANTEMENTE PROHIBIDO saltarse páginas, omitir la portada, obviar el título, autores, afiliaciones, abstract, resumen o introducción. Debes traducir ABSOLUTAMENTE TODO el contenido recibido desde el primer renglón.\n"
+        "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes. Traduce párrafo por párrafo manteniendo la estructura original íntegra.\n"
+        "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA uses etiquetas literales como `[H1]`, `[H2]`, etc.\n"
+        "4. MARCADORES DE PÁGINA: El texto contiene marcadores ocultos `<!-- PAGE:X -->`. Mantén estos marcadores en tu respuesta para conservar la referencia de página original.\n"
+        "5. SECCIÓN DE REFERENCIAS / BIBLIOGRAFÍA AL FINAL: Únicamente si encuentras la lista extensa de bibliografía/referencias al final del paper, sustitúyela por `[Ver referencias en PDF original - pág. N](#page=N)` y continúa con apéndices si los hay. TODO lo demás (texto, métodos, resultados, discusión) DEBE SER TRADUCIDO AL 100%.\n"
+        "6. TABLAS E IMÁGENES: Preserva exactamente todas las tablas (en formato markdown limpio), imágenes y sus enlaces en su posición original exacta.\n"
+        "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y coherente, corrigiendo posibles errores de OCR o caracteres rotos.\n"
+        "NO agregues prefacios, introducciones como 'Aquí está la traducción:' ni notas adicionales al final."
     )
 
     for attempt in range(1, max_retries + 1):
         models_to_try = list(active_models)
         for model_name in models_to_try:
             try:
-                print(f"      ↳ Intento {attempt}/{max_retries} usando [{model_name}]...", flush=True)
+                print(f"      ↳ [Chunk {chunk_num}/{total_chunks}] Intento {attempt}/{max_retries} usando [{model_name}]...", flush=True)
                 
                 response = await client.aio.models.generate_content(
                     model=model_name,
@@ -309,12 +306,10 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
                     config=types.GenerateContentConfig(
                         system_instruction=system_instruction,
                         temperature=0.1
-                        # Se eliminó thinking_config para evitar el Error 400 en modelos Flash
                     )
                 )
                 
                 if response.text and response.text.strip():
-                    # Si tuvo éxito, lo aseguramos al principio de la lista para el próximo chunk
                     if model_name in active_models:
                         active_models.remove(model_name)
                         active_models.insert(0, model_name)
@@ -326,7 +321,6 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
                 err_str = str(err).lower()
                 print(f"      [WARN] Error con {model_name}: {err}", flush=True)
                 
-                # Si el servidor rechaza la petición o da 504, lo movemos al final de la cola (menor prioridad)
                 if "504" in str(err) or "deadline" in err_str or "429" in str(err) or "resource_exhausted" in err_str or "rate" in err_str or "503" in str(err) or "400" in str(err):
                     print(f"      🔄 Cambiando al siguiente modelo... (Moviendo [{model_name}] al final de la cola)", flush=True)
                     if model_name in active_models:
@@ -334,12 +328,10 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
                         active_models.append(model_name)
                     continue
                 
-                # Para otros errores, también probamos el siguiente modelo
                 continue
                 
-        # Si todos los modelos de la lista fallaron en este intento, esperar antes de reiniciar el ciclo
-        wait = 20 * attempt
-        print(f"      ⏸ Todos los modelos fallaron. Esperando {wait}s antes del próximo intento general...", flush=True)
+        wait = 15 * attempt
+        print(f"      ⏸ Todos los modelos fallaron en intento {attempt}. Esperando {wait}s...", flush=True)
         await asyncio.sleep(wait)
 
     print("      [WARN] Todos los intentos fallaron; conservando original.", flush=True)
@@ -348,37 +340,42 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
 
 async def translate_full_markdown(markdown: str) -> str:
     """
-    Traduce el Markdown iterando secuencialmente sobre bloques grandes.
+    Traduce el Markdown iterando secuencialmente sobre bloques asegurando la totalidad del texto.
     """
     if not gemini_client:
         print("  [ERROR] No se encontró GEMINI_API_KEY o el cliente no se inicializó. Devolviendo texto original.")
         return markdown
 
-    # Usamos chunks enormes (25000 chars) porque Gemini Flash puede generar hasta 8192 tokens de salida.
-    # 25000 chars ~ 5000 tokens, por lo que entra perfectamente en el límite de salida sin cortarse.
-    # Esto reduce un paper de 96k chars a solo 4 peticiones en lugar de 26, evitando el Error 503 y bloqueos.
-    chunks = chunk_markdown(markdown, max_chars=25000)
+    # Chunks optimizados a 12000 caracteres: evita truncamientos y garantiza cobertura total desde la página 1
+    chunks = chunk_markdown(markdown, max_chars=12000)
     total_chunks = len(chunks)
     translated_chunks = []
 
-    # Copia local de los modelos disponibles para priorizarlos dinámicamente en este procesamiento
     active_models = list(MODELS)
 
-    print(f"\n  🚀 Iniciando traducción con sistema Multi-Modelo de Respaldo (total {total_chunks} fragmentos grandes)...", flush=True)
+    print(f"\n  🚀 Iniciando traducción exhaustiva (total {total_chunks} fragmentos)...", flush=True)
     t0 = time.time()
 
     for i, chunk in enumerate(chunks):
-        print(f"  ⏳ Procesando fragmento {i+1}/{total_chunks} ({len(chunk)} chars)...", flush=True)
+        # Detectar qué páginas abarca este fragmento para el log
+        page_matches = re.findall(r'<!-- PAGE:(\d+) -->', chunk)
+        pages_info = f"(Páginas: {', '.join(sorted(set(page_matches), key=int))})" if page_matches else ""
+        print(f"  ⏳ Procesando fragmento {i+1}/{total_chunks} {pages_info} ({len(chunk)} chars)...", flush=True)
         t_chunk = time.time()
         
-        translated_text = await translate_chunk_gemini(chunk, gemini_client, active_models=active_models)
+        translated_text = await translate_chunk_gemini(
+            chunk, 
+            gemini_client, 
+            active_models=active_models,
+            chunk_num=i+1,
+            total_chunks=total_chunks
+        )
         translated_chunks.append(translated_text)
         
         elapsed = round(time.time() - t_chunk, 1)
-        print(f"  ✓ Fragmento {i+1} completado en {elapsed}s.", flush=True)
+        print(f"  ✓ Fragmento {i+1}/{total_chunks} completado en {elapsed}s.", flush=True)
 
         if i < total_chunks - 1:
-            # Pausa para no saturar los límites gratuitos de Gemini (15 RPM)
             await asyncio.sleep(DELAY_BETWEEN_CHUNKS_SEC)
 
     elapsed_total = round(time.time() - t0, 1)
