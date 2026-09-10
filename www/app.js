@@ -448,6 +448,9 @@ function initDOMRefs() {
     readerFileUpload: $('reader-file-upload'),
     readerScroll: $('reader-scroll'),
     readerProgressFill: $('reader-progress-fill'),
+    readerLoadingBarFill: $('reader-loading-bar-fill'),
+    readerLoadingStep: $('reader-loading-step'),
+    readerLoadingPct: $('reader-loading-pct'),
     btnReaderFontToggle: $('btn-reader-font-toggle'),
     btnReaderCopyText: $('btn-reader-copy-text'),
   };
@@ -1528,6 +1531,89 @@ function renderReaderPaperContent(paper, markdown) {
   el.readerContent.innerHTML = heroHtml + rawHtml;
 }
 
+// ═══════════════════════════════════════════════════
+// CONTROL DE PROGRESO DE TRADUCCIÓN PDF (SOBRIO)
+// ═══════════════════════════════════════════════════
+
+let readerProgressTimer = null;
+let readerCurrentProgress = 0;
+
+function updateReaderProgressBar(pct, stepText) {
+  const rounded = Math.round(Math.min(100, Math.max(0, pct)));
+  if (el.readerLoadingBarFill) {
+    el.readerLoadingBarFill.style.width = `${rounded}%`;
+  }
+  if (el.readerProgressFill) {
+    el.readerProgressFill.style.width = `${rounded}%`;
+  }
+  if (el.readerLoadingPct) {
+    el.readerLoadingPct.textContent = `${rounded}%`;
+  }
+  if (el.readerLoadingStep && stepText) {
+    el.readerLoadingStep.textContent = stepText;
+  }
+}
+
+function startReaderLoadingProgress(isLocalFile = false) {
+  stopReaderLoadingProgress();
+  readerCurrentProgress = 0;
+  const initialStep = isLocalFile ? 'Subiendo y analizando archivo PDF…' : 'Descargando y analizando PDF…';
+  updateReaderProgressBar(4, initialStep);
+
+  const startTime = Date.now();
+
+  readerProgressTimer = setInterval(() => {
+    const elapsed = (Date.now() - startTime) / 1000;
+    let target = 0;
+    let stepText = '';
+
+    if (elapsed < 2.5) {
+      target = 6 + (elapsed / 2.5) * 20; // 6% -> 26%
+      stepText = isLocalFile ? 'Subiendo y analizando archivo PDF…' : 'Descargando y analizando PDF…';
+    } else if (elapsed < 6) {
+      target = 26 + ((elapsed - 2.5) / 3.5) * 24; // 26% -> 50%
+      stepText = 'Extrayendo texto y estructura…';
+    } else if (elapsed < 12) {
+      target = 50 + ((elapsed - 6) / 6) * 24; // 50% -> 74%
+      stepText = 'Traduciendo con IA especializada…';
+    } else if (elapsed < 18) {
+      target = 74 + ((elapsed - 12) / 6) * 15; // 74% -> 89%
+      stepText = 'Adaptando terminología científica…';
+    } else {
+      // Avanzar suavemente hacia el 94% mientras el servidor responde
+      const remaining = 95 - readerCurrentProgress;
+      target = readerCurrentProgress + Math.max(0.04, remaining * 0.04);
+      stepText = 'Finalizando formato de lectura…';
+    }
+
+    if (target > readerCurrentProgress) {
+      readerCurrentProgress = Math.min(94, readerCurrentProgress + (target - readerCurrentProgress) * 0.35);
+    }
+
+    updateReaderProgressBar(readerCurrentProgress, stepText);
+  }, 120);
+}
+
+async function finishReaderLoadingProgress() {
+  if (readerProgressTimer) {
+    clearInterval(readerProgressTimer);
+    readerProgressTimer = null;
+  }
+  updateReaderProgressBar(100, '¡Traducción completada!');
+  await new Promise(resolve => setTimeout(resolve, 240));
+}
+
+function stopReaderLoadingProgress() {
+  if (readerProgressTimer) {
+    clearInterval(readerProgressTimer);
+    readerProgressTimer = null;
+  }
+  readerCurrentProgress = 0;
+  if (el.readerLoadingBarFill) el.readerLoadingBarFill.style.width = '0%';
+  if (el.readerLoadingPct) el.readerLoadingPct.textContent = '0%';
+  if (el.readerLoadingStep) el.readerLoadingStep.textContent = 'Iniciando traducción…';
+}
+
 async function openReaderModal(paperUrl, paperId, paperObj) {
   const paper = paperObj || S.currentPaper;
   const effectiveId = paperId || paper?.id || paperUrl;
@@ -1566,6 +1652,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 
   // Si no está en memoria, iniciar la traducción del PDF de este paper
   el.readerLoading.style.display = 'flex';
+  startReaderLoadingProgress(false);
 
   try {
     const apiUrl = `${HF_SPACE_URL}/api/translate`;
@@ -1579,7 +1666,10 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     if (!res.ok) throw new Error(data.detail || data.error || 'Error desconocido del servidor');
 
     // Verificar que el usuario no haya salido o abierto otro paper mientras traducía
-    if (S.readerPaperId !== effectiveId) return;
+    if (S.readerPaperId !== effectiveId) {
+      stopReaderLoadingProgress();
+      return;
+    }
 
     // Almacenar en caché vinculado a este paper
     paperTranslations.set(effectiveId, data.markdown);
@@ -1589,10 +1679,16 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       updatePaperAutomaticBadges(paper);
     }
 
+    await finishReaderLoadingProgress();
+    if (S.readerPaperId !== effectiveId) return;
+
     el.readerLoading.style.display = 'none';
+    if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
     renderReaderPaperContent(paper, data.markdown);
 
   } catch (error) {
+    stopReaderLoadingProgress();
+    if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
     if (S.readerPaperId !== effectiveId) return;
     console.error('Translation error:', error);
     el.readerLoading.style.display = 'none';
@@ -1612,6 +1708,8 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 }
 
 function closeReaderModal() {
+  stopReaderLoadingProgress();
+  if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
   el.readerOverlay.classList.add('hidden');
   el.readerContent.innerHTML = '';
   S.readerPaperId = null;
@@ -1632,6 +1730,7 @@ async function handleReaderFileUpload(file) {
   S.readerPaperId = effectiveId;
 
   el.readerLoading.style.display = 'flex';
+  startReaderLoadingProgress(true);
   el.readerError.style.display = 'none';
   el.readerContent.innerHTML = '';
   if (el.readerScroll) el.readerScroll.scrollTop = 0;
@@ -1653,9 +1752,16 @@ async function handleReaderFileUpload(file) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || data.error || 'Error procesando el archivo PDF');
 
+    if (S.readerPaperId !== effectiveId) {
+      stopReaderLoadingProgress();
+      return;
+    }
+
+    await finishReaderLoadingProgress();
     if (S.readerPaperId !== effectiveId) return;
 
     el.readerLoading.style.display = 'none';
+    if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
     
     // Anclar a este paper
     paperTranslations.set(effectiveId, data.markdown);
@@ -1679,6 +1785,8 @@ async function handleReaderFileUpload(file) {
       el.readerContent.innerHTML = heroHtml + rawHtml;
     }
   } catch (err) {
+    stopReaderLoadingProgress();
+    if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
     if (S.readerPaperId !== effectiveId) return;
     console.error('File translation error:', err);
     el.readerLoading.style.display = 'none';

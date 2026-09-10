@@ -555,6 +555,16 @@
           </div>
           <p class="reader-loading-title">Traduciendo y adaptando PDF…</p>
           <p class="reader-loading-desc">Procesando el artículo científico con IA</p>
+
+          <div class="reader-loading-bar-wrap">
+            <div class="reader-loading-bar-track">
+              <div class="reader-loading-bar-fill" id="reader-loading-bar-fill"></div>
+            </div>
+            <div class="reader-loading-status">
+              <span class="reader-loading-step" id="reader-loading-step">Iniciando traducción…</span>
+              <span class="reader-loading-pct" id="reader-loading-pct">0%</span>
+            </div>
+          </div>
         </div>
         
         <div class="reader-error" id="reader-error" style="display:none;">
@@ -581,6 +591,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=22"></script>
+  <script type="module" src="app.js?v=23"></script>
 </body>
 </html>
