@@ -1977,7 +1977,6 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     if (uploadDesc) {
       uploadDesc.innerHTML = 'El servidor de la revista bloqueó la descarga automática directa del PDF.<br><br>Puedes descargar el PDF manualmente y adjuntarlo aquí para traducirlo:';
     }
-    }
 
     el.readerErrorMsg.innerHTML = error.message || 'Error al traducir el artículo.';
   }
