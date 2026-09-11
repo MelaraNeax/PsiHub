@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -14,11 +15,13 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
+    rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
   <link rel="stylesheet" href="style.css?v=20">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
+
 <body>
 
   <!-- ══════════════════════════════════════
@@ -30,10 +33,12 @@
     <header class="home-header">
       <div class="home-header-top">
         <h1 class="app-title" id="home-app-title">Psi-hub</h1>
-        
+
         <div class="search-inline-wrapper" id="search-inline-wrapper">
-          <input type="search" id="search-input" class="search-inline-input" placeholder="Buscar papers..." autocomplete="off" enterkeyhint="search">
-          <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i class="ph-bold ph-x"></i></button>
+          <input type="search" id="search-input" class="search-inline-input" placeholder="Buscar papers..."
+            autocomplete="off" enterkeyhint="search">
+          <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i
+              class="ph-bold ph-x"></i></button>
           <button class="icon-btn search-inline-trigger" id="btn-search-open" aria-label="Buscar">
             <i class="ph-bold ph-magnifying-glass"></i>
           </button>
@@ -79,7 +84,7 @@
     <div class="results-bg-glow explore-bg-glow" id="explore-bg-glow"></div>
 
     <div class="explore-story-container" id="explore-story-container">
-      
+
       <!-- Barras de progreso segmentadas arriba -->
       <div class="story-progress-bar" id="story-progress-bar">
         <!-- 6 barras generadas dinámicamente -->
@@ -92,7 +97,7 @@
       <!-- Placa Central: Minimalista -->
       <div class="explore-story-body">
         <div class="explore-glass-card" id="explore-story-card">
-          
+
           <!-- Tags arriba -->
           <div class="explore-tags-row" id="explore-tags-row" style="margin-bottom: 16px;"></div>
 
@@ -108,11 +113,13 @@
 
           <!-- Takeaway opcional -->
           <div class="explore-takeaway-box" id="explore-takeaway-box" style="display:none; margin-top: 16px;">
-            <p class="explore-takeaway-text" id="explore-takeaway-text" style="color: var(--txt-2); font-size: 14px; font-style: italic;"></p>
+            <p class="explore-takeaway-text" id="explore-takeaway-text"
+              style="color: var(--txt-2); font-size: 14px; font-style: italic;"></p>
           </div>
 
           <!-- Metadatos del Paper -->
-          <div class="explore-meta-row" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: var(--txt-3); display: flex; flex-direction: column; gap: 6px;">
+          <div class="explore-meta-row"
+            style="margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: var(--txt-3); display: flex; flex-direction: column; gap: 6px;">
             <span id="explore-journal-cite"><i class="ph-bold ph-book"></i> Journal</span>
             <span style="display:flex; gap:12px;">
               <span id="explore-year"><i class="ph-bold ph-calendar-blank"></i> 2024</span>
@@ -200,10 +207,14 @@
           <div class="auth-card-header">
             <div class="google-badge-icon">
               <svg width="22" height="22" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"/>
-                <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                <path fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
+                <path fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+                <path fill="#FBBC05"
+                  d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+                <path fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
               </svg>
             </div>
             <div class="auth-card-meta">
@@ -216,10 +227,14 @@
           </p>
           <button class="btn-google-login" id="btn-google-login">
             <svg width="18" height="18" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-              <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"/>
-              <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-              <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+              <path fill="#4285F4"
+                d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
+              <path fill="#34A853"
+                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+              <path fill="#FBBC05"
+                d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+              <path fill="#EA4335"
+                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
             </svg>
             <span>Continuar con Google</span>
           </button>
@@ -229,10 +244,14 @@
           <div class="connected-user-row">
             <div class="google-badge-icon">
               <svg width="20" height="20" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"/>
-                <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                <path fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
+                <path fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+                <path fill="#FBBC05"
+                  d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+                <path fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
               </svg>
             </div>
             <div class="connected-info">
@@ -276,11 +295,13 @@
     </header>
 
     <div class="page-scroll profile-scroll">
-      
+
       <!-- Botón para abrir Guardados -->
       <div class="profile-card library-action-card" id="library-saved-card">
-        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;" id="library-saved-header">
-          <div class="google-badge-icon" style="color: var(--green); background: rgba(29, 185, 84, 0.1); border-color: rgba(29, 185, 84, 0.2);">
+        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;"
+          id="library-saved-header">
+          <div class="google-badge-icon"
+            style="color: var(--green); background: rgba(29, 185, 84, 0.1); border-color: rgba(29, 185, 84, 0.2);">
             <i class="ph-bold ph-bookmark-simple" style="font-size: 20px;"></i>
           </div>
           <div class="auth-card-meta">
@@ -291,8 +312,9 @@
             <i class="ph-bold ph-caret-down" id="icon-toggle-saved"></i>
           </button>
         </div>
-        
-        <div class="library-saved-container" id="library-saved-container" style="display: none; margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
+
+        <div class="library-saved-container" id="library-saved-container"
+          style="display: none; margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
           <!-- Artículos guardados -->
           <section class="section profile-section" id="section-saved" style="display:none; padding: 0;">
             <div class="saved-section-header" style="margin-bottom: 12px;">
@@ -305,7 +327,8 @@
           <div class="profile-empty-saved" id="profile-empty-saved" style="padding: 20px 0;">
             <div class="empty-icon-wrap"><i class="ph-bold ph-bookmark-simple"></i></div>
             <p class="empty-title" style="font-size: 14px;">Sin artículos guardados</p>
-            <p class="empty-subtitle">Guardá artículos desde el inicio o resultados para consultarlos aquí sin conexión.</p>
+            <p class="empty-subtitle">Guardá artículos desde el inicio o resultados para consultarlos aquí sin conexión.
+            </p>
           </div>
         </div>
       </div>
@@ -313,7 +336,8 @@
       <!-- Tarjeta de Modo Lector -->
       <div class="profile-card library-action-card" id="library-reader-card">
         <div class="library-card-header" style="display: flex; align-items: center; gap: 14px;">
-          <div class="google-badge-icon" style="color: #4e9ef7; background: rgba(78, 158, 247, 0.1); border-color: rgba(78, 158, 247, 0.2);">
+          <div class="google-badge-icon"
+            style="color: #4e9ef7; background: rgba(78, 158, 247, 0.1); border-color: rgba(78, 158, 247, 0.2);">
             <i class="ph-bold ph-file-pdf" style="font-size: 20px;"></i>
           </div>
           <div class="auth-card-meta">
@@ -324,10 +348,46 @@
         <p class="auth-card-desc" style="margin: 12px 0 16px;">
           Sube un archivo PDF para extraer el texto y traducirlo al instante de forma automática.
         </p>
-        <label class="btn-google-login" style="cursor: pointer; background: rgba(255,255,255,0.1); color: var(--txt); border: 1px solid rgba(255,255,255,0.15); font-weight: 600;">
+        <label class="btn-google-login"
+          style="cursor: pointer; background: rgba(255,255,255,0.1); color: var(--txt); border: 1px solid rgba(255,255,255,0.15); font-weight: 600;">
           <i class="ph-bold ph-upload-simple" style="font-size: 18px; margin-right: 4px;"></i> Subir archivo PDF
           <input type="file" id="library-file-upload" accept=".pdf" style="display: none;">
         </label>
+      </div>
+
+      <!-- Artículos en la app (Procesados) -->
+      <div class="profile-card library-action-card" id="library-processed-card">
+        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;"
+          id="library-processed-header">
+          <div class="google-badge-icon"
+            style="color: var(--purple); background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.2);">
+            <i class="ph-bold ph-hard-drives" style="font-size: 20px;"></i>
+          </div>
+          <div class="auth-card-meta">
+            <h3 class="auth-card-title">Artículos en la app</h3>
+            <p class="auth-card-subtitle">Documentos procesados y cacheados</p>
+          </div>
+          <button class="btn-modal-close" style="background: rgba(255,255,255,0.05); pointer-events: none;">
+            <i class="ph-bold ph-caret-down" id="icon-toggle-processed"></i>
+          </button>
+        </div>
+
+        <div class="library-processed-container" id="library-processed-container"
+          style="display: none; margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
+          <section class="section profile-section" id="section-processed" style="display:none; padding: 0;">
+            <div class="saved-section-header" style="margin-bottom: 12px;">
+              <h3 class="subsection-title" style="margin-bottom:0; font-size: 14px;">Historial local</h3>
+              <button class="btn-clear-saved-text" id="btn-clear-all-processed">Vaciar</button>
+            </div>
+            <ul class="saved-list paper-list" id="processed-list"></ul>
+          </section>
+
+          <div class="profile-empty-saved" id="profile-empty-processed" style="padding: 20px 0;">
+            <div class="empty-icon-wrap"><i class="ph-bold ph-clock-counter-clockwise"></i></div>
+            <p class="empty-title" style="font-size: 14px;">Sin artículos procesados</p>
+            <p class="empty-subtitle">Los PDFs que traduzcas aparecerán aquí para acceso rápido.</p>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -338,12 +398,14 @@
   ══════════════════════════════════════ -->
   <div class="page hidden" id="page-search">
     <div class="results-bg-glow" id="results-bg-glow"></div>
-    
+
     <header class="home-header">
       <div class="home-header-top" style="gap: 12px; margin-bottom: 8px;">
         <div class="search-inline-wrapper active" id="search-page-wrapper" style="width: 100%; display: flex;">
-          <input type="search" id="search-page-input" class="search-inline-input" placeholder="Buscar papers..." autocomplete="off" enterkeyhint="search" style="opacity: 1; padding: 0 6px 0 14px;">
-          <button class="btn-clear-search" id="btn-clear-search-page" style="display:none;"><i class="ph-bold ph-x"></i></button>
+          <input type="search" id="search-page-input" class="search-inline-input" placeholder="Buscar papers..."
+            autocomplete="off" enterkeyhint="search" style="opacity: 1; padding: 0 6px 0 14px;">
+          <button class="btn-clear-search" id="btn-clear-search-page" style="display:none;"><i
+              class="ph-bold ph-x"></i></button>
           <button class="icon-btn search-inline-trigger" id="btn-do-search-page" aria-label="Buscar">
             <i class="ph-bold ph-magnifying-glass"></i>
           </button>
@@ -379,7 +441,7 @@
     </div>
 
     <div class="page-scroll results-scroll" id="search-results-scroll">
-      
+
       <!-- Búsqueda inicial vacía -->
       <div class="search-initial-box" id="search-initial" style="display:flex;">
         <div class="search-initial-icon-wrap">
@@ -480,24 +542,34 @@
       <div class="google-modal-header">
         <div class="google-badge-icon large">
           <svg width="26" height="26" viewBox="0 0 24 24">
-            <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-            <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"/>
-            <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-            <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+            <path fill="#4285F4"
+              d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
+            <path fill="#34A853"
+              d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+            <path fill="#FBBC05"
+              d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+            <path fill="#EA4335"
+              d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
           </svg>
         </div>
         <button class="btn-modal-close" id="btn-close-google-modal"><i class="ph-bold ph-x"></i></button>
       </div>
       <h3 class="google-modal-title">Iniciar sesión con Google</h3>
-      <p class="google-modal-desc">Ingresá tu correo de Google para asociarlo a Pshi-Hub y optimizar tus búsquedas en OpenAlex.</p>
-      
+      <p class="google-modal-desc">Ingresá tu correo de Google para asociarlo a Pshi-Hub y optimizar tus búsquedas en
+        OpenAlex.</p>
+
       <form id="google-login-form" class="google-modal-form">
         <div class="profile-input-group" style="margin-bottom: 12px;">
-          <label for="google-input-email" style="font-size:12px; color:var(--txt-3); text-transform:uppercase; font-weight:600;">Correo de Google</label>
-          <input class="profile-input" id="google-input-email" type="email" placeholder="ejemplo@gmail.com" required autocomplete="email">
+          <label for="google-input-email"
+            style="font-size:12px; color:var(--txt-3); text-transform:uppercase; font-weight:600;">Correo de
+            Google</label>
+          <input class="profile-input" id="google-input-email" type="email" placeholder="ejemplo@gmail.com" required
+            autocomplete="email">
         </div>
         <div class="profile-input-group" style="margin-bottom: 16px;">
-          <label for="google-input-name" style="font-size:12px; color:var(--txt-3); text-transform:uppercase; font-weight:600;">Nombre completo (opcional)</label>
+          <label for="google-input-name"
+            style="font-size:12px; color:var(--txt-3); text-transform:uppercase; font-weight:600;">Nombre completo
+            (opcional)</label>
           <input class="profile-input" id="google-input-name" type="text" placeholder="Tu nombre" maxlength="40">
         </div>
         <button type="submit" class="btn-google-confirm" id="btn-google-confirm">
@@ -509,18 +581,23 @@
 
   <!-- Modal Opciones PsiHub -->
   <div class="modal-overlay hidden" id="psihub-options-overlay" style="z-index: 1500;">
-    <div class="modal-sheet" id="psihub-options-sheet" style="background: rgba(13, 13, 16, 0.94); backdrop-filter: blur(32px); -webkit-backdrop-filter: blur(32px); border-top: 1px solid rgba(255,255,255,0.12); touch-action: pan-y;">
+    <div class="modal-sheet" id="psihub-options-sheet"
+      style="background: rgba(13, 13, 16, 0.94); backdrop-filter: blur(32px); -webkit-backdrop-filter: blur(32px); border-top: 1px solid rgba(255,255,255,0.12); touch-action: pan-y;">
       <div class="modal-handle" id="psihub-options-handle"></div>
       <div class="modal-header" style="justify-content: flex-end;">
-        <button class="btn-modal-close" id="btn-close-psihub-options" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+        <button class="btn-modal-close" id="btn-close-psihub-options" aria-label="Cerrar"><i
+            class="ph-bold ph-x"></i></button>
       </div>
       <div style="padding: 0 20px 30px; display: flex; flex-direction: column; gap: 12px;">
-        <button class="btn-cta-primary explore-action-read" id="btn-psihub-read-es" style="background: #fff; color: #000; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
+        <button class="btn-cta-primary explore-action-read" id="btn-psihub-read-es"
+          style="background: #fff; color: #000; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
           <i class="ph-bold ph-translate"></i>
           <span>Leer artículo en español</span>
-          <span id="btn-psihub-read-es-badge" style="display: none; font-size: 10px; padding: 2px 8px; border-radius: 100px; background: rgba(0,0,0,0.08); color: #16a34a; font-weight: 700;">Automático</span>
+          <span id="btn-psihub-read-es-badge"
+            style="display: none; font-size: 10px; padding: 2px 8px; border-radius: 100px; background: rgba(0,0,0,0.08); color: #16a34a; font-weight: 700;">Automático</span>
         </button>
-        <button class="btn-cta-secondary" id="btn-psihub-summarize" type="button" style="opacity: 0.6; cursor: pointer; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <button class="btn-cta-secondary" id="btn-psihub-summarize" type="button"
+          style="opacity: 0.6; cursor: pointer; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px;">
           <i class="ph-bold ph-magic-wand"></i> Resumir artículo (próximamente)
         </button>
       </div>
@@ -532,14 +609,20 @@
   ══════════════════════════════════════ -->
   <div class="reader-overlay hidden" id="reader-overlay">
     <div class="reader-modal" id="reader-modal">
-      <div class="reader-progress-bar"><div class="reader-progress-fill" id="reader-progress-fill"></div></div>
+      <div class="reader-progress-bar">
+        <div class="reader-progress-fill" id="reader-progress-fill"></div>
+      </div>
       <div class="reader-header">
         <button class="btn-reader-close" id="btn-reader-close" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
         <div class="reader-header-info">
           <span class="reader-title-badge"><i class="ph-fill ph-book-open"></i> Modo Lectura</span>
         </div>
         <div class="reader-header-actions">
-          <button class="btn-reader-tool" id="btn-reader-font-toggle" aria-label="Tamaño de texto" title="Tamaño de texto">
+          <button class="btn-reader-tool" id="btn-reader-view-pdf" aria-label="Ver PDF" title="Ver PDF original" style="display: none;">
+            <i class="ph-bold ph-file-pdf"></i>
+          </button>
+          <button class="btn-reader-tool" id="btn-reader-font-toggle" aria-label="Tamaño de texto"
+            title="Tamaño de texto">
             <i class="ph-bold ph-text-t"></i>
           </button>
           <button class="btn-reader-tool" id="btn-reader-copy-text" aria-label="Copiar texto" title="Copiar texto">
@@ -547,7 +630,7 @@
           </button>
         </div>
       </div>
-      
+
       <div class="reader-scroll" id="reader-scroll">
         <div class="reader-loading" id="reader-loading" style="display:none;">
           <div class="reader-spinner-wrapper">
@@ -561,12 +644,13 @@
               <div class="reader-loading-bar-fill" id="reader-loading-bar-fill"></div>
             </div>
             <div class="reader-loading-status">
-              <span class="reader-loading-step" id="reader-loading-step"><span class="reader-step-dot"></span> <span id="reader-loading-step-text">Iniciando traducción…</span></span>
+              <span class="reader-loading-step" id="reader-loading-step"><span class="reader-step-dot"></span> <span
+                  id="reader-loading-step-text">Iniciando traducción…</span></span>
               <span class="reader-loading-pct" id="reader-loading-pct">0%</span>
             </div>
           </div>
         </div>
-        
+
         <div class="reader-error" id="reader-error" style="display:none;">
           <div class="reader-error-icon-wrap">
             <i class="ph-bold ph-warning-diamond"></i>
@@ -574,7 +658,8 @@
           <p id="reader-error-msg" class="reader-error-msg">Error al traducir.</p>
           <div id="reader-upload-box" class="reader-upload-box">
             <p id="reader-upload-desc" class="reader-upload-desc">
-              Si el servidor de la revista bloqueó la descarga directa, puedes subir el archivo PDF desde tu dispositivo:
+              Si el servidor de la revista bloqueó la descarga directa, puedes subir el archivo PDF desde tu
+              dispositivo:
             </p>
             <label class="btn-cta-primary reader-upload-btn" style="cursor: pointer;">
               <i class="ph-bold ph-upload-simple"></i> Subir archivo PDF
@@ -590,7 +675,25 @@
     </div>
   </div>
 
+  <!-- Visor PDF Pantalla Completa -->
+  <div class="pdf-viewer-overlay hidden" id="pdf-viewer-overlay">
+    <div class="pdf-viewer-header">
+      <button class="pdf-viewer-btn-back" id="btn-close-pdf-viewer" aria-label="Volver a la lectura">
+        <i class="ph-bold ph-arrow-left"></i>
+        <span>Volver a la lectura</span>
+      </button>
+      <h3 class="pdf-viewer-title" id="pdf-viewer-title">Visualizador PDF</h3>
+      <div class="pdf-viewer-actions">
+        <a class="pdf-viewer-btn-tool" id="btn-pdf-external" target="_blank" rel="noopener" title="Abrir en pestaña nueva" aria-label="Abrir en pestaña nueva">
+          <i class="ph-bold ph-arrow-square-out"></i>
+        </a>
+      </div>
+    </div>
+    <iframe id="pdf-viewer-iframe" class="pdf-viewer-iframe" title="Visor PDF"></iframe>
+  </div>
+
   <div class="toast" id="toast"></div>
   <script type="module" src="app.js?v=24"></script>
 </body>
+
 </html>

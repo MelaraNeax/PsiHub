@@ -454,6 +454,7 @@ function initDOMRefs() {
     readerLoadingPct: $('reader-loading-pct'),
     btnReaderFontToggle: $('btn-reader-font-toggle'),
     btnReaderCopyText: $('btn-reader-copy-text'),
+    btnReaderViewPdf: $('btn-reader-view-pdf'),
   };
 }
 
@@ -1558,6 +1559,9 @@ function renderReaderPaperContent(paper, markdown) {
   }
   el.readerContent.innerHTML = heroHtml + rawHtml;
   postProcessReaderContent();
+  if (el.btnReaderViewPdf) {
+    el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+  }
 }
 
 // ═══════════════════════════════════════════════════
@@ -1654,6 +1658,10 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 
   // Anclar el visor estrictamente a este paper en específico
   S.readerPaperId = effectiveId;
+  S.readerPdfUrl = paperUrl || paper?.pdfUrl || paper?.oaUrl || null;
+  if (el.btnReaderViewPdf) {
+    el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+  }
 
   // Pausar historias si se ve desde explore
   if (!el.pageExplore.classList.contains('hidden') && !S.storyPaused) {
@@ -1661,6 +1669,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   }
 
   el.readerOverlay.classList.remove('hidden');
+  if (el.readerModal) el.readerModal.classList.remove('slide-left');
   document.body.style.overflow = 'hidden';
 
   // Reset scroll y progreso
@@ -1675,6 +1684,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   const cachedMarkdown = paperTranslations.get(effectiveId) || paper?.translatedMarkdown;
   if (cachedMarkdown) {
     el.readerLoading.style.display = 'none';
+    if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
     renderReaderPaperContent(paper, cachedMarkdown);
     return;
   }
@@ -1698,6 +1708,11 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     if (S.readerPaperId !== effectiveId) {
       stopReaderLoadingProgress();
       return;
+    }
+
+    if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
+    if (el.btnReaderViewPdf) {
+      el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
     }
 
     // Almacenar en caché vinculado a este paper
@@ -1740,11 +1755,19 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 }
 
 function closeReaderModal() {
+  if (typeof closeInternalPdfViewer === 'function') {
+    closeInternalPdfViewer();
+  }
   stopReaderLoadingProgress();
   if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
   el.readerOverlay.classList.add('hidden');
+  if (el.readerModal) el.readerModal.classList.remove('slide-left');
   el.readerContent.innerHTML = '';
   S.readerPaperId = null;
+  S.readerPdfUrl = null;
+  if (el.btnReaderViewPdf) {
+    el.btnReaderViewPdf.style.display = 'none';
+  }
   // Solo restaurar scroll si el modal del paper no está abierto debajo
   if (el.modalOverlay.classList.contains('hidden')) {
     document.body.style.overflow = '';
@@ -1798,6 +1821,8 @@ async function handleReaderFileUpload(file) {
     // Anclar a este paper
     paperTranslations.set(effectiveId, data.markdown);
     if (paper) paper.translatedMarkdown = data.markdown;
+    if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
+    if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
 
     if (typeof saveProcessedArticle === 'function') {
       const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
@@ -2335,6 +2360,15 @@ function setupEventListeners() {
       const img = e.target.closest('img');
       if (img) {
         img.classList.toggle('reader-img-expanded');
+      }
+    });
+  }
+  if (el.btnReaderViewPdf) {
+    el.btnReaderViewPdf.addEventListener('click', () => {
+      if (S.readerPdfUrl) {
+        openInternalPdfViewer(S.readerPdfUrl);
+      } else {
+        showToast('PDF no disponible para este documento');
       }
     });
   }
@@ -3203,16 +3237,56 @@ function refreshProcessedArticles() {
 }
 
 function openInternalPdfViewer(url) {
+  if (!url) return;
   let fullUrl = url;
   if (url.startsWith('/files/')) {
     fullUrl = HF_SPACE_URL + url;
   }
   const overlay = document.getElementById('pdf-viewer-overlay');
   const iframe = document.getElementById('pdf-viewer-iframe');
+  const readerModal = document.getElementById('reader-modal');
+  const externalBtn = document.getElementById('btn-pdf-external');
+  const titleEl = document.getElementById('pdf-viewer-title');
+
   if (overlay && iframe) {
     iframe.src = fullUrl;
+    if (externalBtn) externalBtn.href = fullUrl;
+
+    const matchPage = fullUrl.match(/#page=(\d+)/);
+    if (titleEl) {
+      titleEl.textContent = matchPage ? `Visualizador PDF — Pág. ${matchPage[1]}` : 'Visualizador PDF';
+    }
+
+    // Deslizar el Modo Lectura hacia la izquierda
+    if (readerModal) {
+      readerModal.classList.add('slide-left');
+    }
+
     overlay.classList.remove('hidden');
+    // Forzar reflow para animación CSS fluida
+    void overlay.offsetWidth;
+    overlay.classList.add('pdf-slide-active');
   }
+}
+
+function closeInternalPdfViewer() {
+  const overlay = document.getElementById('pdf-viewer-overlay');
+  const iframe = document.getElementById('pdf-viewer-iframe');
+  const readerModal = document.getElementById('reader-modal');
+
+  if (overlay) {
+    overlay.classList.remove('pdf-slide-active');
+  }
+  if (readerModal) {
+    readerModal.classList.remove('slide-left');
+  }
+
+  setTimeout(() => {
+    if (overlay && !overlay.classList.contains('pdf-slide-active')) {
+      overlay.classList.add('hidden');
+      if (iframe) iframe.src = '';
+    }
+  }, 360);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -3244,12 +3318,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnClosePdf = document.getElementById('btn-close-pdf-viewer');
   if (btnClosePdf) {
-    btnClosePdf.addEventListener('click', () => {
-      const overlay = document.getElementById('pdf-viewer-overlay');
-      const iframe = document.getElementById('pdf-viewer-iframe');
-      if (overlay) overlay.classList.add('hidden');
-      if (iframe) iframe.src = '';
-    });
+    btnClosePdf.addEventListener('click', closeInternalPdfViewer);
   }
   
   const readerContentArea = document.getElementById('reader-content');

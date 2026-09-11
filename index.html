@@ -618,6 +618,9 @@
           <span class="reader-title-badge"><i class="ph-fill ph-book-open"></i> Modo Lectura</span>
         </div>
         <div class="reader-header-actions">
+          <button class="btn-reader-tool" id="btn-reader-view-pdf" aria-label="Ver PDF" title="Ver PDF original" style="display: none;">
+            <i class="ph-bold ph-file-pdf"></i>
+          </button>
           <button class="btn-reader-tool" id="btn-reader-font-toggle" aria-label="Tamaño de texto"
             title="Tamaño de texto">
             <i class="ph-bold ph-text-t"></i>
@@ -672,15 +675,21 @@
     </div>
   </div>
 
-  <!-- Modal PDF Viewer -->
-  <div class="modal-overlay hidden" id="pdf-viewer-overlay" style="z-index: 2000;">
-    <div class="modal-sheet" style="height: 90vh; display:flex; flex-direction:column; background: #fff; border-radius: 20px 20px 0 0; padding-top: 10px;">
-      <div class="modal-header" style="justify-content: space-between; background:#fff; padding: 10px 20px; border-bottom: 1px solid #ddd; color: #000;">
-        <h3 style="margin:0; font-size:16px; font-weight:600; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Visualizador PDF</h3>
-        <button class="btn-modal-close" id="btn-close-pdf-viewer" style="background:#f1f1f1; color:#000;"><i class="ph-bold ph-x"></i></button>
+  <!-- Visor PDF Pantalla Completa -->
+  <div class="pdf-viewer-overlay hidden" id="pdf-viewer-overlay">
+    <div class="pdf-viewer-header">
+      <button class="pdf-viewer-btn-back" id="btn-close-pdf-viewer" aria-label="Volver a la lectura">
+        <i class="ph-bold ph-arrow-left"></i>
+        <span>Volver a la lectura</span>
+      </button>
+      <h3 class="pdf-viewer-title" id="pdf-viewer-title">Visualizador PDF</h3>
+      <div class="pdf-viewer-actions">
+        <a class="pdf-viewer-btn-tool" id="btn-pdf-external" target="_blank" rel="noopener" title="Abrir en pestaña nueva" aria-label="Abrir en pestaña nueva">
+          <i class="ph-bold ph-arrow-square-out"></i>
+        </a>
       </div>
-      <iframe id="pdf-viewer-iframe" style="flex:1; width:100%; border:none; background:#eee;"></iframe>
     </div>
+    <iframe id="pdf-viewer-iframe" class="pdf-viewer-iframe" title="Visor PDF"></iframe>
   </div>
 
   <div class="toast" id="toast"></div>

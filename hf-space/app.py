@@ -490,8 +490,19 @@ async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
 
 def preprocess_raw_markdown(md_text: str) -> str:
     """Aplica expresiones regulares para limpiar ruido del PDF antes de traducir."""
+    # 1. Eliminar números de página flotantes aislados
     md_text = re.sub(r'(?m)^\s*\d+\s*$\n?', '', md_text)
-    md_text = re.sub(r'(\w+)-\n(\w+)', r'\1\2', md_text)
+    
+    # 2. Unir palabras separadas por guión de fin de línea (incluso con saltos dobles)
+    md_text = re.sub(r'(\w+)-\s*\n+\s*(\w+)', r'\1\2', md_text)
+    
+    # 3. Unir paréntesis cortados antes de una minúscula
+    md_text = re.sub(r'(\()\s*\n+\s*([a-záéíóúñ])', r'\1\2', md_text)
+    
+    # 4. Unir oraciones cortadas donde la siguiente línea empieza en minúscula
+    md_text = re.sub(r'([a-záéíóúñA-ZÁÉÍÓÚÑ,0-9])\s*\n+\s*([a-záéíóúñ])', r'\1 \2', md_text)
+    
+    # 5. Reducir saltos de línea excesivos
     md_text = re.sub(r'\n{3,}', '\n\n', md_text)
     return md_text
 
@@ -543,9 +554,9 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
     final_pdf_url = source_url if (source_url and source_url.startswith("http")) else f"/files/{file_id}.pdf"
     final_markdown = final_markdown.replace("](#page=", f"]({final_pdf_url}#page=")
 
-    # 6. Convertir los enlaces #page= a etiquetas HTML para el visualizador interno
+    # 6. Convertir los enlaces al PDF / #page= a etiquetas HTML para el visualizador interno
     final_markdown = re.sub(
-        r'\[([^\]]+)\]\(([^)]+#page=\d+)\)',
+        r'\[([^\]]+)\]\(([^)]*(?:\.pdf(?:#[^)]*)?|#page=\d+))\)',
         r'<a href="#" class="internal-pdf-link" data-url="\2">\1</a>',
         final_markdown
     )
