@@ -1833,37 +1833,121 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   el.readerLoading.style.display = 'flex';
   startReaderLoadingProgress(false);
 
-  try {
-    const apiUrl = `${HF_SPACE_URL}/api/translate`;
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
-    });
-    const data = await res.json();
+  if (activeTranslations.has(effectiveId)) {
+    try {
+      const data = await activeTranslations.get(effectiveId);
+      
+      // GUARDAR SIEMPRE EN MEMORIA AUNQUE EL USUARIO HAYA SALIDO
+      paperTranslations.set(effectiveId, data.markdown);
+      if (paper) paper.translatedMarkdown = data.markdown;
+      if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
+      
+      if (typeof saveProcessedArticle === 'function') {
+        saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper);
+      }
 
-    if (!res.ok) throw new Error(data.detail || data.error || 'Error desconocido del servidor');
+      if (S.readerPaperId !== effectiveId) {
+        stopReaderLoadingProgress();
+        return;
+      }
 
-    // Verificar que el usuario no haya salido o abierto otro paper mientras traducía
-    if (S.readerPaperId !== effectiveId) {
+      await finishReaderLoadingProgress();
+      if (S.readerPaperId !== effectiveId) return;
+
+      el.readerLoading.style.display = 'none';
+      if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+      
+      renderReaderPaperContent(paper, data.markdown);
+    } catch (err) {
+      if (S.readerPaperId !== effectiveId) return;
       stopReaderLoadingProgress();
-      return;
+      el.readerLoading.style.display = 'none';
+      el.readerError.style.display = 'flex';
+      el.readerErrorMsg.textContent = err.message || 'Ocurrió un error al procesar el archivo.';
+    }
+    return;
+  }
+
+  const translatePromise = (async () => {
+    let taskId = null;
+    const { BackgroundTask, LocalNotifications } = window.Capacitor?.Plugins || {};
+    
+    if (BackgroundTask) {
+      try {
+        taskId = await BackgroundTask.beforeExit(async () => {
+          BackgroundTask.finish({ taskId });
+        });
+      } catch (e) { console.warn('BackgroundTask no disponible', e); }
     }
 
-    if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-    if (el.btnReaderViewPdf) {
-      el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+    try {
+      const apiUrl = `${HF_SPACE_URL}/api/translate`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || 'Error desconocido del servidor');
+      
+      if (LocalNotifications) {
+        try {
+          await LocalNotifications.requestPermissions();
+          await LocalNotifications.schedule({
+            notifications: [{
+              title: 'Traducción completada',
+              body: 'El documento ya está listo para leer.',
+              id: new Date().getTime(),
+              schedule: { at: new Date(Date.now() + 500) }
+            }]
+          });
+        } catch (e) { console.warn('LocalNotifications falló', e); }
+      }
+      return data;
+    } catch (e) {
+      if (LocalNotifications) {
+        try {
+          await LocalNotifications.requestPermissions();
+          await LocalNotifications.schedule({
+            notifications: [{
+              title: 'Error en la traducción',
+              body: 'Ocurrió un error al traducir el documento.',
+              id: new Date().getTime(),
+              schedule: { at: new Date(Date.now() + 500) }
+            }]
+          });
+        } catch (err) { console.warn('LocalNotifications falló', err); }
+      }
+      throw e;
+    } finally {
+      activeTranslations.delete(effectiveId);
+      if (BackgroundTask && taskId !== null) {
+        try { BackgroundTask.finish({ taskId }); } catch (e) {}
+      }
     }
+  })();
 
-    // Almacenar en caché vinculado a este paper
+  activeTranslations.set(effectiveId, translatePromise);
+
+  try {
+    const data = await translatePromise;
+
+    // GUARDAR SIEMPRE EN MEMORIA AUNQUE EL USUARIO HAYA SALIDO
     paperTranslations.set(effectiveId, data.markdown);
     if (paper) {
       paper.translatedMarkdown = data.markdown;
       paper.isAutomatic = true;
       updatePaperAutomaticBadges(paper);
     }
+    if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
+    
     if (typeof saveProcessedArticle === 'function') {
       saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper);
+    }
+
+    if (S.readerPaperId !== effectiveId) {
+      stopReaderLoadingProgress();
+      return;
     }
 
     await finishReaderLoadingProgress();
@@ -1871,6 +1955,10 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 
     el.readerLoading.style.display = 'none';
     if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+    if (el.btnReaderViewPdf) {
+      el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+    }
+
     renderReaderPaperContent(paper, data.markdown);
 
   } catch (error) {
@@ -1888,6 +1976,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     const uploadDesc = document.getElementById('reader-upload-desc');
     if (uploadDesc) {
       uploadDesc.innerHTML = 'El servidor de la revista bloqueó la descarga automática directa del PDF.<br><br>Puedes descargar el PDF manualmente y adjuntarlo aquí para traducirlo:';
+    }
     }
 
     el.readerErrorMsg.innerHTML = error.message || 'Error al traducir el artículo.';
@@ -2062,6 +2151,16 @@ async function handleReaderFileUpload(file) {
   try {
     const data = await translatePromise;
 
+    // GUARDAR SIEMPRE EN MEMORIA AUNQUE EL USUARIO HAYA SALIDO
+    paperTranslations.set(effectiveId, data.markdown);
+    if (paper) paper.translatedMarkdown = data.markdown;
+    if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
+    
+    if (typeof saveProcessedArticle === 'function') {
+      const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
+      saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || fileName, data.pdf_url, paper);
+    }
+
     if (S.readerPaperId !== effectiveId) {
       stopReaderLoadingProgress();
       return;
@@ -2072,17 +2171,7 @@ async function handleReaderFileUpload(file) {
 
     el.readerLoading.style.display = 'none';
     if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
-
-    // Anclar a este paper
-    paperTranslations.set(effectiveId, data.markdown);
-    if (paper) paper.translatedMarkdown = data.markdown;
-    if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
     if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
-
-    if (typeof saveProcessedArticle === 'function') {
-      const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
-      saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || fileName, data.pdf_url, paper);
-    }
 
     if (paper) {
       renderReaderPaperContent(paper, data.markdown);

@@ -249,7 +249,7 @@ def replace_image_refs_with_base64(markdown: str, images: dict[str, str], final_
         if m:
             try:
                 val = int(m.group(1))
-                return val + 1
+                return val
             except:
                 pass
         return 1
@@ -406,6 +406,7 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
         "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Por ejemplo, usa 'versus' en lugar de forzar 'frente a' en títulos o comparaciones científicas.\n"
         "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
         "8. UNIFICACIÓN DE PÁRRAFOS Y ORACIONES CORTADAS: En los PDFs las oraciones con frecuencia quedan cortadas por saltos de página o columnas (por ejemplo, terminando una línea con 'en', '(', etc., y continuando en la siguiente con minúscula o paréntesis de cierre). ESTÁ ESTRICTAMENTE PROHIBIDO dejar oraciones partidas en párrafos separados. Debes unir el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
+        "9. FLUJO LÓGICO Y NOTAS AL PIE INTRUSIVAS: A veces, el texto extraído del PDF incluye bloques de afiliaciones, emails de autores (ej. 'W. C. Drevets (&) ...') o notas al pie que interrumpen una oración a la mitad. DEBES restaurar la continuidad lógica del párrafo. Mueve esa información intrusiva al final del bloque o elimínala si rompe por completo la frase, asegurando que la oración tenga sentido continuo al unirla.\n"
 
         "NO agregues prefacios, introducciones ni notas adicionales al final."
     )
