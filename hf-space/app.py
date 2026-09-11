@@ -206,14 +206,6 @@ def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
         for chunk in md_chunks:
             page_num = chunk.get("metadata", {}).get("page_number", 1)
             page_text = chunk.get("text", "")
-            
-            # Forzamos la inserción de un enlace a la página exacta original bajo CADA imagen
-            page_text = re.sub(
-                r'(!\[[^\]]*\]\([^)]+\))', 
-                r'\1\n\n[Ver imagen en PDF original - pág. ' + str(page_num) + r'](#page=' + str(page_num) + r')\n\n', 
-                page_text
-            )
-            
             full_md.append(f"\n\n<!-- PAGE:{page_num} -->\n\n{page_text}")
         
         md_text = "\n".join(full_md)
@@ -241,32 +233,52 @@ def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
         shutil.rmtree(img_dir, ignore_errors=True)
 
 
-def replace_image_refs_with_base64(markdown: str, images: dict[str, str]) -> str:
+def replace_image_refs_with_base64(markdown: str, images: dict[str, str], final_pdf_url: str = "") -> str:
     """
     Reemplaza las referencias a imágenes en el Markdown por las imágenes base64.
     Debe llamarse DESPUÉS de traducir para no enviar enormes Base64 a la IA.
+    Calcula la página original exacta de CADA imagen a partir de su nombre de archivo en PyMuPDF.
     """
     used_images = set()
 
+    def get_img_page(filename: str) -> int:
+        # PyMuPDF genera nombres con la página: f"{filename}-{page.number:04d}-{i}.png" o "-{page.number}-{i}.png"
+        # En PyMuPDF, page.number es 0-indexed (la página 1 física del PDF tiene índice 0).
+        # Por tanto, para el visor PDF (1-based), la página exacta es (índice + 1).
+        m = re.search(r'-(\d+)-\d+\.[^.]+$', filename)
+        if m:
+            try:
+                val = int(m.group(1))
+                return val + 1
+            except:
+                pass
+        return 1
+
+    def make_figure_block(alt: str, uri: str, filename: str) -> str:
+        p_num = get_img_page(filename)
+        pdf_target = f"{final_pdf_url}#page={p_num}" if final_pdf_url else f"#page={p_num}"
+        btn_html = f'<a href="#" class="internal-pdf-link reader-pdf-page-btn" data-url="{pdf_target}">Ver en PDF original — Pág. {p_num}</a>'
+        return f"\n\n![{alt}]({uri})\n\n{btn_html}\n\n"
+
     def replace_img_ref(match):
-        alt = match.group(1)
+        alt = match.group(1) or "Figura"
         ref = match.group(2)
         for name, data_uri in images.items():
             if ref in name or name in ref or os.path.basename(ref) == name:
                 used_images.add(name)
-                return f"![{alt}]({data_uri})"
-        return ""  # Eliminar fragmentos filtrados o no resueltos
+                return make_figure_block(alt, data_uri, name)
+        return ""
 
     markdown = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', replace_img_ref, markdown)
 
-    # Si hay imágenes no referenciadas, insertarlas al final
+    # Si hay imágenes no referenciadas inline por pymupdf, insertarlas con su página real
     unreferenced = [
         (name, uri) for name, uri in images.items() if name not in used_images
     ]
     if unreferenced:
         markdown += "\n\n---\n\n## Figuras del artículo\n\n"
         for i, (name, uri) in enumerate(unreferenced, 1):
-            markdown += f"![Figura {i}]({uri})\n\n"
+            markdown += make_figure_block(f"Figura {i}", uri, name)
 
     return markdown
 
@@ -551,9 +563,6 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
     if not text:
         return ""
     
-    # 0. Reubicar bloques de autores, afiliaciones y metadatos fuera del cuerpo del texto
-    text = relocate_affiliations_and_meta(text)
-    
     # 1. Eliminar números de página flotantes aislados
     text = re.sub(r'(?m)^\s*\d+\s*$\n?', '', text)
     
@@ -577,11 +586,11 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
             next_line = lines[i + 1]
             
             # Caso 1: Salto simple (\n)
-            if next_line.strip() and not next_line.strip().startswith(('#', '*', '-', '|', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
+            if next_line.strip() and not next_line.strip().startswith(('#', '*', '-', '|', '>', '<', '!', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
                 curr_stripped = line.rstrip()
                 next_stripped = next_line.lstrip()
                 
-                if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '`')):
+                if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***', '>', '</a>')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '<', '!', '`')):
                     if not is_affiliation_or_meta(next_stripped):
                         is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
                         is_next_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', next_stripped))
@@ -596,8 +605,8 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
                 curr_stripped = line.rstrip()
                 after_stripped = after_empty.lstrip()
                 
-                if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '`')):
-                    if not after_stripped.startswith(('#', '*', '-', '|', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
+                if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***', '>', '</a>')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '<', '!', '`')):
+                    if not after_stripped.startswith(('#', '*', '-', '|', '>', '<', '!', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
                         if not is_affiliation_or_meta(after_stripped):
                             is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
                             is_after_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', after_stripped))
@@ -662,11 +671,11 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
         # 3.5 Restaurar Tablas Traducidas
         translated = restore_tables(translated, translated_tables)
 
-    # 4. Embedir imágenes en el Markdown ya traducido
-    final_markdown = replace_image_refs_with_base64(translated, images)
-
-    # 5. Inyectar la URL final del PDF en los enlaces #page=
+    # 4. Inyectar la URL final del PDF y embedir imágenes en el Markdown ya traducido con enlaces directos a sus páginas
     final_pdf_url = f"/files/{file_id}.pdf"
+    final_markdown = replace_image_refs_with_base64(translated, images, final_pdf_url=final_pdf_url)
+
+    # 5. Inyectar la URL final del PDF en cualquier enlace #page= residual
     final_markdown = final_markdown.replace("](#page=", f"]({final_pdf_url}#page=")
 
     # 6. Convertir los enlaces al PDF / #page= a etiquetas HTML para el visualizador interno

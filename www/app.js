@@ -1005,7 +1005,7 @@ function buildCard(paper, onBookmarkChange) {
     <div class="paper-card-body" style="padding-left: 0;">
       <div class="paper-card-top">
         <h3 class="paper-card-title">${esc(displayTitle)}</h3>
-        <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id)}" aria-label="Guardar">
+        <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id || '')}" data-doi="${esc(paper.doi || '')}" aria-label="Guardar">
           <i class="${isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple'}"></i>
         </button>
       </div>
@@ -1025,12 +1025,8 @@ function buildCard(paper, onBookmarkChange) {
   li.querySelector('.btn-card-bk').addEventListener('click', e => {
     e.stopPropagation();
     toggleBookmark(paper);
-    const btn = e.currentTarget;
-    const saved = isBookmarked(paper.id);
-    btn.classList.toggle('saved', saved);
-    btn.querySelector('i').className = saved ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
     if (typeof onBookmarkChange === 'function') {
-      onBookmarkChange(saved, paper);
+      onBookmarkChange(isBookmarked(paper), paper);
     }
   });
 
@@ -1525,43 +1521,12 @@ const isAffiliationOrMeta = (b) => {
   return false;
 }
 
-const relocateAffiliationsAndMeta = (text) => {
-  if (!text) return '';
-  const paragraphs = text.split('\n\n');
-  if (paragraphs.length < 3) return text;
-
-  const bodyParagraphs = [];
-  const extractedAffils = [];
-
-  for (let idx = 0; idx < paragraphs.length; idx++) {
-    const p = paragraphs[idx];
-    if (idx < 2) {
-      bodyParagraphs.push(p);
-      continue;
-    }
-    if (isAffiliationOrMeta(p)) {
-      extractedAffils.push(p.trim());
-    } else {
-      bodyParagraphs.push(p);
-    }
-  }
-
-  if (extractedAffils.length === 0) return text;
-
-  const cleanedAffils = extractedAffils.map(aff =>
-    aff.split('\n').map(l => l.trim()).filter(Boolean).join(' ')
-  );
-  const affilSection = '> **Afiliaciones y Correspondencia:**\n> ' + cleanedAffils.join('\n>\n> ');
-
-  const insertPos = Math.min(2, bodyParagraphs.length);
-  bodyParagraphs.splice(insertPos, 0, affilSection);
-  return bodyParagraphs.join('\n\n');
-}
-
 const cleanAndJoinBrokenMarkdown = (md) => {
   if (!md) return '';
-  // 0. Reubicar bloques de autores/afiliaciones/metadatos que cortan el texto narrativo
-  let text = relocateAffiliationsAndMeta(md);
+  let text = md;
+
+  // Limpiar posibles bloques residuales corruptos de afiliaciones inyectados previamente
+  text = text.replace(/>\s*[*_]{0,3}Afiliaciones y Correspondencia:[*_]{0,3}[\s\S]*?(?=\n\n|$)/gi, '');
 
   // 1. Eliminar marcadores <!-- PAGE:X -->
   text = text.replace(/<!--\s*PAGE:\d+\s*-->/gi, '');
@@ -1586,9 +1551,9 @@ const cleanAndJoinBrokenMarkdown = (md) => {
         const currTrim = line.trimEnd();
         const afterTrim = afterEmpty.trimStart();
 
-        const isNotHeaderOrList = !currTrim.startsWith('#') && !currTrim.startsWith('*') && !currTrim.startsWith('-') && !currTrim.startsWith('|') && !currTrim.startsWith('>') &&
-          !afterTrim.startsWith('#') && !afterTrim.startsWith('*') && !afterTrim.startsWith('-') && !afterTrim.startsWith('|') && !afterTrim.startsWith('>');
-        const currNotTerminal = !/[.!?:]\s*["'”)]*$/.test(currTrim);
+        const isNotHeaderOrList = !currTrim.startsWith('#') && !currTrim.startsWith('*') && !currTrim.startsWith('-') && !currTrim.startsWith('|') && !currTrim.startsWith('>') && !currTrim.startsWith('<') && !currTrim.startsWith('!') &&
+          !afterTrim.startsWith('#') && !afterTrim.startsWith('*') && !afterTrim.startsWith('-') && !afterTrim.startsWith('|') && !afterTrim.startsWith('>') && !afterTrim.startsWith('<') && !afterTrim.startsWith('!');
+        const currNotTerminal = !/[.!?:]\s*["'”)]*$/.test(currTrim) && !currTrim.endsWith('>') && !currTrim.endsWith('</a>');
         const afterStartsLower = /^[a-záéíóúñ(),;\]]/.test(afterTrim);
         const currCut = /[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$/i.test(currTrim);
 
@@ -1606,7 +1571,7 @@ const cleanAndJoinBrokenMarkdown = (md) => {
     i++;
   }
   return result.join('\n');
-}
+};
 
 const postProcessReaderContent = () => {
   if (!el.readerContent) return;
@@ -1649,19 +1614,50 @@ const postProcessReaderContent = () => {
     }
   });
 
-  // Envolver imágenes y figuras para aislarlas del flujo de texto
+  // Envolver imágenes y figuras en un contenedor dedicado SIN alterar el párrafo de texto
   el.readerContent.querySelectorAll('img').forEach(img => {
-    const p = img.closest('p');
-    if (p) {
-      p.classList.add('reader-image-wrap');
-    } else if (!img.parentElement.classList.contains('reader-image-wrap')) {
-      const wrap = document.createElement('div');
-      wrap.className = 'reader-image-wrap';
-      img.parentNode.insertBefore(wrap, img);
-      wrap.appendChild(img);
+    if (img.closest('.reader-figure-container')) return;
+
+    const parentP = img.closest('p');
+    const figureContainer = document.createElement('div');
+    figureContainer.className = 'reader-figure-container';
+
+    const imageWrap = document.createElement('div');
+    imageWrap.className = 'reader-image-wrap';
+
+    // Buscar enlace internal-pdf-link adyacente o hijo
+    let pdfLink = null;
+    if (parentP) {
+      pdfLink = parentP.querySelector('.internal-pdf-link');
+      if (!pdfLink && parentP.nextElementSibling) {
+        pdfLink = parentP.nextElementSibling.querySelector('.internal-pdf-link') ||
+                  (parentP.nextElementSibling.classList.contains('internal-pdf-link') ? parentP.nextElementSibling : null);
+      }
+    }
+
+    imageWrap.appendChild(img);
+    figureContainer.appendChild(imageWrap);
+
+    if (pdfLink) {
+      const caption = document.createElement('div');
+      caption.className = 'reader-figure-caption';
+      caption.appendChild(pdfLink);
+      figureContainer.appendChild(caption);
+    }
+
+    if (parentP) {
+      const textOnly = parentP.textContent.trim();
+      const hasOnlyMedia = !textOnly || (pdfLink && textOnly === pdfLink.textContent.trim());
+      if (hasOnlyMedia) {
+        parentP.parentNode.replaceChild(figureContainer, parentP);
+      } else {
+        parentP.parentNode.insertBefore(figureContainer, parentP.nextSibling);
+      }
+    } else {
+      img.parentNode.insertBefore(figureContainer, img);
     }
   });
-}
+};
 
 function renderReaderPaperContent(paper, markdown) {
   if (!markdown) return;
@@ -2008,11 +2004,28 @@ async function handleReaderFileUpload(file) {
 // BOOKMARKS
 // ═══════════════════════════════════════════════════
 
-function isBookmarked(id) { return S.bookmarks.some(b => b.id === id); }
+function isBookmarked(idOrPaper) {
+  if (!idOrPaper) return false;
+  const targetId = typeof idOrPaper === 'object' ? idOrPaper.id : idOrPaper;
+  const targetDoi = typeof idOrPaper === 'object' ? idOrPaper.doi : null;
+  return S.bookmarks.some(b => {
+    if (targetId && b.id === targetId) return true;
+    if (targetDoi && b.doi && String(b.doi).toLowerCase() === String(targetDoi).toLowerCase()) return true;
+    return false;
+  });
+}
 
 function toggleBookmark(paper) {
-  if (isBookmarked(paper.id)) {
-    S.bookmarks = S.bookmarks.filter(b => b.id !== paper.id);
+  if (!paper) return;
+  const targetId = paper.id;
+  const targetDoi = paper.doi ? String(paper.doi).toLowerCase() : null;
+
+  if (isBookmarked(paper)) {
+    S.bookmarks = S.bookmarks.filter(b => {
+      if (targetId && b.id === targetId) return false;
+      if (targetDoi && b.doi && String(b.doi).toLowerCase() === targetDoi) return false;
+      return true;
+    });
     showToast('Quitado de guardados');
   } else {
     const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
@@ -2037,23 +2050,51 @@ function toggleBookmark(paper) {
   }
   saveData('psyhub_bk', S.bookmarks);
   updateStatBadges();
-  if (S.currentPaper?.id === paper.id) {
-    const isBk = isBookmarked(paper.id);
-    el.btnModalBk.classList.toggle('saved', isBk);
-    el.btnModalBk.querySelector('i').className = isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
+
+  const nowSaved = isBookmarked(paper);
+
+  // 1. Sincronizar botón del Modal de detalle
+  if (S.currentPaper) {
+    const modalMatchesId = targetId && S.currentPaper.id === targetId;
+    const modalMatchesDoi = targetDoi && S.currentPaper.doi && String(S.currentPaper.doi).toLowerCase() === targetDoi;
+    if (modalMatchesId || modalMatchesDoi) {
+      el.btnModalBk.classList.toggle('saved', nowSaved);
+      const modalIcon = el.btnModalBk.querySelector('i');
+      if (modalIcon) {
+        modalIcon.className = nowSaved ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
+      }
+    }
   }
 
-  // Sincronizar botones en las listas de resultados/recomendaciones
-  const isBkGlobal = isBookmarked(paper.id);
+  // 2. Sincronizar todos los botones de tarjetas visibles en el DOM
   document.querySelectorAll('.btn-card-bk').forEach(btn => {
-    if (btn.dataset.id === String(paper.id)) {
-      btn.classList.toggle('saved', isBkGlobal);
+    const btnId = btn.dataset.id;
+    const btnDoi = btn.dataset.doi ? btn.dataset.doi.toLowerCase() : null;
+    const matchesId = targetId && btnId === String(targetId);
+    const matchesDoi = targetDoi && btnDoi && btnDoi === targetDoi;
+    if (matchesId || matchesDoi) {
+      btn.classList.toggle('saved', nowSaved);
       const i = btn.querySelector('i');
       if (i) {
-        i.className = isBkGlobal ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
+        i.className = nowSaved ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
       }
     }
   });
+
+  // 3. Sincronizar botón de Historias si la historia activa coincide
+  if (S.stories && S.stories[S.activeStoryIdx]) {
+    const curStory = S.stories[S.activeStoryIdx];
+    const storyMatchesId = targetId && curStory.id === targetId;
+    const storyMatchesDoi = targetDoi && curStory.doi && String(curStory.doi).toLowerCase() === targetDoi;
+    if (storyMatchesId || storyMatchesDoi) {
+      updateStorySaveBtnState(curStory);
+    }
+  }
+
+  // 4. Si la biblioteca/perfil de guardados está presente, refrescar lista
+  if (el.savedList) {
+    refreshProfile();
+  }
 }
 
 function updateStatBadges() {
@@ -2508,8 +2549,22 @@ function setupEventListeners() {
   }
   if (el.readerContent) {
     el.readerContent.addEventListener('click', e => {
+      const pdfBtn = e.target.closest('.internal-pdf-link');
+      if (pdfBtn) {
+        e.preventDefault();
+        const url = pdfBtn.dataset.url || pdfBtn.getAttribute('href');
+        if (url && url !== '#') openInternalPdfViewer(url);
+        return;
+      }
+
       const img = e.target.closest('img');
       if (img) {
+        const fig = img.closest('.reader-figure-container');
+        const link = fig ? fig.querySelector('.internal-pdf-link') : null;
+        if (link && link.dataset.url) {
+          openInternalPdfViewer(link.dataset.url);
+          return;
+        }
         img.classList.toggle('reader-img-expanded');
       }
     });
@@ -3128,8 +3183,8 @@ function renderCurrentStory(index) {
 }
 
 function updateStorySaveBtnState(story) {
-  if (!el.btnStorySave) return;
-  const isBk = isBookmarked(story.id);
+  if (!el.btnStorySave || !story) return;
+  const isBk = isBookmarked(story);
   el.btnStorySave.classList.toggle('saved', isBk);
   const icon = el.btnStorySave.querySelector('i');
   if (icon) icon.className = isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
@@ -3390,8 +3445,12 @@ function refreshProcessedArticles() {
 function openInternalPdfViewer(url) {
   if (!url) return;
   let fullUrl = url;
-  if (url.startsWith('/files/')) {
-    fullUrl = HF_SPACE_URL + url;
+  if (fullUrl.startsWith('#page=') && S.readerPdfUrl) {
+    const base = S.readerPdfUrl.split('#')[0];
+    fullUrl = `${base}${fullUrl}`;
+  }
+  if (fullUrl.startsWith('/files/')) {
+    fullUrl = HF_SPACE_URL + fullUrl;
   }
   const overlay = document.getElementById('pdf-viewer-overlay');
   const iframe = document.getElementById('pdf-viewer-iframe');
