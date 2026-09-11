@@ -1499,10 +1499,72 @@ function closeModal() {
 // ═══════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════
 
+function relocateAffiliationsAndMeta(text) {
+  if (!text) return '';
+  const paragraphs = text.split('\n\n');
+  if (paragraphs.length < 3) return text;
+
+  function isAffiliationOrMeta(b) {
+    const s = b.trim();
+    if (!s || s.startsWith('#') || s.startsWith('!') || s.startsWith('|')) return false;
+    const hasEmail = /[\w\.-]+@[\w\.-]+\.\w+|e-mail:|email:|correo electrónico:/i.test(s);
+    const affilKeywords = [
+      'department of', 'departamento de', 'division of', 'división de', 
+      'section on', 'sección de', 'institute of', 'instituto de', 
+      'university', 'universidad', 'school of', 'escuela de', 
+      'faculty of', 'facultad de', 'hospital', 'laboratory of', 
+      'laboratorio de', 'center for', 'centro de', 'dirp', 'nih', 'nimh', 
+      'clinic', 'clínica', 'unit', 'unidad de'
+    ];
+    let hits = 0;
+    for (const kw of affilKeywords) {
+      if (new RegExp('\\b' + kw + '\\b', 'i').test(s)) hits++;
+    }
+    const hasAuthorSym = /\(&\)|\bcorrespondence\b|\bcorresponding author\b|\bautor de correspondencia\b|\baddress correspondence\b/i.test(s);
+    const hasAddress = /\b(?:USA|UK|Spain|France|Germany|Bethesda|MD\s*\d{5}|MO\s*\d{5}|Room\s*\d+|Box\s*\d+|P\.?O\.?\s*Box)\b/i.test(s);
+    const hasEditorial = /\b(?:received:\s*\d|accepted:\s*\d|published online:|doi:\s*10\.|copyright\s*©|©\s*\d{4})\b/i.test(s);
+
+    if (hasEditorial || hasEmail) return true;
+    if (hits >= 1 && (hasAuthorSym || hasAddress)) return true;
+    if (hits >= 2) return true;
+    return false;
+  }
+
+  const bodyParagraphs = [];
+  const extractedAffils = [];
+
+  for (let idx = 0; idx < paragraphs.length; idx++) {
+    const p = paragraphs[idx];
+    if (idx < 2) {
+      bodyParagraphs.push(p);
+      continue;
+    }
+    if (isAffiliationOrMeta(p)) {
+      extractedAffils.push(p.trim());
+    } else {
+      bodyParagraphs.push(p);
+    }
+  }
+
+  if (extractedAffils.length === 0) return text;
+
+  const cleanedAffils = extractedAffils.map(aff => 
+    aff.split('\n').map(l => l.trim()).filter(Boolean).join(' ')
+  );
+  const affilSection = '> **Afiliaciones y Correspondencia:**\n> ' + cleanedAffils.join('\n>\n> ');
+
+  const insertPos = Math.min(2, bodyParagraphs.length);
+  bodyParagraphs.splice(insertPos, 0, affilSection);
+  return bodyParagraphs.join('\n\n');
+}
+
 function cleanAndJoinBrokenMarkdown(md) {
   if (!md) return '';
+  // 0. Reubicar bloques de autores/afiliaciones/metadatos que cortan el texto narrativo
+  let text = relocateAffiliationsAndMeta(md);
+
   // 1. Eliminar marcadores <!-- PAGE:X -->
-  let text = md.replace(/<!--\s*PAGE:\d+\s*-->/gi, '');
+  text = text.replace(/<!--\s*PAGE:\d+\s*-->/gi, '');
 
   // 2. Unir palabras cortadas con guión de fin de línea
   text = text.replace(/(\b[\wáéíóúñÁÉÍÓÚÑ]+)-\s*\n+\s*([\wáéíóúñÁÉÍÓÚÑ]+\b)/g, '$1$2');
