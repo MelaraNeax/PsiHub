@@ -309,6 +309,7 @@ const S = {
   storyDuration: 8000,   // 8 segundos por historia
   storyPaused: false,
   watchedStories: loadData('psyhub_watched_stories', []),
+  processed: loadData('psyhub_processed', []),
 };
 
 // ═══════════════════════════════════════════════════
@@ -1706,6 +1707,9 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       paper.isAutomatic = true;
       updatePaperAutomaticBadges(paper);
     }
+    if (typeof saveProcessedArticle === 'function') {
+      saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper);
+    }
 
     await finishReaderLoadingProgress();
     if (S.readerPaperId !== effectiveId) return;
@@ -1794,6 +1798,11 @@ async function handleReaderFileUpload(file) {
     // Anclar a este paper
     paperTranslations.set(effectiveId, data.markdown);
     if (paper) paper.translatedMarkdown = data.markdown;
+
+    if (typeof saveProcessedArticle === 'function') {
+      const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
+      saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || fileName, data.pdf_url, paper);
+    }
 
     if (paper) {
       renderReaderPaperContent(paper, data.markdown);
@@ -3120,3 +3129,138 @@ function esc(str) {
   return String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// ═══════════════════════════════════════════════════
+// ARTÍCULOS PROCESADOS & VISUALIZADOR INTERNO
+// ═══════════════════════════════════════════════════
+
+function saveProcessedArticle(id, title, url, paperData = null) {
+  const existing = S.processed.find(p => p.id === id);
+  if (!existing) {
+    S.processed.unshift({
+      id,
+      title: title || 'Documento procesado',
+      date: new Date().toISOString(),
+      url: url || null,
+      paperData: paperData || null
+    });
+    saveData('psyhub_processed', S.processed);
+    refreshProcessedArticles();
+  }
+}
+
+function refreshProcessedArticles() {
+  const listEl = document.getElementById('processed-list');
+  const emptyEl = document.getElementById('profile-empty-processed');
+  const sectionEl = document.getElementById('section-processed');
+  
+  if (!listEl || !emptyEl || !sectionEl) return;
+  
+  if (!S.processed || S.processed.length === 0) {
+    sectionEl.style.display = 'none';
+    emptyEl.style.display = 'flex';
+    return;
+  }
+  
+  sectionEl.style.display = 'block';
+  emptyEl.style.display = 'none';
+  
+  listEl.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  S.processed.forEach((p, idx) => {
+    const li = document.createElement('li');
+    li.className = 'paper-card';
+    li.innerHTML = `
+      <div class="paper-card-body" style="padding-left: 0;">
+        <div class="paper-card-top">
+          <h3 class="paper-card-title">${esc(p.title)}</h3>
+          <button class="btn-card-bk saved-card-remove-processed" data-index="${idx}" aria-label="Eliminar" style="background:transparent; border:none; color:var(--txt-3); cursor:pointer;">
+            <i class="ph-bold ph-trash"></i>
+          </button>
+        </div>
+        <p class="paper-card-authors" style="font-size: 11px; color: var(--txt-3);">
+          Procesado el ${new Date(p.date).toLocaleDateString()}
+        </p>
+      </div>
+    `;
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('.saved-card-remove-processed')) {
+        e.stopPropagation();
+        S.processed.splice(idx, 1);
+        saveData('psyhub_processed', S.processed);
+        refreshProcessedArticles();
+        return;
+      }
+      if (p.paperData) {
+        openReaderModal(p.url, p.id, p.paperData);
+      } else {
+        openReaderModal(p.url, p.id, null);
+      }
+    });
+    frag.appendChild(li);
+  });
+  listEl.appendChild(frag);
+}
+
+function openInternalPdfViewer(url) {
+  let fullUrl = url;
+  if (url.startsWith('/files/')) {
+    fullUrl = HF_SPACE_URL + url;
+  }
+  const overlay = document.getElementById('pdf-viewer-overlay');
+  const iframe = document.getElementById('pdf-viewer-iframe');
+  if (overlay && iframe) {
+    iframe.src = fullUrl;
+    overlay.classList.remove('hidden');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refreshProcessedArticles();
+  
+  const libraryProcessedHeader = document.getElementById('library-processed-header');
+  const libraryProcessedContainer = document.getElementById('library-processed-container');
+  const iconToggleProcessed = document.getElementById('icon-toggle-processed');
+  
+  if (libraryProcessedHeader) {
+    libraryProcessedHeader.addEventListener('click', () => {
+      const isHidden = libraryProcessedContainer.style.display === 'none';
+      libraryProcessedContainer.style.display = isHidden ? 'block' : 'none';
+      if (iconToggleProcessed) {
+        iconToggleProcessed.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+      }
+      if (isHidden) refreshProcessedArticles();
+    });
+  }
+
+  const btnClearProcessed = document.getElementById('btn-clear-all-processed');
+  if (btnClearProcessed) {
+    btnClearProcessed.addEventListener('click', () => {
+      S.processed = [];
+      saveData('psyhub_processed', []);
+      refreshProcessedArticles();
+    });
+  }
+
+  const btnClosePdf = document.getElementById('btn-close-pdf-viewer');
+  if (btnClosePdf) {
+    btnClosePdf.addEventListener('click', () => {
+      const overlay = document.getElementById('pdf-viewer-overlay');
+      const iframe = document.getElementById('pdf-viewer-iframe');
+      if (overlay) overlay.classList.add('hidden');
+      if (iframe) iframe.src = '';
+    });
+  }
+  
+  const readerContentArea = document.getElementById('reader-content');
+  if (readerContentArea) {
+    readerContentArea.addEventListener('click', e => {
+      const pdfLink = e.target.closest('.internal-pdf-link');
+      if (pdfLink) {
+        e.preventDefault();
+        const url = pdfLink.dataset.url;
+        if (url) openInternalPdfViewer(url);
+      }
+    });
+  }
+});

@@ -156,28 +156,58 @@ async def download_pdf(url: str) -> bytes:
         return resp.content
 
 
+def remove_headers_footers(doc: fitz.Document):
+    """Detecta y remueve encabezados y pies de página repetitivos."""
+    if doc.page_count < 3:
+        return
+    
+    header_texts = {}
+    footer_texts = {}
+    
+    for page in doc:
+        rect = page.rect
+        for b in page.get_text("blocks"):
+            b_rect = fitz.Rect(b[:4])
+            text = b[4].strip()
+            if not text or len(text) < 4: continue 
+            
+            # 10% superior o inferior
+            if b_rect.y1 < rect.height * 0.10:
+                header_texts[text] = header_texts.get(text, 0) + 1
+            elif b_rect.y0 > rect.height * 0.90:
+                footer_texts[text] = footer_texts.get(text, 0) + 1
+
+    threshold = max(2, int(doc.page_count * 0.35))
+    bad_texts = {k for k, v in header_texts.items() if v >= threshold} | {k for k, v in footer_texts.items() if v >= threshold}
+    
+    if bad_texts:
+        for page in doc:
+            for b in page.get_text("blocks"):
+                if b[4].strip() in bad_texts:
+                    page.add_redact_annot(fitz.Rect(b[:4]), fill=(1, 1, 1))
+            page.apply_redactions()
+
+
 def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
     """Convierte PDF a Markdown estructurado y extrae imágenes usando pymupdf4llm para preservar la ubicación exacta."""
     import shutil
     
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(pdf_bytes)
-        tmp_path = tmp.name
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    remove_headers_footers(doc)
 
     img_dir = tempfile.mkdtemp()
     images_b64 = {}
     
     try:
         # Extraemos por páginas para inyectar marcadores de paginación
-        md_chunks = pymupdf4llm.to_markdown(tmp_path, write_images=True, image_path=img_dir, page_chunks=True)
+        md_chunks = pymupdf4llm.to_markdown(doc, write_images=True, image_path=img_dir, page_chunks=True)
         
         full_md = []
         for chunk in md_chunks:
             page_num = chunk.get("metadata", {}).get("page", 0) + 1
             page_text = chunk.get("text", "")
             
-            # Forzamos la inserción de un enlace a la página exacta original bajo CADA imagen,
-            # así garantizamos que se preserve el link (y la IA solo traduce el pie de página).
+            # Forzamos la inserción de un enlace a la página exacta original bajo CADA imagen
             page_text = re.sub(
                 r'(!\[[^\]]*\]\([^)]+\))', 
                 r'\1\n\n[Ver imagen en PDF original - pág. ' + str(page_num) + r'](#page=' + str(page_num) + r')\n\n', 
@@ -188,7 +218,7 @@ def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
         
         md_text = "\n".join(full_md)
         
-        # Cargar las imágenes extraídas a base64 (Filtrando las < 10KB)
+        # Cargar las imágenes extraídas a base64
         for img_file in os.listdir(img_dir):
             filepath = os.path.join(img_dir, img_file)
             if not os.path.isfile(filepath): continue
@@ -207,7 +237,7 @@ def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
             
         return md_text, images_b64
     finally:
-        os.unlink(tmp_path)
+        doc.close()
         shutil.rmtree(img_dir, ignore_errors=True)
 
 
@@ -242,14 +272,71 @@ def replace_image_refs_with_base64(markdown: str, images: dict[str, str]) -> str
 
 
 # ══════════════════════════════════════════════════
+# TRADUCCIÓN DE TABLAS (Aislada)
+# ══════════════════════════════════════════════════
+
+async def translate_table_gemini(table_md: str, client: genai.Client) -> str:
+    """Traduce una tabla en formato Markdown de manera aislada."""
+    system_instruction = (
+        "Eres un traductor académico. Tu única tarea es traducir el contenido de esta tabla Markdown al español. "
+        "MANTÉN LA ESTRUCTURA TABULAR EXACTA (`| col | col |`). NO añadas texto fuera de la tabla. "
+        "Traduce las celdas con precisión. "
+        "GLOSARIO Y CONSISTENCIA: Mantén un criterio unificado para la traducción de siglas y términos técnicos a lo largo de todo el documento. En textos de psicología, aplica convenciones estándar si aparecen (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad). "
+        "PROHIBICIÓN DE CALCOS: Evita anglicismos innecesarios (ej. usa 'versus' en lugar de forzar 'frente a' en comparaciones)."
+    )
+    for attempt in range(2):
+        try:
+            resp = await client.aio.models.generate_content(
+                model=MODELS[0],
+                contents=table_md,
+                config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.1)
+            )
+            if resp.text: return resp.text.strip()
+        except:
+            pass
+    return table_md
+
+async def extract_and_translate_tables(markdown: str) -> tuple[str, dict[str, str]]:
+    """Encuentra tablas Markdown, las reemplaza por marcadores, y las traduce."""
+    table_pattern = re.compile(r'(?:^[ \t]*\|.*\|[ \t]*$\n?){2,}', re.MULTILINE)
+    tables_map = {}
+    
+    def replacer(match):
+        t_id = f"TABLE_{len(tables_map) + 1}"
+        table_content = match.group(0).strip()
+        tables_map[t_id] = table_content
+        return f"\n\n<!-- {t_id} -->\n\n"
+        
+    modified_markdown = table_pattern.sub(replacer, markdown)
+    
+    translated_tables = {}
+    if tables_map and gemini_client:
+        print(f"  📊 Detectadas {len(tables_map)} tablas. Traducción aislada en progreso...", flush=True)
+        tasks = [translate_table_gemini(content, gemini_client) for content in tables_map.values()]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for (t_id, _), res in zip(tables_map.items(), results):
+            if isinstance(res, str):
+                translated_tables[t_id] = res
+            else:
+                translated_tables[t_id] = tables_map[t_id]
+                
+    return modified_markdown, translated_tables
+
+def restore_tables(markdown: str, tables_map: dict[str, str]) -> str:
+    """Reinserta las tablas traducidas en su posición original."""
+    for t_id, content in tables_map.items():
+        markdown = markdown.replace(f"<!-- {t_id} -->", f"\n\n{content}\n\n")
+    return markdown
+
+# ══════════════════════════════════════════════════
 # TRADUCCIÓN CON GEMINI FLASH
 # ══════════════════════════════════════════════════
 
 def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
     """
-    Divide el Markdown en chunks controlados (~12000 caracteres) respetando párrafos y páginas.
-    Esto garantiza que las primeras páginas (título, autores, abstract, introducción)
-    tengan su propio chunk y NUNCA sean omitidas ni resumidas por Gemini.
+    Divide el Markdown en chunks controlados (~12000 caracteres) respetando párrafos, páginas 
+    y preferentemente agrupando por encabezados lógicos (#, ##) para preservar el contexto semántico.
     """
     paragraphs = markdown.split('\n\n')
     chunks = []
@@ -261,7 +348,9 @@ def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
         if match:
             last_seen_page = int(match.group(1))
 
-        if len(current) + len(p) > max_chars and current:
+        is_heading = re.match(r'^#{1,3}\s+', p.strip()) is not None
+
+        if (len(current) + len(p) > max_chars and current) or (is_heading and len(current) > max_chars * 0.7):
             chunks.append(current.strip())
             current = f"<!-- PAGE:{last_seen_page} -->\n\n"
             
@@ -272,8 +361,20 @@ def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
 
     return chunks
 
+async def detect_document_language(first_page_text: str, client: genai.Client) -> str:
+    """Detecta el idioma original del documento usando el primer fragmento."""
+    if not first_page_text.strip(): return "Inglés"
+    try:
+        resp = await client.aio.models.generate_content(
+            model=MODELS[0],
+            contents=f"Detect the primary language of this academic text. Return ONLY the language name (e.g. English, French, Portuguese, German). Do not return anything else.\n\n{first_page_text[:1500]}",
+            config=types.GenerateContentConfig(temperature=0.0)
+        )
+        return resp.text.strip() if resp.text else "Inglés"
+    except:
+        return "Inglés"
 
-async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models: list[str] | None = None, max_retries: int = 3, chunk_num: int = 1, total_chunks: int = 1) -> str:
+async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models: list[str] | None = None, max_retries: int = 3, chunk_num: int = 1, total_chunks: int = 1, doc_lang: str = "Inglés") -> str:
     """Traduce un bloque de Markdown usando Gemini, con timeout y reintentos en cascada entre varios modelos."""
     if not chunk or not chunk.strip():
         return ""
@@ -282,17 +383,22 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
         active_models = list(MODELS)
 
     system_instruction = (
-        "Eres un traductor académico profesional y exhaustivo. Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
+        f"Eres un traductor académico profesional y exhaustivo. El idioma origen es {doc_lang}. "
+        "Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
         "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
-        "1. INTEGRIDAD TOTAL (DESDE LA PÁGINA 1): Está TERMINANTEMENTE PROHIBIDO saltarse páginas, omitir la portada, obviar el título, autores, afiliaciones, abstract, resumen o introducción. Debes traducir ABSOLUTAMENTE TODO el contenido recibido desde el primer renglón.\n"
-        "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes. Traduce párrafo por párrafo manteniendo la estructura original íntegra.\n"
-        "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA uses etiquetas literales como `[H1]`, `[H2]`, etc.\n"
-        "4. MARCADORES DE PÁGINA: El texto contiene marcadores ocultos `<!-- PAGE:X -->`. Mantén estos marcadores en tu respuesta para conservar la referencia de página original.\n"
-        "5. SECCIÓN DE REFERENCIAS / BIBLIOGRAFÍA AL FINAL: Únicamente si encuentras la lista extensa de bibliografía/referencias al final del paper, sustitúyela por `[Ver referencias en PDF original - pág. N](#page=N)` y continúa con apéndices si los hay. TODO lo demás (texto, métodos, resultados, discusión) DEBE SER TRADUCIDO AL 100%.\n"
-        "6. TABLAS E IMÁGENES: Preserva exactamente todas las tablas (en formato markdown limpio), imágenes y sus enlaces en su posición original exacta.\n"
-        "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y coherente, corrigiendo posibles errores de OCR o caracteres rotos.\n"
-        "NO agregues prefacios, introducciones como 'Aquí está la traducción:' ni notas adicionales al final."
+        "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO.\n"
+        "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes.\n"
+        "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA uses etiquetas literales como `[H1]`.\n"
+        "4. MARCADORES DE PÁGINA: Mantén los `<!-- PAGE:X -->` intactos en tu respuesta.\n"
+        "5. CONSISTENCIA TERMINOLÓGICA: Mantén un criterio unificado para la traducción de siglas y conceptos técnicos en todo el texto. Si el documento es de psicología, aplica convenciones estándar cuando aparezcan (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad).\n"
+        "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Por ejemplo, usa 'versus' en lugar de forzar 'frente a' en títulos o comparaciones científicas.\n"
+        "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
+        "NO agregues prefacios, introducciones ni notas adicionales al final."
     )
+
+    # Inyección de directiva para el primer chunk para evitar que se salte la primera página
+    if chunk_num == 1:
+        chunk = "ESTE ES EL COMIENZO DEL DOCUMENTO (Portada/Abstract). DEBES TRADUCIR DESDE LA PRIMERA PALABRA, incluyendo título, autores y afiliaciones.\n\n" + chunk
 
     for attempt in range(1, max_retries + 1):
         models_to_try = list(active_models)
@@ -338,7 +444,7 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
     return chunk
 
 
-async def translate_full_markdown(markdown: str) -> str:
+async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
     """
     Traduce el Markdown iterando secuencialmente sobre bloques asegurando la totalidad del texto.
     """
@@ -346,7 +452,6 @@ async def translate_full_markdown(markdown: str) -> str:
         print("  [ERROR] No se encontró GEMINI_API_KEY o el cliente no se inicializó. Devolviendo texto original.")
         return markdown
 
-    # Chunks optimizados a 12000 caracteres: evita truncamientos y garantiza cobertura total desde la página 1
     chunks = chunk_markdown(markdown, max_chars=12000)
     total_chunks = len(chunks)
     translated_chunks = []
@@ -357,7 +462,6 @@ async def translate_full_markdown(markdown: str) -> str:
     t0 = time.time()
 
     for i, chunk in enumerate(chunks):
-        # Detectar qué páginas abarca este fragmento para el log
         page_matches = re.findall(r'<!-- PAGE:(\d+) -->', chunk)
         pages_info = f"(Páginas: {', '.join(sorted(set(page_matches), key=int))})" if page_matches else ""
         print(f"  ⏳ Procesando fragmento {i+1}/{total_chunks} {pages_info} ({len(chunk)} chars)...", flush=True)
@@ -368,7 +472,8 @@ async def translate_full_markdown(markdown: str) -> str:
             gemini_client, 
             active_models=active_models,
             chunk_num=i+1,
-            total_chunks=total_chunks
+            total_chunks=total_chunks,
+            doc_lang=doc_lang
         )
         translated_chunks.append(translated_text)
         
@@ -385,15 +490,9 @@ async def translate_full_markdown(markdown: str) -> str:
 
 def preprocess_raw_markdown(md_text: str) -> str:
     """Aplica expresiones regulares para limpiar ruido del PDF antes de traducir."""
-    # 1. Eliminar números de línea sueltos (típicos de márgenes)
     md_text = re.sub(r'(?m)^\s*\d+\s*$\n?', '', md_text)
-    
-    # 2. Unir palabras cortadas por guión al final de la línea (hyphenation)
     md_text = re.sub(r'(\w+)-\n(\w+)', r'\1\2', md_text)
-    
-    # 3. Limpiar saltos de línea redundantes
     md_text = re.sub(r'\n{3,}', '\n\n', md_text)
-    
     return md_text
 
 
@@ -419,26 +518,44 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
     raw_markdown = preprocess_raw_markdown(raw_markdown)
     print(f"  Markdown generado: {len(raw_markdown)} caracteres. Imágenes extraídas: {len(images)}", flush=True)
 
-    # 3. Traducir el Markdown (sin el peso del Base64)
-    translated = await translate_full_markdown(raw_markdown)
-    print(f"  Traducción completada: {len(translated)} caracteres", flush=True)
+    # Detectar Idioma ANTES de procesar tablas
+    doc_lang = await detect_document_language(raw_markdown[:1500], gemini_client) if gemini_client else "Inglés"
+    print(f"  🌐 Idioma detectado: {doc_lang}", flush=True)
+
+    if "español" in doc_lang.lower() or "spanish" in doc_lang.lower() or doc_lang.lower().strip() == "es":
+        print("  ✅ El documento ya está en español. Omitiendo traducción.", flush=True)
+        translated = raw_markdown
+    else:
+        # 2.5 Extraer y traducir tablas aisladas
+        raw_markdown_no_tables, translated_tables = await extract_and_translate_tables(raw_markdown)
+
+        # 3. Traducir el Markdown (sin el peso del Base64 y sin las tablas que se traducen solas)
+        translated = await translate_full_markdown(raw_markdown_no_tables, doc_lang)
+        print(f"  Traducción completada: {len(translated)} caracteres", flush=True)
+
+        # 3.5 Restaurar Tablas Traducidas
+        translated = restore_tables(translated, translated_tables)
 
     # 4. Embedir imágenes en el Markdown ya traducido
     final_markdown = replace_image_refs_with_base64(translated, images)
 
-    # 5. Inyectar la URL final del PDF en los enlaces #page= (reemplaza #page= con http...#page=)
+    # 5. Inyectar la URL final del PDF en los enlaces #page=
     final_pdf_url = source_url if (source_url and source_url.startswith("http")) else f"/files/{file_id}.pdf"
     final_markdown = final_markdown.replace("](#page=", f"]({final_pdf_url}#page=")
 
-    # 6. Convertir los enlaces #page= a etiquetas HTML <a target="_blank"> para asegurar que el navegador abra el PDF y salte a la página correcta
+    # 6. Convertir los enlaces #page= a etiquetas HTML para el visualizador interno
     final_markdown = re.sub(
         r'\[([^\]]+)\]\(([^)]+#page=\d+)\)',
-        r'<a href="\2" target="_blank">\1</a>',
+        r'<a href="#" class="internal-pdf-link" data-url="\2">\1</a>',
         final_markdown
     )
 
     # 7. Guardar en caché solo si la traducción fue completa
-    result = {"markdown": final_markdown}
+    result = {
+        "markdown": final_markdown,
+        "file_id": file_id,
+        "pdf_url": final_pdf_url
+    }
     if "> [!NOTE]\n> **Traducción parcial**" not in final_markdown:
         cache_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         
