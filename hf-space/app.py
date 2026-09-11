@@ -389,10 +389,11 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
         "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO.\n"
         "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes.\n"
         "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA uses etiquetas literales como `[H1]`.\n"
-        "4. MARCADORES DE PÁGINA: Mantén los `<!-- PAGE:X -->` intactos en tu respuesta.\n"
+        "4. MARCADORES DE PÁGINA: Si aparecen marcas de página, NUNCA partas una oración o párrafo en dos por culpa del salto de página. Mantén la oración unida fluidamente.\n"
         "5. CONSISTENCIA TERMINOLÓGICA: Mantén un criterio unificado para la traducción de siglas y conceptos técnicos en todo el texto. Si el documento es de psicología, aplica convenciones estándar cuando aparezcan (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad).\n"
         "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Por ejemplo, usa 'versus' en lugar de forzar 'frente a' en títulos o comparaciones científicas.\n"
         "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
+        "8. UNIFICACIÓN DE PÁRRAFOS Y ORACIONES CORTADAS: En los PDFs las oraciones con frecuencia quedan cortadas por saltos de página o columnas (por ejemplo, terminando una línea con 'en', '(', etc., y continuando en la siguiente con minúscula o paréntesis de cierre). ESTÁ ESTRICTAMENTE PROHIBIDO dejar oraciones partidas en párrafos separados. Debes unir el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
         "NO agregues prefacios, introducciones ni notas adicionales al final."
     )
 
@@ -488,23 +489,75 @@ async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
     return "\n\n".join(translated_chunks)
 
 
-def preprocess_raw_markdown(md_text: str) -> str:
-    """Aplica expresiones regulares para limpiar ruido del PDF antes de traducir."""
+def clean_and_join_broken_paragraphs(text: str) -> str:
+    """Limpia ruido del PDF y une oraciones cortadas por saltos de página o columna."""
+    if not text:
+        return ""
+    
     # 1. Eliminar números de página flotantes aislados
-    md_text = re.sub(r'(?m)^\s*\d+\s*$\n?', '', md_text)
+    text = re.sub(r'(?m)^\s*\d+\s*$\n?', '', text)
     
-    # 2. Unir palabras separadas por guión de fin de línea (incluso con saltos dobles)
-    md_text = re.sub(r'(\w+)-\s*\n+\s*(\w+)', r'\1\2', md_text)
+    # 2. Eliminar marcadores <!-- PAGE:X --> para evitar que rompan párrafos
+    text = re.sub(r'\s*<!-- PAGE:\d+ -->\s*', ' ', text)
     
-    # 3. Unir paréntesis cortados antes de una minúscula
-    md_text = re.sub(r'(\()\s*\n+\s*([a-záéíóúñ])', r'\1\2', md_text)
+    # 3. Unir palabras separadas por guión de fin de línea
+    text = re.sub(r'(\b[\wáéíóúñÁÉÍÓÚÑ]+)-\s*\n+\s*([\wáéíóúñÁÉÍÓÚÑ]+\b)', r'\1\2', text)
     
-    # 4. Unir oraciones cortadas donde la siguiente línea empieza en minúscula
-    md_text = re.sub(r'([a-záéíóúñA-ZÁÉÍÓÚÑ,0-9])\s*\n+\s*([a-záéíóúñ])', r'\1 \2', md_text)
+    # 4. Unir paréntesis o corchetes cortados antes de una línea siguiente
+    text = re.sub(r'([(\[{])\s*\n+\s*', r'\1', text)
     
-    # 5. Reducir saltos de línea excesivos
-    md_text = re.sub(r'\n{3,}', '\n\n', md_text)
-    return md_text
+    # 5. Unir líneas y párrafos rotos donde la primera no termina en signo terminal
+    lines = text.split('\n')
+    joined_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        while i + 1 < len(lines):
+            next_line = lines[i + 1]
+            
+            # Caso 1: Salto simple (\n)
+            if next_line.strip() and not next_line.strip().startswith(('#', '*', '-', '|', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
+                curr_stripped = line.rstrip()
+                next_stripped = next_line.lstrip()
+                
+                if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '`')):
+                    is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
+                    is_next_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', next_stripped))
+                    if is_next_cont or is_curr_cut:
+                        line = curr_stripped + ' ' + next_stripped
+                        i += 1
+                        continue
+                        
+            # Caso 2: Salto doble (\n\n) accidental
+            if not next_line.strip() and i + 2 < len(lines):
+                after_empty = lines[i + 2]
+                curr_stripped = line.rstrip()
+                after_stripped = after_empty.lstrip()
+                
+                if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '`')):
+                    if not after_stripped.startswith(('#', '*', '-', '|', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
+                        is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
+                        is_after_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', after_stripped))
+                        if is_after_cont or is_curr_cut:
+                            line = curr_stripped + ' ' + after_stripped
+                            i += 2
+                            continue
+            break
+            
+        joined_lines.append(line)
+        i += 1
+        
+    text = '\n'.join(joined_lines)
+    # 6. Reducir saltos de línea excesivos
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+def preprocess_raw_markdown(md_text: str) -> str:
+    return clean_and_join_broken_paragraphs(md_text)
+
+def postprocess_markdown(md_text: str) -> str:
+    return clean_and_join_broken_paragraphs(md_text)
 
 
 async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str] = None, force_retranslate: bool = False, source_url: str = "") -> dict:
@@ -560,6 +613,9 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
         r'<a href="#" class="internal-pdf-link" data-url="\2">\1</a>',
         final_markdown
     )
+
+    # 6.5 Limpiar párrafos rotos residuales y marcadores de página del Markdown final
+    final_markdown = postprocess_markdown(final_markdown)
 
     # 7. Guardar en caché solo si la traducción fue completa
     result = {

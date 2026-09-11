@@ -1499,8 +1499,79 @@ function closeModal() {
 // ═══════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════
 
+function cleanAndJoinBrokenMarkdown(md) {
+  if (!md) return '';
+  // 1. Eliminar marcadores <!-- PAGE:X -->
+  let text = md.replace(/<!--\s*PAGE:\d+\s*-->/gi, '');
+
+  // 2. Unir palabras cortadas con guión de fin de línea
+  text = text.replace(/(\b[\wáéíóúñÁÉÍÓÚÑ]+)-\s*\n+\s*([\wáéíóúñÁÉÍÓÚÑ]+\b)/g, '$1$2');
+
+  // 3. Paréntesis abiertos antes de salto de línea
+  text = text.replace(/([(\[{])\s*\n+\s*/g, '$1');
+
+  // 4. Unir párrafos rotos donde la línea previa no termina con signo terminal y la siguiente empieza en minúscula o signo de continuación
+  const lines = text.split('\n');
+  const result = [];
+  let i = 0;
+  while (i < lines.length) {
+    let line = lines[i];
+    while (i + 1 < lines.length) {
+      const nextLine = lines[i + 1];
+      // Si la siguiente línea es vacía y la subsiguiente (salto doble \n\n) continúa la frase
+      if (!nextLine.trim() && i + 2 < lines.length) {
+        const afterEmpty = lines[i + 2];
+        const currTrim = line.trimEnd();
+        const afterTrim = afterEmpty.trimStart();
+
+        const isNotHeaderOrList = !currTrim.startsWith('#') && !currTrim.startsWith('*') && !currTrim.startsWith('-') && !currTrim.startsWith('|') && !currTrim.startsWith('>') &&
+                                  !afterTrim.startsWith('#') && !afterTrim.startsWith('*') && !afterTrim.startsWith('-') && !afterTrim.startsWith('|') && !afterTrim.startsWith('>');
+        const currNotTerminal = !/[.!?:]\s*["'»)]*$/.test(currTrim);
+        const afterStartsLower = /^[a-záéíóúñ\(\),;\]]/.test(afterTrim);
+        const currCut = /[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$/i.test(currTrim);
+
+        if (isNotHeaderOrList && currNotTerminal && (afterStartsLower || currCut)) {
+          line = currTrim + ' ' + afterTrim;
+          i += 2;
+          continue;
+        }
+      }
+      break;
+    }
+    result.push(line);
+    i++;
+  }
+  return result.join('\n');
+}
+
 function postProcessReaderContent() {
   if (!el.readerContent) return;
+
+  // Unir párrafos (<p>) rotos accidentalmente en el DOM
+  const paragraphs = Array.from(el.readerContent.querySelectorAll('p'));
+  for (let i = 0; i < paragraphs.length - 1; i++) {
+    const currentP = paragraphs[i];
+    const nextP = paragraphs[i + 1];
+
+    if (!currentP || !nextP) continue;
+    if (currentP.querySelector('img, table, iframe') || nextP.querySelector('img, table, iframe')) continue;
+    if (currentP.classList.contains('reader-image-wrap') || nextP.classList.contains('reader-image-wrap')) continue;
+
+    const currentText = currentP.textContent.trim();
+    const nextText = nextP.textContent.trim();
+    if (!currentText || !nextText) continue;
+
+    const endsWithTerminal = /[.!?:]\s*["'»)]*$/.test(currentText);
+    const startsWithContinuation = /^[a-záéíóúñ\(\),;\]]/.test(nextText);
+    const endsWithCut = /[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$/i.test(currentText);
+
+    if (!endsWithTerminal && (startsWithContinuation || endsWithCut)) {
+      currentP.innerHTML = currentP.innerHTML.trimEnd() + ' ' + nextP.innerHTML.trimStart();
+      nextP.remove();
+      paragraphs.splice(i + 1, 1);
+      i--;
+    }
+  }
 
   // Envolver tablas para scroll horizontal exclusivo
   el.readerContent.querySelectorAll('table').forEach(table => {
@@ -1528,7 +1599,8 @@ function postProcessReaderContent() {
 
 function renderReaderPaperContent(paper, markdown) {
   if (!markdown) return;
-  const rawHtml = marked.parse(markdown);
+  const sanitized = cleanAndJoinBrokenMarkdown(markdown);
+  const rawHtml = marked.parse(sanitized);
 
   let heroHtml = '';
   if (paper) {
