@@ -406,7 +406,7 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
         "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Por ejemplo, usa 'versus' en lugar de forzar 'frente a' en títulos o comparaciones científicas.\n"
         "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
         "8. UNIFICACIÓN DE PÁRRAFOS Y ORACIONES CORTADAS: En los PDFs las oraciones con frecuencia quedan cortadas por saltos de página o columnas (por ejemplo, terminando una línea con 'en', '(', etc., y continuando en la siguiente con minúscula o paréntesis de cierre). ESTÁ ESTRICTAMENTE PROHIBIDO dejar oraciones partidas en párrafos separados. Debes unir el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
-        "9. BLOQUES DE AFILIACIONES, AUTORES Y NOTAS AL PIE: Si encuentras datos de afiliaciones o correspondencia en medio del texto, TRADÚCELOS COMO UN PÁRRAFO SEPARADO y no los unas al texto narrativo principal.\n"
+
         "NO agregues prefacios, introducciones ni notas adicionales al final."
     )
 
@@ -498,7 +498,7 @@ async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
             await asyncio.sleep(DELAY_BETWEEN_CHUNKS_SEC)
 
     elapsed_total = round(time.time() - t0, 1)
-    print(f"  ✨ Traducción 100% completada en {elapsed_total}s.\n", flush=True)
+    print(f"  Traducción 100% completada en {elapsed_total}s.\n", flush=True)
     return "\n\n".join(translated_chunks)
 
 
@@ -525,37 +525,6 @@ def is_affiliation_or_meta(b: str) -> bool:
     if keyword_hits >= 1 and (has_author_sym or has_address): return True
     if keyword_hits >= 2: return True
     return False
-
-def relocate_affiliations_and_meta(text: str) -> str:
-    """Extrae bloques de afiliaciones/autores/notas al pie que hayan quedado en medio del texto y los mueve a la cabecera."""
-    if not text:
-        return ""
-    paragraphs = text.split('\n\n')
-    if len(paragraphs) < 3:
-        return text
-
-    body_paragraphs = []
-    extracted_affils = []
-    
-    for idx, p in enumerate(paragraphs):
-        if idx < 2:
-            body_paragraphs.append(p)
-            continue
-        if is_affiliation_or_meta(p):
-            extracted_affils.append(p.strip())
-        else:
-            body_paragraphs.append(p)
-
-    if not extracted_affils:
-        return text
-
-    # Formatear las afiliaciones extraídas en un bloque limpio de front-matter
-    cleaned_affils = [' '.join(line.strip() for line in aff.split('\n') if line.strip()) for aff in extracted_affils]
-    affil_section = '> **Afiliaciones y Correspondencia:**\n> ' + '\n>\n> '.join(cleaned_affils)
-
-    insert_pos = min(2, len(body_paragraphs))
-    body_paragraphs.insert(insert_pos, affil_section)
-    return '\n\n'.join(body_paragraphs)
 
 
 def clean_and_join_broken_paragraphs(text: str) -> str:

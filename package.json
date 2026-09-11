@@ -4,20 +4,26 @@
   "description": "Buscador de papers de psicoterapia en acceso abierto.",
   "main": "build.js",
   "scripts": {
-    "start":   "node server.js",
-    "dev":     "node server.js",
-    "serve":   "node server.js",
-    "build":   "node build.js",
-    "sync":    "node build.js && npx cap sync android",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "serve": "node server.js",
+    "build": "node build.js",
+    "sync": "node build.js && npx cap sync android",
     "android": "node build.js && npx cap sync android && npx cap open android"
   },
-  "keywords": ["psicoterapia", "academic", "research"],
+  "keywords": [
+    "psicoterapia",
+    "academic",
+    "research"
+  ],
   "author": "PsyHub",
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@capacitor/android": "^8.5.1",
     "@capacitor/cli": "^8.5.1",
-    "@capacitor/core": "^8.5.1"
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capawesome/capacitor-background-task": "^8.0.3"
   }
 }

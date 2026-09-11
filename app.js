@@ -897,6 +897,7 @@ function initInfiniteScroll() {
 const HF_SPACE_URL = 'https://mi-servidor-api-42204102300.southamerica-east1.run.app';
 const checkedPdfUrls = new Map(); // url -> { isAutomatic: boolean, status: string, pending: boolean }
 const paperTranslations = new Map(); // id/url -> markdown
+const activeTranslations = new Map(); // id -> Promise
 
 function updatePaperAutomaticBadges(paper) {
   if (!paper || !paper.isAutomatic) return;
@@ -1526,7 +1527,12 @@ const cleanAndJoinBrokenMarkdown = (md) => {
   let text = md;
 
   // Limpiar posibles bloques residuales corruptos de afiliaciones inyectados previamente
-  text = text.replace(/>\s*[*_]{0,3}Afiliaciones y Correspondencia:[*_]{0,3}[\s\S]*?(?=\n\n|$)/gi, '');
+  // Usamos una regex más agresiva que no dependa de \n\n, para el caso donde estén pegados a una imagen o al final.
+  text = text.replace(/>?\s*[*_]{0,3}Afiliaciones y Correspondencia:[*_]{0,3}[^\n]*(?:\n[^\n]*)*?(?=\n\n|\n>?\s*!\[Figura|$)/gi, '');
+  text = text.replace(/Afiliaciones y Correspondencia:/gi, '');
+
+  // Limpiar footers de revistas comunes pegados al final de párrafos (ej. Brain Struct Funct (2008) 213:93-118)
+  text = text.replace(/\s*[A-Za-z\s.-]+\(\d{4}\)\s*\d+:\d+(?:[–-]\d+)?\s*$/gim, '');
 
   // 1. Eliminar marcadores <!-- PAGE:X -->
   text = text.replace(/<!--\s*PAGE:\d+\s*-->/gi, '');
@@ -1925,21 +1931,136 @@ async function handleReaderFileUpload(file) {
   if (el.readerScroll) el.readerScroll.scrollTop = 0;
   if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
 
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (paper?.id) {
-      formData.append('paper_id', paper.id);
-      formData.append('id', paper.id);
+  if (activeTranslations.has(effectiveId)) {
+    try {
+      const data = await activeTranslations.get(effectiveId);
+      if (S.readerPaperId !== effectiveId) {
+        stopReaderLoadingProgress();
+        return;
+      }
+      await finishReaderLoadingProgress();
+      if (S.readerPaperId !== effectiveId) return;
+
+      el.readerLoading.style.display = 'none';
+      if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+
+      paperTranslations.set(effectiveId, data.markdown);
+      if (paper) paper.translatedMarkdown = data.markdown;
+      if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
+      if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+
+      if (typeof saveProcessedArticle === 'function') {
+        const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
+        saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || fileName, data.pdf_url, paper);
+      }
+
+      if (paper) {
+        renderReaderPaperContent(paper, data.markdown);
+      } else {
+        const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
+        const rawHtml = marked.parse(data.markdown);
+        const heroHtml = `
+          <div class="reader-hero-card">
+            <div class="reader-hero-badges">
+              <span class="reader-hero-pill"><i class="ph-bold ph-file-pdf"></i> Archivo Local</span>
+              <span class="reader-hero-pill"><i class="ph-bold ph-translate"></i> Traducido al español</span>
+            </div>
+            <h1 class="reader-hero-title">${esc(fileName)}</h1>
+            <div class="reader-hero-divider"></div>
+          </div>
+        `;
+        el.readerContent.innerHTML = heroHtml + rawHtml;
+        postProcessReaderContent();
+      }
+    } catch (err) {
+      stopReaderLoadingProgress();
+      if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+      if (S.readerPaperId !== effectiveId) return;
+      console.error('File translation error:', err);
+      el.readerLoading.style.display = 'none';
+      el.readerContent.innerHTML = '';
+      el.readerError.style.display = 'flex';
+      el.readerErrorMsg.style.display = 'block';
+      const errorIcon = el.readerError.querySelector('.ph-warning-diamond');
+      if (errorIcon) errorIcon.style.display = 'block';
+
+      const uploadDesc = document.getElementById('reader-upload-desc');
+      if (uploadDesc) uploadDesc.innerHTML = 'Si el servidor de la revista bloqueó la descarga directa, puedes subir el archivo PDF desde tu dispositivo:';
+      el.readerErrorMsg.innerHTML = err.message || 'Error al traducir el archivo PDF subido.';
+    }
+    return;
+  }
+
+  const translatePromise = (async () => {
+    let taskId = null;
+    const { BackgroundTask, LocalNotifications } = window.Capacitor?.Plugins || {};
+    
+    if (BackgroundTask) {
+      try {
+        taskId = await BackgroundTask.beforeExit(async () => {
+          BackgroundTask.finish({ taskId });
+        });
+      } catch (e) { console.warn('BackgroundTask no disponible', e); }
     }
 
-    const apiUrl = `${HF_SPACE_URL}/api/translate-file`;
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      body: formData
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || data.error || 'Error procesando el archivo PDF');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (paper?.id) {
+        formData.append('paper_id', paper.id);
+        formData.append('id', paper.id);
+      }
+
+      const apiUrl = `${HF_SPACE_URL}/api/translate-file`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || 'Error procesando el archivo PDF');
+      
+      if (LocalNotifications) {
+        try {
+          await LocalNotifications.requestPermissions();
+          await LocalNotifications.schedule({
+            notifications: [{
+              title: 'Traducción completada',
+              body: 'Tu archivo local fue traducido con éxito.',
+              id: new Date().getTime(),
+              schedule: { at: new Date(Date.now() + 500) }
+            }]
+          });
+        } catch (e) { console.warn('LocalNotifications falló', e); }
+      }
+
+      return data;
+    } catch (e) {
+      if (LocalNotifications) {
+        try {
+          await LocalNotifications.requestPermissions();
+          await LocalNotifications.schedule({
+            notifications: [{
+              title: 'Error en la traducción',
+              body: 'Ocurrió un error al procesar tu archivo local.',
+              id: new Date().getTime(),
+              schedule: { at: new Date(Date.now() + 500) }
+            }]
+          });
+        } catch (err) { console.warn('LocalNotifications falló', err); }
+      }
+      throw e;
+    } finally {
+      activeTranslations.delete(effectiveId);
+      if (BackgroundTask && taskId !== null) {
+        try { BackgroundTask.finish({ taskId }); } catch (e) {}
+      }
+    }
+  })();
+
+  activeTranslations.set(effectiveId, translatePromise);
+
+  try {
+    const data = await translatePromise;
 
     if (S.readerPaperId !== effectiveId) {
       stopReaderLoadingProgress();

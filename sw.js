@@ -3,7 +3,7 @@
  * Cache para shell de la app. La búsqueda siempre va a la red.
  */
 
-const CACHE = 'psyhub-v2';
+const CACHE = 'psyhub-v30';
 const SHELL = [
     './',
     './index.html',
