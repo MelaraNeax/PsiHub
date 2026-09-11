@@ -709,7 +709,7 @@ function showResults() {
     navigateTo('search');
   }
   S.resultsOpen = true;
-  
+
   if (el.searchInitial) el.searchInitial.style.display = 'none';
   if (el.resultsHeader) el.resultsHeader.style.display = 'flex';
   if (el.searchSubtabsBar) el.searchSubtabsBar.style.display = 'flex';
@@ -983,7 +983,7 @@ function renderPapers(papers, append) {
   papers.forEach(p => frag.appendChild(buildCard(p)));
   if (!append) el.paperList.innerHTML = '';
   el.paperList.appendChild(frag);
-  
+
   validatePdfUrls(papers);
 }
 
@@ -1440,10 +1440,10 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
         <span class="modal-abstract-label">Resumen</span>
         <div id="modal-abstract-lang" class="modal-abstract-lang">
           ${(paper.abstract || abstractEs) ? (
-            translating && paper.abstract
-              ? '<span class="modal-lang-badge translating"><div class="spinner modal-spinner-mini"></div> Traduciendo…</span>'
-              : '<span class="modal-lang-badge"><i class="ph-bold ph-translate"></i> Traducido</span>'
-          ) : ''}
+      translating && paper.abstract
+        ? '<span class="modal-lang-badge translating"><div class="spinner modal-spinner-mini"></div> Traduciendo…</span>'
+        : '<span class="modal-lang-badge"><i class="ph-bold ph-translate"></i> Traducido</span>'
+    ) : ''}
         </div>
       </div>
       <p id="modal-abstract-text" class="modal-abstract">${esc(abstractEs || abstractContent)}</p>
@@ -1466,10 +1466,10 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
           <span id="modal-psihub-btn-sub" style="font-size: 10px; opacity: 0.8; font-weight: normal;">${paper.isAutomatic ? '⚡ Traducción automática' : 'incluye traducción'}</span>
         </button>
         ${paper.oaUrl || paper.pdfUrl
-        ? `<a class="btn-cta-secondary" href="${esc(paper.oaUrl || paper.pdfUrl)}" target="_blank" rel="noopener" style="flex: 1; text-decoration: none; cursor: pointer;">
+      ? `<a class="btn-cta-secondary" href="${esc(paper.oaUrl || paper.pdfUrl)}" target="_blank" rel="noopener" style="flex: 1; text-decoration: none; cursor: pointer;">
              <i class="ph-bold ph-file-pdf"></i> Leer PDF
            </a>`
-        : ''}
+      : ''}
       </div>
       <div class="explore-actions-bar-row">
         <button class="explore-action-save btn-copy-apa" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
@@ -1499,36 +1499,36 @@ function closeModal() {
 // ═══════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════
 
-function relocateAffiliationsAndMeta(text) {
+const isAffiliationOrMeta = (b) => {
+  const s = b.trim();
+  if (!s || s.startsWith('#') || s.startsWith('!') || s.startsWith('|')) return false;
+  const hasEmail = /[\w.-]+@[\w.-]+\.\w+|e-mail:|email:|correo electrónico:/i.test(s);
+  const affilKeywords = [
+    'department of', 'departamento de', 'division of', 'división de',
+    'section on', 'sección de', 'institute of', 'instituto de',
+    'university', 'universidad', 'school of', 'escuela de',
+    'faculty of', 'facultad de', 'hospital', 'laboratory of',
+    'laboratorio de', 'center for', 'centro de', 'dirp', 'nih', 'nimh',
+    'clinic', 'clínica', 'unit', 'unidad de'
+  ];
+  let hits = 0;
+  for (const kw of affilKeywords) {
+    if (new RegExp('\\b' + kw + '\\b', 'i').test(s)) hits++;
+  }
+  const hasAuthorSym = /\(&\)|\bcorrespondence\b|\bcorresponding author\b|\bautor de correspondencia\b|\baddress correspondence\b/i.test(s);
+  const hasAddress = /\b(?:USA|UK|Spain|France|Germany|Bethesda|MD\s*\d{5}|MO\s*\d{5}|Room\s*\d+|Box\s*\d+|P\.?O\.?\s*Box)\b/i.test(s);
+  const hasEditorial = /\b(?:received:\s*\d|accepted:\s*\d|published online:|doi:\s*10\.|copyright\s*©|©\s*\d{4})\b/i.test(s);
+
+  if (hasEditorial || hasEmail) return true;
+  if (hits >= 1 && (hasAuthorSym || hasAddress)) return true;
+  if (hits >= 2) return true;
+  return false;
+}
+
+const relocateAffiliationsAndMeta = (text) => {
   if (!text) return '';
   const paragraphs = text.split('\n\n');
   if (paragraphs.length < 3) return text;
-
-  function isAffiliationOrMeta(b) {
-    const s = b.trim();
-    if (!s || s.startsWith('#') || s.startsWith('!') || s.startsWith('|')) return false;
-    const hasEmail = /[\w\.-]+@[\w\.-]+\.\w+|e-mail:|email:|correo electrónico:/i.test(s);
-    const affilKeywords = [
-      'department of', 'departamento de', 'division of', 'división de', 
-      'section on', 'sección de', 'institute of', 'instituto de', 
-      'university', 'universidad', 'school of', 'escuela de', 
-      'faculty of', 'facultad de', 'hospital', 'laboratory of', 
-      'laboratorio de', 'center for', 'centro de', 'dirp', 'nih', 'nimh', 
-      'clinic', 'clínica', 'unit', 'unidad de'
-    ];
-    let hits = 0;
-    for (const kw of affilKeywords) {
-      if (new RegExp('\\b' + kw + '\\b', 'i').test(s)) hits++;
-    }
-    const hasAuthorSym = /\(&\)|\bcorrespondence\b|\bcorresponding author\b|\bautor de correspondencia\b|\baddress correspondence\b/i.test(s);
-    const hasAddress = /\b(?:USA|UK|Spain|France|Germany|Bethesda|MD\s*\d{5}|MO\s*\d{5}|Room\s*\d+|Box\s*\d+|P\.?O\.?\s*Box)\b/i.test(s);
-    const hasEditorial = /\b(?:received:\s*\d|accepted:\s*\d|published online:|doi:\s*10\.|copyright\s*©|©\s*\d{4})\b/i.test(s);
-
-    if (hasEditorial || hasEmail) return true;
-    if (hits >= 1 && (hasAuthorSym || hasAddress)) return true;
-    if (hits >= 2) return true;
-    return false;
-  }
 
   const bodyParagraphs = [];
   const extractedAffils = [];
@@ -1548,7 +1548,7 @@ function relocateAffiliationsAndMeta(text) {
 
   if (extractedAffils.length === 0) return text;
 
-  const cleanedAffils = extractedAffils.map(aff => 
+  const cleanedAffils = extractedAffils.map(aff =>
     aff.split('\n').map(l => l.trim()).filter(Boolean).join(' ')
   );
   const affilSection = '> **Afiliaciones y Correspondencia:**\n> ' + cleanedAffils.join('\n>\n> ');
@@ -1558,7 +1558,7 @@ function relocateAffiliationsAndMeta(text) {
   return bodyParagraphs.join('\n\n');
 }
 
-function cleanAndJoinBrokenMarkdown(md) {
+const cleanAndJoinBrokenMarkdown = (md) => {
   if (!md) return '';
   // 0. Reubicar bloques de autores/afiliaciones/metadatos que cortan el texto narrativo
   let text = relocateAffiliationsAndMeta(md);
@@ -1587,15 +1587,17 @@ function cleanAndJoinBrokenMarkdown(md) {
         const afterTrim = afterEmpty.trimStart();
 
         const isNotHeaderOrList = !currTrim.startsWith('#') && !currTrim.startsWith('*') && !currTrim.startsWith('-') && !currTrim.startsWith('|') && !currTrim.startsWith('>') &&
-                                  !afterTrim.startsWith('#') && !afterTrim.startsWith('*') && !afterTrim.startsWith('-') && !afterTrim.startsWith('|') && !afterTrim.startsWith('>');
-        const currNotTerminal = !/[.!?:]\s*["'»)]*$/.test(currTrim);
-        const afterStartsLower = /^[a-záéíóúñ\(\),;\]]/.test(afterTrim);
+          !afterTrim.startsWith('#') && !afterTrim.startsWith('*') && !afterTrim.startsWith('-') && !afterTrim.startsWith('|') && !afterTrim.startsWith('>');
+        const currNotTerminal = !/[.!?:]\s*["'”)]*$/.test(currTrim);
+        const afterStartsLower = /^[a-záéíóúñ(),;\]]/.test(afterTrim);
         const currCut = /[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$/i.test(currTrim);
 
         if (isNotHeaderOrList && currNotTerminal && (afterStartsLower || currCut)) {
-          line = currTrim + ' ' + afterTrim;
-          i += 2;
-          continue;
+          if (!isAffiliationOrMeta(afterTrim)) {
+            line = currTrim + ' ' + afterTrim;
+            i += 2;
+            continue;
+          }
         }
       }
       break;
@@ -1606,7 +1608,7 @@ function cleanAndJoinBrokenMarkdown(md) {
   return result.join('\n');
 }
 
-function postProcessReaderContent() {
+const postProcessReaderContent = () => {
   if (!el.readerContent) return;
 
   // Unir párrafos (<p>) rotos accidentalmente en el DOM
@@ -1623,15 +1625,17 @@ function postProcessReaderContent() {
     const nextText = nextP.textContent.trim();
     if (!currentText || !nextText) continue;
 
-    const endsWithTerminal = /[.!?:]\s*["'»)]*$/.test(currentText);
-    const startsWithContinuation = /^[a-záéíóúñ\(\),;\]]/.test(nextText);
+    const endsWithTerminal = /[.!?:]\s*["'”)]*$/.test(currentText);
+    const startsWithContinuation = /^[a-záéíóúñ(),;\]]/.test(nextText);
     const endsWithCut = /[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$/i.test(currentText);
 
     if (!endsWithTerminal && (startsWithContinuation || endsWithCut)) {
-      currentP.innerHTML = currentP.innerHTML.trimEnd() + ' ' + nextP.innerHTML.trimStart();
-      nextP.remove();
-      paragraphs.splice(i + 1, 1);
-      i--;
+      if (!isAffiliationOrMeta(nextText)) {
+        currentP.innerHTML = currentP.innerHTML.trimEnd() + ' ' + nextP.innerHTML.trimStart();
+        nextP.remove();
+        paragraphs.splice(i + 1, 1);
+        i--;
+      }
     }
   }
 
@@ -1731,11 +1735,11 @@ function startReaderLoadingProgress(isLocalFile = false) {
 
   readerProgressTimer = setInterval(() => {
     const elapsed = (Date.now() - startTime) / 1000;
-    
+
     // Curva de progresión suave, continua y asintótica (nunca se estanca abruptamente en el 90%)
     // A los 3s: ~15% | 8s: ~34% | 15s: ~53% | 22s: ~67% | 30s: ~77% | 40s: ~85% | 55s: ~91%
     const target = 94 * (1 - Math.exp(-elapsed / 19));
-    
+
     let stepText = '';
     if (elapsed < 3.5) {
       stepText = isLocalFile ? 'Subiendo archivo y analizando páginas…' : 'Analizando documento y páginas…';
@@ -1951,7 +1955,7 @@ async function handleReaderFileUpload(file) {
 
     el.readerLoading.style.display = 'none';
     if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
-    
+
     // Anclar a este paper
     paperTranslations.set(effectiveId, data.markdown);
     if (paper) paper.translatedMarkdown = data.markdown;
@@ -2038,6 +2042,18 @@ function toggleBookmark(paper) {
     el.btnModalBk.classList.toggle('saved', isBk);
     el.btnModalBk.querySelector('i').className = isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
   }
+
+  // Sincronizar botones en las listas de resultados/recomendaciones
+  const isBkGlobal = isBookmarked(paper.id);
+  document.querySelectorAll('.btn-card-bk').forEach(btn => {
+    if (btn.dataset.id === String(paper.id)) {
+      btn.classList.toggle('saved', isBkGlobal);
+      const i = btn.querySelector('i');
+      if (i) {
+        i.className = isBkGlobal ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple';
+      }
+    }
+  });
 }
 
 function updateStatBadges() {
@@ -2157,6 +2173,7 @@ function refreshProfile() {
         if (!saved) refreshProfile();
       }));
     });
+    el.savedList.appendChild(frag);
   }
 }
 
@@ -2456,11 +2473,11 @@ function setupEventListeners() {
     });
   }
   initInfiniteScroll();
-  el.btnResultsRetry.addEventListener('click', () => { 
+  el.btnResultsRetry.addEventListener('click', () => {
     if (!S.baseQuery) return;
-    S.page = 1; 
-    S.papers = []; 
-    doFetch(); 
+    S.page = 1;
+    S.papers = [];
+    doFetch();
   });
 
   // Recomendaciones
@@ -3321,18 +3338,18 @@ function refreshProcessedArticles() {
   const listEl = document.getElementById('processed-list');
   const emptyEl = document.getElementById('profile-empty-processed');
   const sectionEl = document.getElementById('section-processed');
-  
+
   if (!listEl || !emptyEl || !sectionEl) return;
-  
+
   if (!S.processed || S.processed.length === 0) {
     sectionEl.style.display = 'none';
     emptyEl.style.display = 'flex';
     return;
   }
-  
+
   sectionEl.style.display = 'block';
   emptyEl.style.display = 'none';
-  
+
   listEl.innerHTML = '';
   const frag = document.createDocumentFragment();
   S.processed.forEach((p, idx) => {
@@ -3425,11 +3442,11 @@ function closeInternalPdfViewer() {
 
 document.addEventListener('DOMContentLoaded', () => {
   refreshProcessedArticles();
-  
+
   const libraryProcessedHeader = document.getElementById('library-processed-header');
   const libraryProcessedContainer = document.getElementById('library-processed-container');
   const iconToggleProcessed = document.getElementById('icon-toggle-processed');
-  
+
   if (libraryProcessedHeader) {
     libraryProcessedHeader.addEventListener('click', () => {
       const isHidden = libraryProcessedContainer.style.display === 'none';
@@ -3454,7 +3471,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnClosePdf) {
     btnClosePdf.addEventListener('click', closeInternalPdfViewer);
   }
-  
+
   const readerContentArea = document.getElementById('reader-content');
   if (readerContentArea) {
     readerContentArea.addEventListener('click', e => {

@@ -204,7 +204,7 @@ def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
         
         full_md = []
         for chunk in md_chunks:
-            page_num = chunk.get("metadata", {}).get("page", 0) + 1
+            page_num = chunk.get("metadata", {}).get("page_number", 1)
             page_text = chunk.get("text", "")
             
             # Forzamos la inserción de un enlace a la página exacta original bajo CADA imagen
@@ -394,7 +394,7 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
         "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Por ejemplo, usa 'versus' en lugar de forzar 'frente a' en títulos o comparaciones científicas.\n"
         "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
         "8. UNIFICACIÓN DE PÁRRAFOS Y ORACIONES CORTADAS: En los PDFs las oraciones con frecuencia quedan cortadas por saltos de página o columnas (por ejemplo, terminando una línea con 'en', '(', etc., y continuando en la siguiente con minúscula o paréntesis de cierre). ESTÁ ESTRICTAMENTE PROHIBIDO dejar oraciones partidas en párrafos separados. Debes unir el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
-        "9. BLOQUES DE AFILIACIONES, AUTORES Y NOTAS AL PIE: En los PDFs científicos, los datos de autores, afiliaciones (ej. 'Department of...', 'Section on...', 'University...'), notas de correspondencia o correos electrónicos (ej. 'e-mail:', '(&)') suelen aparecer al pie de página o columna, insertándose erróneamente en medio de una frase o párrafo de la introducción. ESTÁ TERMINANTEMENTE PROHIBIDO dejar bloques de afiliaciones, autores o notas editoriales cortando párrafos en el cuerpo del texto. Si encuentras datos de afiliaciones o correspondencia en medio del texto narrativo, colócalos al inicio del documento (junto a los autores) y UNE los párrafos circundantes para que la lectura del texto principal sea continua y fluida.\n"
+        "9. BLOQUES DE AFILIACIONES, AUTORES Y NOTAS AL PIE: Si encuentras datos de afiliaciones o correspondencia en medio del texto, TRADÚCELOS COMO UN PÁRRAFO SEPARADO y no los unas al texto narrativo principal.\n"
         "NO agregues prefacios, introducciones ni notas adicionales al final."
     )
 
@@ -490,6 +490,30 @@ async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
     return "\n\n".join(translated_chunks)
 
 
+def is_affiliation_or_meta(b: str) -> bool:
+    s = b.strip()
+    if not s or s.startswith('#') or s.startswith('!') or s.startswith('|'):
+        return False
+    has_email = bool(re.search(r'[\w\.-]+@[\w\.-]+\.\w+|e-mail:|email:|correo electrónico:', s, re.I))
+    affil_keywords = [
+        'department of', 'departamento de', 'division of', 'división de', 
+        'section on', 'sección de', 'institute of', 'instituto de', 
+        'university', 'universidad', 'school of', 'escuela de', 
+        'faculty of', 'facultad de', 'hospital', 'laboratory of', 
+        'laboratorio de', 'center for', 'centro de', 'dirp', 'nih', 'nimh', 
+        'clinic', 'clínica', 'unit', 'unidad de'
+    ]
+    keyword_hits = sum(1 for kw in affil_keywords if re.search(r'\b' + kw + r'\b', s, re.I))
+    has_author_sym = bool(re.search(r'\(&\)|\bcorrespondence\b|\bcorresponding author\b|\bautor de correspondencia\b|\baddress correspondence\b', s, re.I))
+    has_address = bool(re.search(r'\b(?:USA|UK|Spain|France|Germany|Bethesda|MD\s*\d{5}|MO\s*\d{5}|Room\s*\d+|Box\s*\d+|P\.?O\.?\s*Box)\b', s, re.I))
+    has_editorial = bool(re.search(r'\b(?:received:\s*\d|accepted:\s*\d|published online:|doi:\s*10\.|copyright\s*©|©\s*\d{4})\b', s, re.I))
+    
+    if has_editorial: return True
+    if has_email: return True
+    if keyword_hits >= 1 and (has_author_sym or has_address): return True
+    if keyword_hits >= 2: return True
+    return False
+
 def relocate_affiliations_and_meta(text: str) -> str:
     """Extrae bloques de afiliaciones/autores/notas al pie que hayan quedado en medio del texto y los mueve a la cabecera."""
     if not text:
@@ -497,30 +521,6 @@ def relocate_affiliations_and_meta(text: str) -> str:
     paragraphs = text.split('\n\n')
     if len(paragraphs) < 3:
         return text
-
-    def is_affiliation_or_meta(b: str) -> bool:
-        s = b.strip()
-        if not s or s.startswith('#') or s.startswith('!') or s.startswith('|'):
-            return False
-        has_email = bool(re.search(r'[\w\.-]+@[\w\.-]+\.\w+|e-mail:|email:|correo electrónico:', s, re.I))
-        affil_keywords = [
-            'department of', 'departamento de', 'division of', 'división de', 
-            'section on', 'sección de', 'institute of', 'instituto de', 
-            'university', 'universidad', 'school of', 'escuela de', 
-            'faculty of', 'facultad de', 'hospital', 'laboratory of', 
-            'laboratorio de', 'center for', 'centro de', 'dirp', 'nih', 'nimh', 
-            'clinic', 'clínica', 'unit', 'unidad de'
-        ]
-        keyword_hits = sum(1 for kw in affil_keywords if re.search(r'\b' + kw + r'\b', s, re.I))
-        has_author_sym = bool(re.search(r'\(&\)|\bcorrespondence\b|\bcorresponding author\b|\bautor de correspondencia\b|\baddress correspondence\b', s, re.I))
-        has_address = bool(re.search(r'\b(?:USA|UK|Spain|France|Germany|Bethesda|MD\s*\d{5}|MO\s*\d{5}|Room\s*\d+|Box\s*\d+|P\.?O\.?\s*Box)\b', s, re.I))
-        has_editorial = bool(re.search(r'\b(?:received:\s*\d|accepted:\s*\d|published online:|doi:\s*10\.|copyright\s*©|©\s*\d{4})\b', s, re.I))
-        
-        if has_editorial: return True
-        if has_email: return True
-        if keyword_hits >= 1 and (has_author_sym or has_address): return True
-        if keyword_hits >= 2: return True
-        return False
 
     body_paragraphs = []
     extracted_affils = []
@@ -582,12 +582,13 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
                 next_stripped = next_line.lstrip()
                 
                 if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '`')):
-                    is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
-                    is_next_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', next_stripped))
-                    if is_next_cont or is_curr_cut:
-                        line = curr_stripped + ' ' + next_stripped
-                        i += 1
-                        continue
+                    if not is_affiliation_or_meta(next_stripped):
+                        is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
+                        is_next_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', next_stripped))
+                        if is_next_cont or is_curr_cut:
+                            line = curr_stripped + ' ' + next_stripped
+                            i += 1
+                            continue
                         
             # Caso 2: Salto doble (\n\n) accidental
             if not next_line.strip() and i + 2 < len(lines):
@@ -597,12 +598,13 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
                 
                 if curr_stripped and not curr_stripped.endswith(('.', '!', '?', ':', '#', '---', '***')) and not curr_stripped.startswith(('#', '*', '-', '|', '>', '`')):
                     if not after_stripped.startswith(('#', '*', '-', '|', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
-                        is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
-                        is_after_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', after_stripped))
-                        if is_after_cont or is_curr_cut:
-                            line = curr_stripped + ' ' + after_stripped
-                            i += 2
-                            continue
+                        if not is_affiliation_or_meta(after_stripped):
+                            is_curr_cut = bool(re.search(r'[-–—(¿¡]$|(?:\b(?:en|de|del|la|el|los|las|un|una|con|por|para|y|o|que|a|al|su|sus|como)\s*)$', curr_stripped, re.I))
+                            is_after_cont = bool(re.match(r'^[a-záéíóúñ\(\),;\]]', after_stripped))
+                            if is_after_cont or is_curr_cut:
+                                line = curr_stripped + ' ' + after_stripped
+                                i += 2
+                                continue
             break
             
         joined_lines.append(line)
@@ -664,7 +666,7 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
     final_markdown = replace_image_refs_with_base64(translated, images)
 
     # 5. Inyectar la URL final del PDF en los enlaces #page=
-    final_pdf_url = source_url if (source_url and source_url.startswith("http")) else f"/files/{file_id}.pdf"
+    final_pdf_url = f"/files/{file_id}.pdf"
     final_markdown = final_markdown.replace("](#page=", f"]({final_pdf_url}#page=")
 
     # 6. Convertir los enlaces al PDF / #page= a etiquetas HTML para el visualizador interno
