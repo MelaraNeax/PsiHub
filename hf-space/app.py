@@ -62,12 +62,6 @@ from dotenv import load_dotenv
 # CONFIGURACIÓN
 # ============================================================
 
-DEEPSEEK_MODEL = "deepseek-chat"
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
-
-TRANSLATION_CONCURRENCY = 6
-TRANSLATION_DELAY = 0
-
 load_dotenv()
 
 DEEPSEEK_API_KEYS = [
@@ -115,7 +109,7 @@ REQUEST_TIMEOUT = int(
 
 # Cambiar esta versión invalida automáticamente caches generados por
 # versiones anteriores del pipeline.
-PIPELINE_VERSION = "2026-09-12-reader-cleanup-v5-parallel6"
+PIPELINE_VERSION = "2026-09-12-reader-layout-v6-parallel6"
 
 
 
@@ -1154,24 +1148,456 @@ def save_cache(
 # EXTRACCIÓN MARKDOWN
 # ============================================================
 
+def _safe_box_bbox(box):
+    bbox = box.get("bbox") if isinstance(box, dict) else None
+    if not bbox or len(bbox) != 4:
+        return None
+    try:
+        return tuple(float(value) for value in bbox)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_box_pos(box, text_length: int):
+    pos = box.get("pos") if isinstance(box, dict) else None
+    if not pos or len(pos) != 2:
+        return None
+    try:
+        start = max(0, min(int(pos[0]), text_length))
+        stop = max(start, min(int(pos[1]), text_length))
+    except (TypeError, ValueError):
+        return None
+    if stop <= start:
+        return None
+    return start, stop
+
+
+def _normalize_footnote_markdown(text: str) -> str:
+    """Asegura que una nota extraída como footnote quede siempre como blockquote."""
+    if not text or not text.strip():
+        return ""
+
+    lines = [line.rstrip() for line in text.strip().splitlines()]
+    output = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if output and output[-1] != ">":
+                output.append(">")
+            continue
+
+        # PyMuPDF4LLM normalmente ya entrega '> '. No duplicarlo.
+        stripped = re.sub(r"^>\s*", "", stripped)
+        output.append("> " + stripped)
+
+    while output and output[-1] == ">":
+        output.pop()
+
+    return "\n".join(output).strip()
+
+
+def _remove_ranges_from_text(text: str, ranges) -> str:
+    """Elimina rangos de caracteres sin alterar el resto del Markdown."""
+    if not text or not ranges:
+        return text
+
+    result = text
+    for start, stop in sorted(ranges, reverse=True):
+        result = result[:start] + result[stop:]
+    return result
+
+
+def _footnote_y_key(item) -> float:
+    """Devuelve la coordenada Y de una nota al pie sin subscriptar un Optional."""
+    bbox = _safe_box_bbox(item[0])
+    if bbox is None:
+        return 0.0
+    return bbox[1]
+
+
+def _box_sort_key(box):
+    bbox = _safe_box_bbox(box)
+    if bbox is None:
+        return (0.0, 0.0, 0)
+    x0, y0, x1, y1 = bbox
+    return (y0, x0, int(box.get("index", 0)))
+
+
+def _detect_two_columns_from_page_boxes(page: dict, page_width: float) -> bool:
+    """
+    Detecta únicamente columnas claramente separadas.
+
+    No fuerza una lectura en columnas ante páginas de una sola columna,
+    títulos de ancho completo, tablas o layouts ambiguos.
+    """
+    boxes = page.get("page_boxes") or []
+    candidates = []
+
+    for box in boxes:
+        if not isinstance(box, dict):
+            continue
+        box_class = str(box.get("class", "")).lower()
+        if box_class in {"page-header", "page-footer", "footnote"}:
+            continue
+        bbox = _safe_box_bbox(box)
+        if bbox is None:
+            continue
+        x0, y0, x1, y1 = bbox
+        width = x1 - x0
+        if width <= 0:
+            continue
+
+        # Las cajas que cruzan claramente toda la página no sirven para
+        # decidir si existe una estructura de dos columnas.
+        if width >= page_width * 0.68:
+            continue
+
+        center = (x0 + x1) / 2.0
+        if center < page_width * 0.47 or center > page_width * 0.53:
+            candidates.append(center)
+
+    if len(candidates) < 4:
+        return False
+
+    left = [value for value in candidates if value < page_width * 0.5]
+    right = [value for value in candidates if value >= page_width * 0.5]
+
+    if len(left) < 2 or len(right) < 2:
+        return False
+
+    # Debe existir un hueco central real entre ambas masas de texto.
+    left_edge = max(left)
+    right_edge = min(right)
+    gap = right_edge - left_edge
+
+    return (
+        left_edge < page_width * 0.47
+        and right_edge > page_width * 0.53
+        and gap >= page_width * 0.06
+    )
+
+
+def _reorder_two_column_page(page: dict, page_width: float) -> str:
+    """
+    Reconstruye conservadoramente el orden de lectura de una página de dos
+    columnas usando los page_boxes de PyMuPDF4LLM.
+
+    La unidad de reordenamiento es la caja completa: nunca se reconstruyen
+    palabras ni se reescribe el Markdown interno de una caja.
+    """
+    text = str(page.get("text", "") or "")
+    boxes = page.get("page_boxes") or []
+
+    if not text or not boxes:
+        return text
+
+    usable = []
+    footnotes = []
+
+    for box in boxes:
+        if not isinstance(box, dict):
+            continue
+
+        pos = _safe_box_pos(box, len(text))
+        if pos is None:
+            continue
+
+        box_class = str(box.get("class", "")).lower()
+        if box_class == "footnote":
+            footnotes.append((box, pos))
+            continue
+
+        bbox = _safe_box_bbox(box)
+        if bbox is None:
+            continue
+
+        usable.append((box, pos, bbox))
+
+    if not usable:
+        cleaned = text
+    else:
+        # Detectar cajas que realmente pertenecen a las dos columnas.
+        narrow = []
+        for box, pos, bbox in usable:
+            x0, y0, x1, y1 = bbox
+            width = x1 - x0
+            if width < page_width * 0.68:
+                narrow.append((box, pos, bbox))
+
+        left_boxes = []
+        right_boxes = []
+        for item in narrow:
+            _, _, bbox = item
+            x0, y0, x1, y1 = bbox
+            center = (x0 + x1) / 2.0
+            if center < page_width * 0.5:
+                left_boxes.append(item)
+            elif center >= page_width * 0.5:
+                right_boxes.append(item)
+
+        has_two_columns = (
+            len(left_boxes) >= 2
+            and len(right_boxes) >= 2
+            and max((b[2][0] + b[2][2]) / 2 for b in left_boxes)
+            < page_width * 0.47
+            and min((b[2][0] + b[2][2]) / 2 for b in right_boxes)
+            > page_width * 0.53
+        )
+
+        if not has_two_columns:
+            cleaned = _remove_ranges_from_text(
+                text,
+                [pos for _, pos in footnotes]
+            )
+        else:
+            # Cajas de ancho completo funcionan como anclas entre bloques de
+            # columnas: título, figura, tabla, caption, etc.
+            full_width = []
+            column_boxes = []
+            for item in usable:
+                _, _, bbox = item
+                x0, y0, x1, y1 = bbox
+                width = x1 - x0
+                center = (x0 + x1) / 2.0
+
+                if (
+                    width >= page_width * 0.68
+                    or (x0 <= page_width * 0.08 and x1 >= page_width * 0.92)
+                ):
+                    full_width.append(item)
+                elif center < page_width * 0.5:
+                    column_boxes.append(("left", item))
+                else:
+                    column_boxes.append(("right", item))
+
+            full_width.sort(key=lambda item: _box_sort_key(item[0]))
+            left_items = [item for side, item in column_boxes if side == "left"]
+            right_items = [item for side, item in column_boxes if side == "right"]
+            left_items.sort(key=_box_sort_key)
+            right_items.sort(key=_box_sort_key)
+
+            # El inicio de la zona de columnas evita mandar un título de ancho
+            # completo al final de la página.
+            if left_items and right_items:
+                column_start_y = min(
+                    item[2][1]
+                    for item in left_items + right_items
+                )
+            else:
+                column_start_y = float("inf")
+
+            ordered = []
+
+            # Todo lo que precede claramente al comienzo de las columnas.
+            leading_full = [
+                item for item in full_width
+                if item[2][3] <= column_start_y + 8
+            ]
+            middle_full = [
+                item for item in full_width
+                if item not in leading_full
+            ]
+
+            ordered.extend(sorted(leading_full, key=_box_sort_key))
+
+            if left_items or right_items:
+                # Para el cuerpo académico estándar: columna izquierda completa
+                # y luego columna derecha completa.
+                if middle_full:
+                    # Si hay una figura/tabla de ancho completo en medio, usarla
+                    # como ancla y dividir el contenido de columnas por su y0.
+                    remaining_left = list(left_items)
+                    remaining_right = list(right_items)
+
+                    for full_item in middle_full:
+                        full_bbox = _safe_box_bbox(full_item[0])
+                        if full_bbox is None:
+                            continue
+                        full_y0 = full_bbox[1]
+
+                        left_before = [
+                            item for item in remaining_left
+                            if item[2][1] < full_y0
+                        ]
+                        right_before = [
+                            item for item in remaining_right
+                            if item[2][1] < full_y0
+                        ]
+
+                        # No se consume el contenido de una columna antes de
+                        # tiempo si todavía no existe suficiente evidencia de
+                        # que el ancla corta ambas columnas.
+                        if left_before or right_before:
+                            ordered.extend(left_before)
+                            ordered.extend(right_before)
+                            remaining_left = [
+                                item for item in remaining_left
+                                if item not in left_before
+                            ]
+                            remaining_right = [
+                                item for item in remaining_right
+                                if item not in right_before
+                            ]
+
+                        ordered.append(full_item)
+
+                    ordered.extend(remaining_left)
+                    ordered.extend(remaining_right)
+                else:
+                    ordered.extend(left_items)
+                    ordered.extend(right_items)
+            else:
+                ordered.extend(middle_full)
+
+            # Cualquier caja no cubierta por la clasificación anterior se añade
+            # al final en su orden espacial, evitando pérdida de contenido.
+            used_ids = {id(item) for item in ordered}
+            leftovers = [
+                item for item in usable
+                if id(item) not in used_ids
+            ]
+            ordered.extend(sorted(leftovers, key=_box_sort_key))
+
+            segments = []
+            seen_ranges = set()
+            for box, pos, bbox in ordered:
+                if pos in seen_ranges:
+                    continue
+                seen_ranges.add(pos)
+                segment = text[pos[0]:pos[1]]
+                if segment:
+                    segments.append(segment)
+
+            # Las cajas de page_boxes normalmente ya contienen sus separadores
+            # Markdown. Solo añadimos un salto cuando el segmento anterior no
+            # termina en whitespace.
+            rebuilt = ""
+            for segment in segments:
+                if not rebuilt:
+                    rebuilt = segment
+                    continue
+                if not rebuilt.endswith(("\n", " ", "\t")) and not segment.startswith("\n"):
+                    rebuilt += "\n\n"
+                rebuilt += segment
+            cleaned = rebuilt
+
+    # Footnotes: se eliminan de su posición física y se colocan al final de la
+    # página, nunca en medio de un párrafo o entre dos columnas.
+    footnote_blocks = []
+    for box, pos in sorted(
+        footnotes,
+        key=lambda item: (
+            _footnote_y_key(item),
+            int(item[0].get("index", 0)),
+        )
+    ):
+        note = _normalize_footnote_markdown(text[pos[0]:pos[1]])
+        if note:
+            footnote_blocks.append(note)
+
+    cleaned = cleaned.strip()
+    if footnote_blocks:
+        cleaned += "\n\n" + "\n\n".join(footnote_blocks)
+
+    return cleaned.strip()
+
+
+def normalize_page_chunk_layout(
+    page: dict,
+    page_width: float,
+    page_number: int,
+) -> dict:
+    """
+    Normaliza una página manteniendo su frontera física.
+
+    Esto es deliberadamente anterior a la unión de páginas: una nota al pie
+    no puede saltar a la mitad del párrafo de la página siguiente.
+    """
+    if not isinstance(page, dict):
+        return {"text": str(page)}
+
+    normalized = dict(page)
+    text = str(page.get("text", "") or "")
+    boxes = page.get("page_boxes") or []
+
+    if not text or not boxes:
+        normalized["text"] = text
+        return normalized
+
+    footnote_ranges = []
+    footnotes = []
+    for box in boxes:
+        if not isinstance(box, dict):
+            continue
+        if str(box.get("class", "")).lower() != "footnote":
+            continue
+        pos = _safe_box_pos(box, len(text))
+        if pos is None:
+            continue
+        footnote_ranges.append(pos)
+        footnotes.append((box, pos))
+
+    # Primero se intenta corregir el orden de columnas. Si no hay dos columnas,
+    # solo se retiran las notas al pie de su posición original.
+    if _detect_two_columns_from_page_boxes(page, page_width):
+        corrected = _reorder_two_column_page(page, page_width)
+    else:
+        corrected = _remove_ranges_from_text(text, footnote_ranges)
+
+        footnote_blocks = []
+        for box, pos in sorted(
+            footnotes,
+            key=lambda item: (
+                _footnote_y_key(item),
+                int(item[0].get("index", 0)),
+            )
+        ):
+            note = _normalize_footnote_markdown(text[pos[0]:pos[1]])
+            if note:
+                footnote_blocks.append(note)
+
+        corrected = corrected.strip()
+        if footnote_blocks:
+            corrected += "\n\n" + "\n\n".join(footnote_blocks)
+        corrected = corrected.strip()
+
+    normalized["text"] = corrected
+    normalized["_layout_normalized"] = True
+    normalized["_page_number"] = page_number
+    return normalized
+
+
 def extract_markdown_and_images(
     doc: fitz.Document,
     output_dir: Path
 ):
-
     output_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    markdown = pymupdf4llm.to_markdown(
+    pages = pymupdf4llm.to_markdown(
         doc,
         page_chunks=True,
         write_images=True,
         image_path=str(output_dir)
     )
 
-    return markdown
+    if isinstance(pages, str):
+        return pages
+
+    corrected_pages = []
+    for page_number, page in enumerate(pages, start=1):
+        corrected_pages.append(
+            normalize_page_chunk_layout(
+                page,
+                page_width=doc[page_number - 1].rect.width,
+                page_number=page_number,
+            )
+        )
+
+    return corrected_pages
 
 
 def add_page_markers(
@@ -2256,7 +2682,6 @@ async def translate_markdown(
     El orden final siempre coincide con el orden original del Markdown,
     independientemente de qué request termine primero.
     """
-
     chunks = chunk_markdown(markdown)
 
     if not chunks:
@@ -2304,12 +2729,7 @@ async def translate_markdown(
 
     await asyncio.gather(*workers)
 
-    errors = [
-        result
-        for result in results
-        if isinstance(result, Exception)
-    ]
-
+    errors = [result for result in results if isinstance(result, Exception)]
     if errors:
         raise errors[0]
 
