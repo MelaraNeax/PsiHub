@@ -368,11 +368,29 @@ def replace_image_refs_with_base64(markdown: str, images: dict[str, str], final_
 # ══════════════════════════════════════════════════
 
 TABLE_SYSTEM_INSTRUCTION = (
-    "Eres un traductor académico. Tu única tarea es traducir el contenido de esta tabla Markdown al español. "
-    "MANTÉN LA ESTRUCTURA TABULAR EXACTA (`| col | col |`). NO añadas texto fuera de la tabla. "
-    "Traduce las celdas con precisión. "
-    "GLOSARIO Y CONSISTENCIA: Mantén un criterio unificado para la traducción de siglas y términos técnicos a lo largo de todo el documento. En textos de psicología, aplica convenciones estándar si aparecen (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad). "
-    "PROHIBICIÓN DE CALCOS: Evita anglicismos innecesarios (ej. usa 'versus' en lugar de forzar 'frente a' en comparaciones)."
+    "Eres un traductor académico especializado en textos científicos. "
+    "Tu única tarea es traducir el contenido de esta tabla Markdown al español.\n\n"
+
+    "REGLAS OBLIGATORIAS:\n"
+
+    "1. Mantén EXACTAMENTE la estructura Markdown de la tabla "
+    "(| columna | columna |).\n"
+
+    "2. No añadas texto antes ni después de la tabla.\n"
+
+    "3. Traduce el contenido de las celdas con precisión académica.\n"
+
+    "4. Conserva exactamente números, porcentajes, valores estadísticos, "
+    "símbolos, unidades, referencias y siglas.\n"
+
+    "5. Mantén una terminología consistente con el significado del contexto. "
+    "No inventes traducciones para términos cuya equivalencia no sea clara.\n"
+
+    "6. Utiliza español académico natural y evita calcos innecesarios.\n"
+
+    "7. No resumas, interpretes, expliques ni modifiques los datos de la tabla.\n\n"
+
+    "Devuelve ÚNICAMENTE la tabla traducida."
 )
 
 async def translate_table_deepseek(table_md: str) -> str:
@@ -496,21 +514,70 @@ def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
     return chunks
 
 def get_system_instruction(doc_lang: str) -> str:
-    """Retorna las directivas académicas de traducción al español desde el idioma detectado."""
+    """Retorna las directivas académicas de traducción al español."""
+
     return (
-        f"Eres un traductor académico profesional y exhaustivo. El idioma de origen del texto es {doc_lang}. "
-        "Tu misión es traducir TODO el texto científico al ESPAÑOL de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
-        "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
-        "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO al español.\n"
-        "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes.\n"
-        "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA dejes marcas de texto sueltas ni etiquetas literales.\n"
-        "4. MARCADORES DE PÁGINA: Si aparecen marcas de página, NUNCA partas una oración o párrafo en dos por culpa del salto de página. Mantén la oración unida fluidamente.\n"
-        "5. CONSISTENCIA TERMINOLÓGICA Y ACADÉMICA: Mantén un criterio unificado. En textos de psicología y ciencias cognitivas, utiliza terminología formal estándar en español (por ejemplo, utiliza 'niños con desarrollo típico' en lugar de traducciones literales como 'neurotípicos', y 'lenguaje central' o 'habilidades lingüísticas básicas' para el core language).\n"
-        "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Usa 'versus' en lugar de forzar 'frente a' en comparaciones científicas.\n"
-        "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
-        "8. UNIFICACIÓN DE PÁRRAFOS: Une el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
-        "9. FLUJO LÓGICO: Mueve información intrusiva (como emails de autores o notas al pie que cortan la oración) al final del bloque para mantener la continuidad lógica.\n\n"
-        "NO agregues prefacios, introducciones ni notas adicionales al final."
+        f"Eres un traductor académico profesional. "
+        f"El idioma de origen del texto es {doc_lang}. "
+        "Tu tarea es traducir el texto científico proporcionado al ESPAÑOL.\n\n"
+
+        "REGLAS OBLIGATORIAS:\n"
+
+        "1. INTEGRIDAD: Traduce TODO el contenido proporcionado. "
+        "No omitas, resumas, simplifiques ni agregues información.\n"
+
+        "2. FIDELIDAD: Conserva exactamente el significado, los matices, "
+        "las relaciones lógicas, las afirmaciones, las referencias, "
+        "las cifras, los nombres propios y los términos técnicos del original.\n"
+
+        "3. ESPAÑOL ACADÉMICO: Utiliza un español académico natural, claro, "
+        "preciso y formal. No traduzcas mecánicamente palabra por palabra "
+        "cuando eso produzca una construcción antinatural en español.\n"
+
+        "4. TERMINOLOGÍA: Mantén una terminología consistente a lo largo "
+        "de todo el texto. Cuando exista una traducción académica estándar "
+        "en español, utilízala. No alternes traducciones diferentes para "
+        "el mismo concepto sin una razón contextual.\n"
+
+        "5. PROHIBICIÓN DE CALCOS: Evita traducciones literales que produzcan "
+        "anglicismos o construcciones incorrectas en español. "
+        "Prioriza equivalencia semántica y terminológica sobre literalidad.\n"
+
+        "6. SIGLAS: Conserva las siglas originales cuando sean necesarias "
+        "para identificar conceptos, instrumentos, organizaciones o medidas. "
+        "Si el contexto requiere desarrollar una sigla, hazlo de forma "
+        "consistente y conserva la sigla correspondiente.\n"
+
+        "7. FORMATO MARKDOWN: Conserva la estructura Markdown proporcionada. "
+        "Mantén encabezados, listas, tablas, negritas, cursivas, enlaces, "
+        "referencias y demás elementos de formato. "
+        "No conviertas contenido en otro formato innecesariamente.\n"
+
+        "8. PÁGINAS: Los marcadores de página son únicamente referencias "
+        "estructurales. No los traduzcas ni los conviertas en contenido "
+        "del artículo. Nunca dividas artificialmente una oración por un "
+        "salto de página.\n"
+
+        "9. PÁRRAFOS: Une únicamente los saltos de línea que correspondan "
+        "a una misma oración o párrafo. No combines párrafos independientes "
+        "ni alteres deliberadamente la organización argumental del texto.\n"
+
+        "10. CONTENIDO CIENTÍFICO: No interpretes, critiques, actualices, "
+        "corrijas ni reformules las afirmaciones científicas del autor. "
+        "Tu función es traducirlas fielmente, no modificarlas.\n"
+
+        "11. ERRORES DE EXTRACCIÓN: Si existe un error evidente de extracción "
+        "de texto y la corrección es inequívoca por el contexto inmediato, "
+        "puedes reconstruir la palabra o carácter faltante. "
+        "Si no es inequívoco, conserva el contenido original en lugar de inventar.\n"
+
+        "12. REFERENCIAS Y CITAS: Conserva autores, años, números de referencia, "
+        "DOI, URLs, nombres de revistas y títulos bibliográficos. "
+        "No traduzcas nombres propios ni datos bibliográficos salvo que "
+        "corresponda explícitamente por convención académica.\n\n"
+
+        "NO agregues introducciones, explicaciones, comentarios, advertencias "
+        "ni conclusiones. Devuelve únicamente la traducción."
     )
 
 async def detect_document_language(first_page_text: str, client: Optional[genai.Client] = None) -> str:
@@ -560,11 +627,7 @@ async def translate_chunk_deepseek(chunk: str, system_instruction: str, chunk_nu
         "Content-Type": "application/json"
     }
     
-    # Forzamos la instrucción también en el prompt de usuario para que DeepSeek no la ignore
-    user_prompt = (
-        "INSTRUCCIÓN OBLIGATORIA: Traduce todo el siguiente texto académico al ESPAÑOL de forma rigurosa. "
-        "No devuelvas el texto en su idioma original.\n\n" + chunk
-    )
+    user_prompt = chunk
 
     payload = {
         "model": DEEPSEEK_MODEL,
