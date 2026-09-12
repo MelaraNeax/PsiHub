@@ -124,7 +124,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v15"
+PIPELINE_VERSION = "2026-09-12-reader-master-v16"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1256,6 +1256,7 @@ def clean_and_join_broken_paragraphs(text: str, visual_hints: Optional[dict] = N
             if not marker:
                 i += 1
                 continue
+
             page_number = int(marker.group(1))
             hint = visual_hints.get(page_number)
             if not hint or not hint.get("continues_paragraph"):
@@ -1285,12 +1286,19 @@ def clean_and_join_broken_paragraphs(text: str, visual_hints: Optional[dict] = N
                 i += 1
                 continue
 
+            # --- FIX: el marcador NUNCA se mete en la línea del texto ---
+            # El párrafo unido va a lines[prev]. El marcador se queda
+            # intacto, solo en su propia línea, en lines[i].
+            # lines[nxt] se vacía (su contenido ya está en lines[prev]).
             if left.endswith("-") and re.match(r"^[a-záéíóúñü]", right, re.I):
-                lines[prev] = left[:-1] + right + " " + lines[i]
+                lines[prev] = left[:-1] + right
             else:
-                lines[prev] = left + " " + right + " " + lines[i]
+                lines[prev] = left + " " + right
             lines[nxt] = ""
+            # lines[i] queda tal cual: <!-- PAGE:N+1 -->, solo en su línea.
             i = nxt + 1
+
+        cleaned = "\n".join(lines)
 
         cleaned = "\n".join(lines)
 
@@ -1300,19 +1308,61 @@ def clean_and_join_broken_paragraphs(text: str, visual_hints: Optional[dict] = N
 def optimize_markdown_for_mobile(text: str) -> str:
     if not text:
         return ""
+
     text = text.replace("\r\n", "\n")
+
+    # ----------------------------------------------
+    # espacios excesivos
+    # ----------------------------------------------
     text = re.sub(r"[ \t]+\n", "\n", text)
+
+    # ----------------------------------------------
+    # no más de 2 líneas vacías consecutivas
+    # ----------------------------------------------
     text = re.sub(r"\n{4,}", "\n\n\n", text)
-    text = re.sub(r"\n*(#{1,6}[^\n]+)\n*", r"\n\n\1\n\n", text)
-    text = re.sub(r"\n*(<!-- PAGE:\d+ -->)\n*", r"\n\n\1\n\n", text)
+
+    # ----------------------------------------------
+    # headings
+    #
+    # FIX: solo aplicar al inicio de línea y exigir un espacio después
+    # de los '#'. Esto evita romper celdas de tabla que empiezan con
+    # '#', como "#seguidores/enlaces entrantes".
+    # ----------------------------------------------
+    text = re.sub(
+        r"\n*(^#{1,6}\s+[^\n]+$)\n*",
+        r"\n\n\1\n\n",
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # ----------------------------------------------
+    # page markers
+    # ----------------------------------------------
+    text = re.sub(
+        r"\n*(<!-- PAGE:\d+ -->)\n*",
+        r"\n\n\1\n\n",
+        text,
+    )
+
+    # ----------------------------------------------
+    # anclas HTML
+    #
+    # No introducir espacios arbitrarios dentro de ellas.
+    # ----------------------------------------------
     text = re.sub(
         r'\n{3,}(<a\s+id="[^"]+"\s*>)',
-        r"\n\n\1", text, flags=re.IGNORECASE
+        r"\n\n\1",
+        text,
+        flags=re.IGNORECASE,
     )
+
+    # ----------------------------------------------
+    # tablas
+    # ----------------------------------------------
     text = re.sub(r"\n{3,}(\|)", "\n\n\\1", text)
     text = re.sub(r"(\|[^\n]+)\n{3,}", "\\1\n\n", text)
-    return text.strip()
 
+    return text.strip()
 
 def postprocess_markdown(text: str) -> str:
     return optimize_markdown_for_mobile(text)
