@@ -298,90 +298,6 @@ def classify_region(
 
     return "body"
 
-
-def collect_page_elements(
-    doc: fitz.Document,
-    header_fraction: float = 0.08,
-    footer_fraction: float = 0.08
-):
-    """
-    Extrae líneas de texto con coordenadas.
-
-    Se utilizan líneas y no bloques completos para evitar que
-    un bloque que contenga simultáneamente contenido académico
-    y elementos editoriales termine siendo eliminado completo.
-    """
-
-    elements = []
-
-    for page_index, page in enumerate(doc):
-
-        rect = page.rect
-
-        header_height = rect.height * header_fraction
-        footer_height = rect.height * footer_fraction
-
-        page_dict = page.get_text("dict")
-
-        for block in page_dict.get("blocks", []):
-
-            if block.get("type") != 0:
-                continue
-
-            for line in block.get("lines", []):
-
-                spans = line.get("spans", [])
-
-                if not spans:
-                    continue
-
-                text = "".join(
-                    span.get("text", "")
-                    for span in spans
-                ).strip()
-
-                if not text:
-                    continue
-
-                bbox = line.get("bbox")
-
-                if not bbox or len(bbox) != 4:
-                    continue
-
-                x0, y0, x1, y1 = bbox
-
-                line_rect = fitz.Rect(
-                    x0,
-                    y0,
-                    x1,
-                    y1
-                )
-
-                region = classify_region(
-                    line_rect,
-                    rect,
-                    header_height,
-                    footer_height
-                )
-
-                elements.append(
-                    LayoutElement(
-                        text=text,
-                        normalized=normalize_editorial_text(text),
-                        x0=x0,
-                        y0=y0,
-                        x1=x1,
-                        y1=y1,
-                        page=page_index + 1,
-                        width=x1 - x0,
-                        height=y1 - y0,
-                        region=region,
-                    )
-                )
-
-    return elements
-
-
 def detect_repeated_elements(
     elements,
     page_count: int,
@@ -429,23 +345,6 @@ def detect_repeated_elements(
             repeated.add(normalized)
 
     return repeated
-
-
-def detect_page_numbers(elements):
-
-    pages_with_numbers = set()
-
-    for element in elements:
-
-        if element.region != "footer":
-            continue
-
-        if is_page_number(element.text):
-            pages_with_numbers.add(
-                element.page
-            )
-
-    return pages_with_numbers
 
 
 def collect_page_elements(
@@ -2374,23 +2273,33 @@ def looks_like_reference_start(
 
     # --------------------------------------------------------
     # Referencias numeradas
+    #
+    # Reconoce:
+    # [1]
+    # 1.
+    # 1)
+    # **1.**
+    # **1)**
     # --------------------------------------------------------
 
     if re.match(
-        r"^(?:\[\d+\]|\d+[.)])\s+",
+        r"^(?:"
+        r"\[\d+\]"
+        r"|\d+[.)]"
+        r"|\*\*\d+[.)]\*\*"
+        r")\s*",
         s
     ):
         return True
 
     # --------------------------------------------------------
-    # Autor + año
+    # Referencias autor-año
     # --------------------------------------------------------
 
     if re.search(
         r"\b(?:19|20)\d{2}[a-z]?\s*\)",
         s[:300]
     ):
-
         if re.match(
             r"^[A-ZÁÉÍÓÚÑ]"
             r"[A-Za-zÁÉÍÓÚÑáéíóúñü'’\-]+",
@@ -2485,11 +2394,14 @@ def detect_existing_reference_number(
 def number_references(
     markdown: str
 ) -> str:
-    """
-    Numera las referencias bibliográficas sin crear todavía
-    HTML ni enlaces.
 
-    Esto se ejecuta ANTES de la traducción.
+    """
+    Detecta la sección de referencias y asigna una numeración
+    uniforme y explícita.
+
+    Cada referencia queda separada por una línea en blanco para
+    que pueda ser reconocida como unidad independiente durante
+    las etapas posteriores.
     """
 
     if not markdown:
@@ -2523,7 +2435,13 @@ def number_references(
     ):
 
         reference = re.sub(
-            r"^\s*(?:\[\d+\]|\d+[.)])\s+",
+            r"^\s*"
+            r"(?:"
+            r"\[\d+\]"
+            r"|\d+[.)]"
+            r"|\*\*\d+[.)]\*\*"
+            r")"
+            r"\s*",
             "",
             reference
         )
@@ -2540,13 +2458,14 @@ def number_references(
 
     output.append("")
 
-    output.extend(
-        numbered
-    )
+    for reference in numbered:
+
+        output.append(reference)
+        output.append("")
 
     return "\n".join(
         output
-    )
+    ).rstrip()
 
 
 def add_document_top_anchor(
@@ -2568,15 +2487,30 @@ def add_document_top_anchor(
 def index_references(
     markdown: str
 ) -> str:
+
     """
-    Después de la traducción:
+    Construye un índice interno de referencias.
 
-      - convierte las referencias en anchors
-      - convierte citas [n] en links
-      - mantiene la numeración
-      - agrega retorno al inicio
+    Hace tres cosas:
 
-    No modifica citas autor-año.
+      1. Conserva la numeración de las referencias.
+      2. Convierte citas numéricas del cuerpo en enlaces.
+      3. Crea un anchor individual para cada referencia.
+
+    Ejemplo:
+
+        El resultado fue significativo [12, 13].
+
+    se convierte en:
+
+        El resultado fue significativo
+        <a href="#ref-12">[12]</a>, <a href="#ref-13">[13]</a>.
+
+    Y la referencia 12 recibe:
+
+        <a id="ref-12"></a>
+        **12.** ...
+
     """
 
     if not markdown:
@@ -2615,17 +2549,21 @@ def index_references(
         start=1
     ):
 
-        reference = re.sub(
-            r"^\s*\[(\d+)\]\s+",
-            "",
-            reference
-        )
+        # ----------------------------------------------------
+        # Eliminar cualquier numeración previa
+        # ----------------------------------------------------
 
         reference = re.sub(
-            r"^\s*\d+[.)]\s+",
+            r"^\s*"
+            r"(?:"
+            r"\[\d+\]"
+            r"|\d+[.)]"
+            r"|\*\*\d+[.)]\*\*"
+            r")"
+            r"\s*",
             "",
             reference
-        )
+        ).strip()
 
         normalized_references.append(
             reference
@@ -2688,14 +2626,10 @@ def index_references(
     # Reconstrucción
     # --------------------------------------------------------
 
-    output = list(
-        body.splitlines()
-    )
+    output = body.splitlines()
 
     output.append("")
-    output.append(
-        lines[start]
-    )
+    output.append(lines[start])
     output.append("")
 
     for index, reference in enumerate(
@@ -2719,7 +2653,7 @@ def index_references(
 
     return "\n".join(
         output
-    )
+    ).rstrip()
 
 
 def inject_internal_pdf_links(
