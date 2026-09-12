@@ -58,16 +58,26 @@ load_dotenv(Path(__file__).parent / ".env")
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 # ══════════════════════════════════════════════════
-# CONFIGURACIÓN
+# CONFIGURACIÓN DEL MOTOR DE TRADUCCIÓN (DeepSeek / Gemini)
 # ══════════════════════════════════════════════════
 
+# SELECTOR DE MODO:
+#   modelogemini = 0  --> Utiliza la API de DeepSeek (modelo deepseek-chat: el más barato y eficiente)
+#   modelogemini = 1  --> Utiliza la API de Gemini (familia gemini-flash en cascada)
+modelogemini = int(os.environ.get("MODELOGEMINI", os.environ.get("MODELO_GEMINI", "0")))
+
+# Configuración DeepSeek (OpenAI compatible)
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
+
+# Configuración Gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 gemini_client = None
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={'timeout': 120000}) # 2 mins max per chunk
 
-# Sistema de Respaldo en Cascada (Fallback)
-# Si uno falla por cuota (Rate Limit), saltará instantáneamente al siguiente.
+# Sistema de Respaldo en Cascada (Fallback) para Gemini
 MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
@@ -78,9 +88,8 @@ MODELS = [
     "gemini-3.8-flash"
 ]
 
-# Al usar chunks gigantes (25000 chars), haremos muy pocas peticiones (ej: 4 en lugar de 26)
-# por lo que el rate limit de 15 RPM no será un problema.
-DELAY_BETWEEN_CHUNKS_SEC = 2.0
+# Pausa entre chunks
+DELAY_BETWEEN_CHUNKS_SEC = 1.0
 
 CACHE_DIR = Path("./cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -139,19 +148,19 @@ async def download_pdf(url: str) -> bytes:
         except httpx.RequestError as exc:
             raise HTTPException(
                 status_code=502,
-                detail=f"No se pudo descargar el PDF automáticamente (bot protection o timeout). Por favor descárgalo y súbelo manualmente."
+                detail="DIRECT_UPLOAD_REQUIRED: Este artículo requiere adjuntar el archivo PDF directamente."
             )
         
         if resp.status_code != 200:
             raise HTTPException(
                 status_code=502,
-                detail=f"El servidor origen bloqueó la descarga automática (HTTP {resp.status_code}). Por favor descárgalo y súbelo manualmente."
+                detail="DIRECT_UPLOAD_REQUIRED: Este artículo requiere adjuntar el archivo PDF directamente."
             )
         content_type = resp.headers.get("content-type", "")
         if "text/html" in content_type and len(resp.content) < 50000:
             raise HTTPException(
                 status_code=502,
-                detail="El servidor devolvió HTML o captcha en vez de un PDF. Por favor descárgalo y súbelo manualmente."
+                detail="DIRECT_UPLOAD_REQUIRED: Este artículo requiere adjuntar el archivo PDF directamente."
             )
         return resp.content
 
@@ -284,32 +293,72 @@ def replace_image_refs_with_base64(markdown: str, images: dict[str, str], final_
 
 
 # ══════════════════════════════════════════════════
-# TRADUCCIÓN DE TABLAS (Aislada)
+# TRADUCCIÓN DE TABLAS (Aislada: DeepSeek / Gemini)
 # ══════════════════════════════════════════════════
 
+TABLE_SYSTEM_INSTRUCTION = (
+    "Eres un traductor académico. Tu única tarea es traducir el contenido de esta tabla Markdown al español. "
+    "MANTÉN LA ESTRUCTURA TABULAR EXACTA (`| col | col |`). NO añadas texto fuera de la tabla. "
+    "Traduce las celdas con precisión. "
+    "GLOSARIO Y CONSISTENCIA: Mantén un criterio unificado para la traducción de siglas y términos técnicos a lo largo de todo el documento. En textos de psicología, aplica convenciones estándar si aparecen (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad). "
+    "PROHIBICIÓN DE CALCOS: Evita anglicismos innecesarios (ej. usa 'versus' en lugar de forzar 'frente a' en comparaciones)."
+)
+
+async def translate_table_deepseek(table_md: str) -> str:
+    """Traduce una tabla en formato Markdown de manera aislada usando DeepSeek."""
+    if not DEEPSEEK_API_KEY:
+        return table_md
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": TABLE_SYSTEM_INSTRUCTION},
+            {"role": "user", "content": table_md}
+        ],
+        "temperature": 0.1,
+        "stream": False
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for _ in range(2):
+            try:
+                resp = await client.post(DEEPSEEK_BASE_URL, headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if content and content.strip():
+                        return content.strip()
+            except:
+                pass
+    return table_md
+
 async def translate_table_gemini(table_md: str, client: genai.Client) -> str:
-    """Traduce una tabla en formato Markdown de manera aislada."""
-    system_instruction = (
-        "Eres un traductor académico. Tu única tarea es traducir el contenido de esta tabla Markdown al español. "
-        "MANTÉN LA ESTRUCTURA TABULAR EXACTA (`| col | col |`). NO añadas texto fuera de la tabla. "
-        "Traduce las celdas con precisión. "
-        "GLOSARIO Y CONSISTENCIA: Mantén un criterio unificado para la traducción de siglas y términos técnicos a lo largo de todo el documento. En textos de psicología, aplica convenciones estándar si aparecen (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad). "
-        "PROHIBICIÓN DE CALCOS: Evita anglicismos innecesarios (ej. usa 'versus' en lugar de forzar 'frente a' en comparaciones)."
-    )
+    """Traduce una tabla en formato Markdown de manera aislada con Gemini."""
     for attempt in range(2):
         try:
             resp = await client.aio.models.generate_content(
                 model=MODELS[0],
                 contents=table_md,
-                config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.1)
+                config=types.GenerateContentConfig(system_instruction=TABLE_SYSTEM_INSTRUCTION, temperature=0.1)
             )
             if resp.text: return resp.text.strip()
         except:
             pass
     return table_md
 
+async def translate_single_table(table_md: str) -> str:
+    """Delega la traducción de tabla según el motor activo."""
+    if modelogemini == 0:
+        return await translate_table_deepseek(table_md)
+    else:
+        if gemini_client:
+            return await translate_table_gemini(table_md, gemini_client)
+        return table_md
+
 async def extract_and_translate_tables(markdown: str) -> tuple[str, dict[str, str]]:
-    """Encuentra tablas Markdown, las reemplaza por marcadores, y las traduce."""
+    """Encuentra tablas Markdown, las reemplaza por marcadores, y las traduce con el motor activo."""
     table_pattern = re.compile(r'(?:^[ \t]*\|.*\|[ \t]*$\n?){2,}', re.MULTILINE)
     tables_map = {}
     
@@ -322,9 +371,11 @@ async def extract_and_translate_tables(markdown: str) -> tuple[str, dict[str, st
     modified_markdown = table_pattern.sub(replacer, markdown)
     
     translated_tables = {}
-    if tables_map and gemini_client:
-        print(f"  📊 Detectadas {len(tables_map)} tablas. Traducción aislada en progreso...", flush=True)
-        tasks = [translate_table_gemini(content, gemini_client) for content in tables_map.values()]
+    is_engine_ready = bool(DEEPSEEK_API_KEY) if modelogemini == 0 else bool(gemini_client)
+    if tables_map and is_engine_ready:
+        engine_label = f"DeepSeek ({DEEPSEEK_MODEL})" if modelogemini == 0 else "Gemini Flash"
+        print(f"  📊 Detectadas {len(tables_map)} tablas. Traducción aislada en progreso con [{engine_label}]...", flush=True)
+        tasks = [translate_single_table(content) for content in tables_map.values()]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         for (t_id, _), res in zip(tables_map.items(), results):
@@ -373,20 +424,113 @@ def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
 
     return chunks
 
-async def detect_document_language(first_page_text: str, client: genai.Client) -> str:
+def get_system_instruction(doc_lang: str) -> str:
+    """Retorna las directivas académicas de traducción al español."""
+    return (
+        f"Eres un traductor académico profesional y exhaustivo. El idioma origen es {doc_lang}. "
+        "Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
+        "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
+        "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO.\n"
+        "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes.\n"
+        "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA dejes marcas de texto sueltas ni etiquetas literales.\n"
+        "4. MARCADORES DE PÁGINA: Si aparecen marcas de página, NUNCA partas una oración o párrafo en dos por culpa del salto de página. Mantén la oración unida fluidamente.\n"
+        "5. CONSISTENCIA TERMINOLÓGICA Y ACADÉMICA: Mantén un criterio unificado. En textos de psicología y ciencias cognitivas, utiliza terminología formal estándar en español (por ejemplo, utiliza 'niños con desarrollo típico' en lugar de traducciones literales como 'neurotípicos', y 'lenguaje central' o 'habilidades lingüísticas básicas' para el core language).\n"
+        "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Usa 'versus' en lugar de forzar 'frente a' en comparaciones científicas.\n"
+        "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
+        "8. UNIFICACIÓN DE PÁRRAFOS: Une el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
+        "9. FLUJO LÓGICO: Mueve información intrusiva (como emails de autores o notas al pie que cortan la oración) al final del bloque para mantener la continuidad lógica.\n\n"
+        "NO agregues prefacios, introducciones ni notas adicionales al final."
+    )
+
+async def detect_document_language(first_page_text: str, client: Optional[genai.Client] = None) -> str:
     """Detecta el idioma original del documento usando el primer fragmento."""
     if not first_page_text.strip(): return "Inglés"
-    try:
-        resp = await client.aio.models.generate_content(
-            model=MODELS[0],
-            contents=f"Detect the primary language of this academic text. Return ONLY the language name (e.g. English, French, Portuguese, German). Do not return anything else.\n\n{first_page_text[:1500]}",
-            config=types.GenerateContentConfig(temperature=0.0)
-        )
-        return resp.text.strip() if resp.text else "Inglés"
-    except:
+    prompt = f"Detect the primary language of this academic text. Return ONLY the language name (e.g. English, French, Portuguese, German). Do not return anything else.\n\n{first_page_text[:1500]}"
+    
+    if modelogemini == 0 and DEEPSEEK_API_KEY:
+        try:
+            headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": DEEPSEEK_MODEL,
+                "messages": [
+                    {"role": "system", "content": "You are a language detection tool. Output only the language name."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.0
+            }
+            async with httpx.AsyncClient(timeout=15.0) as http_client:
+                resp = await http_client.post(DEEPSEEK_BASE_URL, headers=headers, json=payload)
+                if resp.status_code == 200:
+                    ans = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if ans: return ans
+        except:
+            pass
         return "Inglés"
+    else:
+        c = client or gemini_client
+        if not c: return "Inglés"
+        try:
+            resp = await c.aio.models.generate_content(
+                model=MODELS[0],
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.0)
+            )
+            return resp.text.strip() if resp.text else "Inglés"
+        except:
+            return "Inglés"
 
-async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models: list[str] | None = None, max_retries: int = 3, chunk_num: int = 1, total_chunks: int = 1, doc_lang: str = "Inglés") -> str:
+async def translate_chunk_deepseek(chunk: str, system_instruction: str, chunk_num: int = 1, total_chunks: int = 1, max_retries: int = 3) -> str:
+    """Traduce un bloque de Markdown usando la API de DeepSeek (modelo deepseek-chat)."""
+    if not chunk or not chunk.strip():
+        return ""
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": chunk}
+        ],
+        "temperature": 0.1,
+        "stream": False
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"      ↳ [Chunk {chunk_num}/{total_chunks}] Intento {attempt}/{max_retries} usando DeepSeek [{DEEPSEEK_MODEL}]...", flush=True)
+                resp = await client.post(DEEPSEEK_BASE_URL, headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if content and content.strip():
+                        return content.strip()
+                    print(f"      [WARN] Respuesta vacía de DeepSeek.", flush=True)
+                elif resp.status_code == 402:
+                    err_msg = resp.json().get("error", {}).get("message", "Insufficient Balance")
+                    print(f"      [ERROR] DeepSeek HTTP 402: {err_msg}. Saldo insuficiente en cuenta DeepSeek. (Cambia a modelogemini = 1 si deseas usar Gemini)", flush=True)
+                    raise RuntimeError(f"DeepSeek 402: {err_msg}. Saldo insuficiente en la API de DeepSeek.")
+                elif resp.status_code == 429:
+                    print(f"      [WARN] DeepSeek Rate Limit (429).", flush=True)
+                else:
+                    print(f"      [WARN] DeepSeek HTTP {resp.status_code}: {resp.text}", flush=True)
+            except RuntimeError:
+                raise
+            except Exception as err:
+                print(f"      [WARN] Error de conexión con DeepSeek: {err}", flush=True)
+
+            if attempt < max_retries:
+                wait = 4 * attempt
+                print(f"      ⏸ Esperando {wait}s antes de reintentar DeepSeek...", flush=True)
+                await asyncio.sleep(wait)
+
+    print("      [WARN] Fallaron los intentos con DeepSeek; conservando original.", flush=True)
+    return chunk
+
+async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models: list[str] | None = None, max_retries: int = 3, chunk_num: int = 1, total_chunks: int = 1, doc_lang: str = "Inglés", system_instruction: str | None = None) -> str:
     """Traduce un bloque de Markdown usando Gemini, con timeout y reintentos en cascada entre varios modelos."""
     if not chunk or not chunk.strip():
         return ""
@@ -394,26 +538,8 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
     if active_models is None:
         active_models = list(MODELS)
 
-    system_instruction = (
-        f"Eres un traductor académico profesional y exhaustivo. El idioma origen es {doc_lang}. "
-        "Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
-        "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
-        "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO.\n"
-        "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes.\n"
-        "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA uses etiquetas literales como `[H1]`.\n"
-        "4. MARCADORES DE PÁGINA: Si aparecen marcas de página, NUNCA partas una oración o párrafo en dos por culpa del salto de página. Mantén la oración unida fluidamente.\n"
-        "5. CONSISTENCIA TERMINOLÓGICA: Mantén un criterio unificado para la traducción de siglas y conceptos técnicos en todo el texto. Si el documento es de psicología, aplica convenciones estándar cuando aparezcan (ej. MBIs -> Intervenciones basadas en Mindfulness (IBM), TFA -> Marco Teórico de Aceptabilidad).\n"
-        "6. PROHIBICIÓN DE CALCOS LITERALES: Evita anglicismos innecesarios. Por ejemplo, usa 'versus' en lugar de forzar 'frente a' en títulos o comparaciones científicas.\n"
-        "7. FLUIDEZ Y PRECISIÓN ACADÉMICA: Asegura un español científico impecable, natural y riguroso, corrigiendo posibles errores de OCR.\n"
-        "8. UNIFICACIÓN DE PÁRRAFOS Y ORACIONES CORTADAS: En los PDFs las oraciones con frecuencia quedan cortadas por saltos de página o columnas (por ejemplo, terminando una línea con 'en', '(', etc., y continuando en la siguiente con minúscula o paréntesis de cierre). ESTÁ ESTRICTAMENTE PROHIBIDO dejar oraciones partidas en párrafos separados. Debes unir el texto para que forme un párrafo continuo y natural, sin saltos de línea injustificados en medio de una frase.\n"
-        "9. FLUJO LÓGICO Y NOTAS AL PIE INTRUSIVAS: A veces, el texto extraído del PDF incluye bloques de afiliaciones, emails de autores (ej. 'W. C. Drevets (&) ...') o notas al pie que interrumpen una oración a la mitad. DEBES restaurar la continuidad lógica del párrafo. Mueve esa información intrusiva al final del bloque o elimínala si rompe por completo la frase, asegurando que la oración tenga sentido continuo al unirla.\n"
-
-        "NO agregues prefacios, introducciones ni notas adicionales al final."
-    )
-
-    # Inyección de directiva para el primer chunk para evitar que se salte la primera página
-    if chunk_num == 1:
-        chunk = "ESTE ES EL COMIENZO DEL DOCUMENTO (Portada/Abstract). DEBES TRADUCIR DESDE LA PRIMERA PALABRA, incluyendo título, autores y afiliaciones.\n\n" + chunk
+    if system_instruction is None:
+        system_instruction = get_system_instruction(doc_lang)
 
     for attempt in range(1, max_retries + 1):
         models_to_try = list(active_models)
@@ -458,14 +584,40 @@ async def translate_chunk_gemini(chunk: str, client: genai.Client, active_models
     print("      [WARN] Todos los intentos fallaron; conservando original.", flush=True)
     return chunk
 
+async def translate_chunk(chunk: str, doc_lang: str = "Inglés", chunk_num: int = 1, total_chunks: int = 1, active_models: list[str] | None = None) -> str:
+    """Traduce un bloque de Markdown delegando a DeepSeek o Gemini según modelogemini."""
+    if not chunk or not chunk.strip():
+        return ""
+
+    system_instruction = get_system_instruction(doc_lang)
+
+    # Inyección de directiva para el primer chunk para evitar que se salte la primera página
+    processed_chunk = chunk
+    if chunk_num == 1:
+        processed_chunk = "ESTE ES EL COMIENZO DEL DOCUMENTO (Portada/Abstract). DEBES TRADUCIR DESDE LA PRIMERA PALABRA, incluyendo título, autores y afiliaciones.\n\n" + chunk
+
+    if modelogemini == 0:
+        return await translate_chunk_deepseek(processed_chunk, system_instruction, chunk_num=chunk_num, total_chunks=total_chunks)
+    else:
+        if not gemini_client:
+            print("  [ERROR] gemini_client no inicializado.")
+            return processed_chunk
+        return await translate_chunk_gemini(processed_chunk, gemini_client, active_models=active_models, chunk_num=chunk_num, total_chunks=total_chunks, doc_lang=doc_lang, system_instruction=system_instruction)
 
 async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
     """
     Traduce el Markdown iterando secuencialmente sobre bloques asegurando la totalidad del texto.
     """
-    if not gemini_client:
-        print("  [ERROR] No se encontró GEMINI_API_KEY o el cliente no se inicializó. Devolviendo texto original.")
-        return markdown
+    if modelogemini == 0:
+        if not DEEPSEEK_API_KEY:
+            print("  [ERROR] No se encontró DEEPSEEK_API_KEY. Devolviendo texto original.")
+            return markdown
+        engine_label = f"DeepSeek ({DEEPSEEK_MODEL})"
+    else:
+        if not gemini_client:
+            print("  [ERROR] No se encontró GEMINI_API_KEY o el cliente no se inicializó. Devolviendo texto original.")
+            return markdown
+        engine_label = "Gemini Flash (cascada)"
 
     chunks = chunk_markdown(markdown, max_chars=12000)
     total_chunks = len(chunks)
@@ -473,7 +625,7 @@ async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
 
     active_models = list(MODELS)
 
-    print(f"\n  🚀 Iniciando traducción exhaustiva (total {total_chunks} fragmentos)...", flush=True)
+    print(f"\n  🚀 Iniciando traducción exhaustiva (total {total_chunks} fragmentos) con motor [{engine_label}]...", flush=True)
     t0 = time.time()
 
     for i, chunk in enumerate(chunks):
@@ -482,13 +634,12 @@ async def translate_full_markdown(markdown: str, doc_lang: str) -> str:
         print(f"  ⏳ Procesando fragmento {i+1}/{total_chunks} {pages_info} ({len(chunk)} chars)...", flush=True)
         t_chunk = time.time()
         
-        translated_text = await translate_chunk_gemini(
+        translated_text = await translate_chunk(
             chunk, 
-            gemini_client, 
-            active_models=active_models,
+            doc_lang=doc_lang,
             chunk_num=i+1,
             total_chunks=total_chunks,
-            doc_lang=doc_lang
+            active_models=active_models
         )
         translated_chunks.append(translated_text)
         
@@ -529,23 +680,29 @@ def is_affiliation_or_meta(b: str) -> bool:
 
 
 def clean_and_join_broken_paragraphs(text: str) -> str:
-    """Limpia ruido del PDF y une oraciones cortadas por saltos de página o columna."""
+    """Limpia ruido del PDF, números de página estilo '1 de 12' y une oraciones cortadas."""
     if not text:
         return ""
     
-    # 1. Eliminar números de página flotantes aislados
-    text = re.sub(r'(?m)^\s*\d+\s*$\n?', '', text)
+    # 1. Eliminar numeraciones de páginas flotantes o de revistas (ej: "1 de 12", "2 de 12", o números solos)
+    text = re.sub(r'(?m)^\s*(?:\d+\s+de\s+\d+|\d+)\s*$', '', text)
     
-    # 2. Eliminar marcadores <!-- PAGE:X --> para evitar que rompan párrafos
+    # 2. Eliminar marcas de la revista o DOIs repetidos comunes en pies de página
+    text = re.sub(r'(?m)^\s*(?:wileyonlinelibrary\.com.*|JCPP Advances\..*)\s*$', '', text, flags=re.I)
+    
+    # 3. Eliminar marcadores <!-- PAGE:X --> para evitar que rompan párrafos
     text = re.sub(r'\s*<!-- PAGE:\d+ -->\s*', ' ', text)
     
-    # 3. Unir palabras separadas por guión de fin de línea
+    # 4. Limpiar encabezados de Markdown malformados (ej: líneas con ## pegadas o sueltas)
+    text = re.sub(r'(?m)^([#]+)\s*([A-ZÁÉÍÓÚÑ\s]+)\s*$', r'\n\n\1 \2\n\n', text)
+
+    # 5. Unir palabras separadas por guión de fin de línea
     text = re.sub(r'(\b[\wáéíóúñÁÉÍÓÚÑ]+)-\s*\n+\s*([\wáéíóúñÁÉÍÓÚÑ]+\b)', r'\1\2', text)
     
-    # 4. Unir paréntesis o corchetes cortados antes de una línea siguiente
+    # 6. Unir paréntesis o corchetes cortados antes de una línea siguiente
     text = re.sub(r'([(\[{])\s*\n+\s*', r'\1', text)
     
-    # 5. Unir líneas y párrafos rotos donde la primera no termina en signo terminal
+    # 7. Unir líneas y párrafos rotos donde la primera no termina en signo terminal
     lines = text.split('\n')
     joined_lines = []
     i = 0
@@ -555,7 +712,6 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
         while i + 1 < len(lines):
             next_line = lines[i + 1]
             
-            # Caso 1: Salto simple (\n)
             if next_line.strip() and not next_line.strip().startswith(('#', '*', '-', '|', '>', '<', '!', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', '`')):
                 curr_stripped = line.rstrip()
                 next_stripped = next_line.lstrip()
@@ -569,7 +725,6 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
                             i += 1
                             continue
                         
-            # Caso 2: Salto doble (\n\n) accidental
             if not next_line.strip() and i + 2 < len(lines):
                 after_empty = lines[i + 2]
                 curr_stripped = line.rstrip()
@@ -590,7 +745,6 @@ def clean_and_join_broken_paragraphs(text: str) -> str:
         i += 1
         
     text = '\n'.join(joined_lines)
-    # 6. Reducir saltos de línea excesivos
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text
 
@@ -603,8 +757,9 @@ def postprocess_markdown(md_text: str) -> str:
 
 async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str] = None, force_retranslate: bool = False, source_url: str = "") -> dict:
     """Procesa los bytes de un PDF: Extrae, traduce, inyecta base64."""
+    engine_name = "gemini" if modelogemini == 1 else "deepseek"
     clean_pid = clean_paper_id(paper_id, fallback=source_url or hashlib.sha256(pdf_bytes).hexdigest()[:16])
-    file_id = safe_id(f"{clean_pid}_gemini")
+    file_id = safe_id(f"{clean_pid}_{engine_name}")
     cache_file = CACHE_DIR / f"{file_id}.json"
     pdf_file_path = CACHE_DIR / f"{file_id}.pdf"
     
@@ -613,10 +768,11 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
         pdf_file_path.write_bytes(pdf_bytes)
 
     if cache_file.exists() and not force_retranslate:
-        print(f"[CACHE HIT] {clean_pid} (Gemini)", flush=True)
+        print(f"[CACHE HIT] {clean_pid} ({engine_name.capitalize()})", flush=True)
         return json.loads(cache_file.read_text(encoding="utf-8"))
 
-    print(f"[PROCESSING] {clean_pid} ({len(pdf_bytes)} bytes) [Motor: Gemini Flash]", flush=True)
+    engine_label = "Gemini Flash (cascada)" if modelogemini == 1 else f"DeepSeek ({DEEPSEEK_MODEL})"
+    print(f"[PROCESSING] {clean_pid} ({len(pdf_bytes)} bytes) [Motor: {engine_label}]", flush=True)
 
     # 1 y 2. Extraer Markdown y las imágenes manteniendo el orden y referencias (pymupdf4llm)
     raw_markdown, images = extract_markdown_and_images(pdf_bytes)
@@ -624,7 +780,7 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
     print(f"  Markdown generado: {len(raw_markdown)} caracteres. Imágenes extraídas: {len(images)}", flush=True)
 
     # Detectar Idioma ANTES de procesar tablas
-    doc_lang = await detect_document_language(raw_markdown[:1500], gemini_client) if gemini_client else "Inglés"
+    doc_lang = await detect_document_language(raw_markdown[:1500])
     print(f"  🌐 Idioma detectado: {doc_lang}", flush=True)
 
     if "español" in doc_lang.lower() or "spanish" in doc_lang.lower() or doc_lang.lower().strip() == "es":
@@ -672,11 +828,12 @@ async def process_pdf_bytes_translation(pdf_bytes: bytes, paper_id: Optional[str
 
 async def process_pdf_translation(url: str, paper_id: Optional[str] = None, force_retranslate: bool = False) -> dict:
     """Descarga el PDF desde la URL y lo traduce."""
+    engine_name = "gemini" if modelogemini == 1 else "deepseek"
     clean_pid = clean_paper_id(paper_id, fallback=url)
-    file_id = safe_id(f"{clean_pid}_gemini")
+    file_id = safe_id(f"{clean_pid}_{engine_name}")
     cache_file = CACHE_DIR / f"{file_id}.json"
     if cache_file.exists() and not force_retranslate:
-        print(f"[CACHE HIT] {clean_pid} (Gemini)", flush=True)
+        print(f"[CACHE HIT] {clean_pid} ({engine_name.capitalize()})", flush=True)
         return json.loads(cache_file.read_text(encoding="utf-8"))
 
     pdf_bytes = await download_pdf(url)
@@ -730,8 +887,11 @@ async def api_check_pdf(req: CheckRequest):
 async def health():
     return {
         "status": "ok",
+        "engine": "deepseek" if modelogemini == 0 else "gemini",
+        "modelogemini": modelogemini,
+        "deepseek_configured": bool(DEEPSEEK_API_KEY),
         "gemini_configured": bool(GEMINI_API_KEY),
-        "primary_model": MODELS[0] if MODELS else None,
+        "active_model": DEEPSEEK_MODEL if modelogemini == 0 else (MODELS[0] if MODELS else None),
         "cache_entries": len(list(CACHE_DIR.glob("*.json")))
     }
 
@@ -774,7 +934,8 @@ def gradio_translate(pdf_url: str, pdf_file, force: bool):
 
 with gr.Blocks(title="PsiHub Reader") as demo:
     gr.Markdown("# 📖 PsiHub Reader API")
-    gr.Markdown("Servicio de traducción académica mediante **Gemini 1.5 Flash**. Traduce por URL o subiendo tu archivo PDF.")
+    engine_display = f"DeepSeek ({DEEPSEEK_MODEL})" if modelogemini == 0 else "Google Gemini Flash"
+    gr.Markdown(f"Servicio de traducción académica mediante **{engine_display}**. Traduce por URL o subiendo tu archivo PDF.")
     
     with gr.Row():
         with gr.Column(scale=1):

@@ -899,6 +899,142 @@ const checkedPdfUrls = new Map(); // url -> { isAutomatic: boolean, status: stri
 const paperTranslations = new Map(); // id/url -> markdown
 const activeTranslations = new Map(); // id -> Promise
 
+function getCleanTranslationKey(key) {
+  if (!key) return '';
+  return String(key).trim().replace(/^https?:\/\/(openalex\.org\/)?/i, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(-64);
+}
+
+function getPersistedTranslation(paperId, paperUrl) {
+  const k1 = getCleanTranslationKey(paperId);
+  const k2 = getCleanTranslationKey(paperUrl);
+  let res = null;
+  if (k1) res = loadData('psy_tr_' + k1, null);
+  if (!res && k2) res = loadData('psy_tr_' + k2, null);
+  return res;
+}
+
+function persistTranslation(paperId, paperUrl, markdown) {
+  if (!markdown) return;
+  const k1 = getCleanTranslationKey(paperId);
+  const k2 = getCleanTranslationKey(paperUrl);
+  if (k1) saveData('psy_tr_' + k1, markdown);
+  if (k2 && k2 !== k1) saveData('psy_tr_' + k2, markdown);
+}
+
+async function fetchWithBackgroundRetry(url, options, maxRetries = 2) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.error || 'Error del servidor');
+      }
+      return data;
+    } catch (err) {
+      lastError = err;
+      const msg = err.message || '';
+      if (msg.includes('DIRECT_UPLOAD_REQUIRED') || msg.includes('403') || msg.includes('bloqueó')) {
+        throw err;
+      }
+      const isNetworkDrop = !msg || 
+        msg.includes('Failed to fetch') || 
+        msg.includes('NetworkError') || 
+        msg.includes('abort') || 
+        msg.includes('timeout') ||
+        err.name === 'TypeError';
+
+      if (attempt < maxRetries && isNetworkDrop) {
+        console.log(`[Fetch Retry] Intento ${attempt + 1} reanudando conexión...`);
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+      } else {
+        throw lastError;
+      }
+    }
+  }
+  throw lastError;
+}
+
+function showReaderRequisiteScreen(paper, customMsg = '') {
+  el.readerLoading.style.display = 'none';
+  el.readerContent.innerHTML = '';
+  el.readerError.style.display = 'flex';
+
+  const titleEl = document.getElementById('reader-requisite-title');
+  if (titleEl) titleEl.textContent = 'Paso requerido para traducir';
+
+  const iconWrap = document.getElementById('reader-error-icon-wrap');
+  if (iconWrap) {
+    iconWrap.className = 'reader-requisite-icon-wrap';
+    iconWrap.innerHTML = '<i class="ph-bold ph-file-arrow-up"></i>';
+  }
+
+  const errorMsgEl = document.getElementById('reader-error-msg');
+  if (errorMsgEl) {
+    errorMsgEl.style.display = 'none';
+  }
+
+  const journalActionWrap = document.getElementById('reader-journal-action-wrap');
+  const journalLink = document.getElementById('reader-journal-link');
+  const uploadDesc = document.getElementById('reader-upload-desc');
+
+  const lookupUrl = paper?.doi
+    ? (paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`)
+    : (paper?.url || paper?.pdfUrl || null);
+
+  if (uploadDesc) {
+    uploadDesc.innerHTML = 'Esta revista requiere acceder a su enlace oficial para descargar el PDF.<br>Descárgalo en tu dispositivo y selecciónalo a continuación para traducirlo al español:';
+  }
+
+  if (journalActionWrap && journalLink && lookupUrl) {
+    journalLink.href = lookupUrl;
+    journalActionWrap.style.display = 'block';
+  } else if (journalActionWrap) {
+    journalActionWrap.style.display = 'none';
+  }
+}
+
+function handleReaderTranslationError(error, paper) {
+  el.readerLoading.style.display = 'none';
+  el.readerContent.innerHTML = '';
+  
+  const msg = error?.message || '';
+  const isDirectUploadRequired = msg.includes('DIRECT_UPLOAD_REQUIRED') 
+    || msg.includes('403') 
+    || msg.includes('bloqueó') 
+    || msg.includes('adjuntar') 
+    || msg.includes('manual')
+    || msg.includes('bot protection')
+    || msg.includes('captcha');
+
+  if (isDirectUploadRequired) {
+    showReaderRequisiteScreen(paper);
+  } else {
+    el.readerError.style.display = 'flex';
+    const iconWrap = document.getElementById('reader-error-icon-wrap');
+    if (iconWrap) {
+      iconWrap.className = 'reader-requisite-icon-wrap';
+      iconWrap.innerHTML = '<i class="ph-bold ph-wifi-slash"></i>';
+    }
+    const titleEl = document.getElementById('reader-requisite-title');
+    if (titleEl) titleEl.textContent = 'Conexión interrumpida';
+    
+    const errorMsgEl = document.getElementById('reader-error-msg');
+    if (errorMsgEl) {
+      errorMsgEl.style.display = 'block';
+      errorMsgEl.textContent = 'Comprueba tu conexión o reintenta en unos instantes.';
+    }
+    
+    const journalActionWrap = document.getElementById('reader-journal-action-wrap');
+    if (journalActionWrap) journalActionWrap.style.display = 'none';
+
+    const uploadDesc = document.getElementById('reader-upload-desc');
+    if (uploadDesc) {
+      uploadDesc.innerHTML = 'Si lo prefieres, también puedes adjuntar el PDF manualmente para continuar:';
+    }
+  }
+}
+
 function updatePaperAutomaticBadges(paper) {
   if (!paper || !paper.isAutomatic) return;
 
@@ -1791,8 +1927,51 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   const paper = paperObj || S.currentPaper;
   const effectiveId = paperId || paper?.id || paperUrl;
 
+  // 1. Revisar si la traducción ya existe (en memoria o en almacenamiento persistente)
+  let cachedMarkdown = paperTranslations.get(effectiveId) || paper?.translatedMarkdown;
+  if (!cachedMarkdown) {
+    cachedMarkdown = getPersistedTranslation(effectiveId, paperUrl);
+    if (cachedMarkdown) {
+      paperTranslations.set(effectiveId, cachedMarkdown);
+      if (paper) {
+        paper.translatedMarkdown = cachedMarkdown;
+        paper.isAutomatic = true;
+        updatePaperAutomaticBadges(paper);
+      }
+    }
+  }
+
+  // Si ya tenemos la traducción guardada, abrir INMEDIATAMENTE sin re-traducir
+  if (cachedMarkdown) {
+    S.readerPaperId = effectiveId;
+    S.readerPdfUrl = paperUrl || paper?.pdfUrl || paper?.oaUrl || null;
+    if (el.btnReaderViewPdf) {
+      el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+    }
+    if (!el.pageExplore.classList.contains('hidden') && !S.storyPaused) {
+      pauseStory();
+    }
+    el.readerOverlay.classList.remove('hidden');
+    if (el.readerModal) el.readerModal.classList.remove('slide-left');
+    document.body.style.overflow = 'hidden';
+    if (el.readerScroll) el.readerScroll.scrollTop = 0;
+    if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+    el.readerContent.innerHTML = '';
+    el.readerError.style.display = 'none';
+    el.readerLoading.style.display = 'none';
+
+    renderReaderPaperContent(paper, cachedMarkdown);
+    return;
+  }
+
+  // 2. Si no está traducido y no hay enlace directo, mostrar pantalla amigable de requisito
   if (!paperUrl) {
-    showToast('El paper no tiene un link de descarga directa disponible.');
+    S.readerPaperId = effectiveId;
+    S.readerPdfUrl = null;
+    el.readerOverlay.classList.remove('hidden');
+    if (el.readerModal) el.readerModal.classList.remove('slide-left');
+    document.body.style.overflow = 'hidden';
+    showReaderRequisiteScreen(paper);
     return;
   }
 
@@ -1816,20 +1995,11 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   if (el.readerScroll) el.readerScroll.scrollTop = 0;
   if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
 
-  // SIEMPRE limpiar el contenido para que jamás se filtre la traducción de otro paper
+  // Limpiar el contenido previo
   el.readerContent.innerHTML = '';
   el.readerError.style.display = 'none';
 
-  // Verificar si ya existe traducción en memoria para este paper específico
-  const cachedMarkdown = paperTranslations.get(effectiveId) || paper?.translatedMarkdown;
-  if (cachedMarkdown) {
-    el.readerLoading.style.display = 'none';
-    if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
-    renderReaderPaperContent(paper, cachedMarkdown);
-    return;
-  }
-
-  // Si no está en memoria, iniciar la traducción del PDF de este paper
+  // Iniciar la traducción del PDF de este paper
   el.readerLoading.style.display = 'flex';
   startReaderLoadingProgress(false);
 
@@ -1837,13 +2007,17 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     try {
       const data = await activeTranslations.get(effectiveId);
       
-      // GUARDAR SIEMPRE EN MEMORIA AUNQUE EL USUARIO HAYA SALIDO
       paperTranslations.set(effectiveId, data.markdown);
-      if (paper) paper.translatedMarkdown = data.markdown;
+      persistTranslation(effectiveId, paperUrl, data.markdown);
+      if (paper) {
+        paper.translatedMarkdown = data.markdown;
+        paper.isAutomatic = true;
+        updatePaperAutomaticBadges(paper);
+      }
       if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
       
       if (typeof saveProcessedArticle === 'function') {
-        saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper);
+        saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper, data.markdown);
       }
 
       if (S.readerPaperId !== effectiveId) {
@@ -1861,9 +2035,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     } catch (err) {
       if (S.readerPaperId !== effectiveId) return;
       stopReaderLoadingProgress();
-      el.readerLoading.style.display = 'none';
-      el.readerError.style.display = 'flex';
-      el.readerErrorMsg.textContent = err.message || 'Ocurrió un error al procesar el archivo.';
+      handleReaderTranslationError(err, paper);
     }
     return;
   }
@@ -1875,20 +2047,22 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     if (BackgroundTask) {
       try {
         taskId = await BackgroundTask.beforeExit(async () => {
-          BackgroundTask.finish({ taskId });
+          console.log('[BackgroundTask] Notificación de suspensión recibida por el SO');
+          if (taskId !== null) {
+            try { BackgroundTask.finish({ taskId }); } catch (e) {}
+            taskId = null;
+          }
         });
       } catch (e) { console.warn('BackgroundTask no disponible', e); }
     }
 
     try {
       const apiUrl = `${HF_SPACE_URL}/api/translate`;
-      const res = await fetch(apiUrl, {
+      const data = await fetchWithBackgroundRetry(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || data.error || 'Error desconocido del servidor');
       
       if (LocalNotifications) {
         try {
@@ -1905,7 +2079,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       }
       return data;
     } catch (e) {
-      if (LocalNotifications) {
+      if (LocalNotifications && !e.message?.includes('DIRECT_UPLOAD_REQUIRED') && !e.message?.includes('403')) {
         try {
           await LocalNotifications.requestPermissions();
           await LocalNotifications.schedule({
@@ -1923,6 +2097,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       activeTranslations.delete(effectiveId);
       if (BackgroundTask && taskId !== null) {
         try { BackgroundTask.finish({ taskId }); } catch (e) {}
+        taskId = null;
       }
     }
   })();
@@ -1932,8 +2107,8 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   try {
     const data = await translatePromise;
 
-    // GUARDAR SIEMPRE EN MEMORIA AUNQUE EL USUARIO HAYA SALIDO
     paperTranslations.set(effectiveId, data.markdown);
+    persistTranslation(effectiveId, paperUrl, data.markdown);
     if (paper) {
       paper.translatedMarkdown = data.markdown;
       paper.isAutomatic = true;
@@ -1942,7 +2117,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
     
     if (typeof saveProcessedArticle === 'function') {
-      saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper);
+      saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper, data.markdown);
     }
 
     if (S.readerPaperId !== effectiveId) {
@@ -1966,19 +2141,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
     if (S.readerPaperId !== effectiveId) return;
     console.error('Translation error:', error);
-    el.readerLoading.style.display = 'none';
-    el.readerContent.innerHTML = ''; // Asegurar que quede vacío
-    el.readerError.style.display = 'flex';
-    el.readerErrorMsg.style.display = 'block';
-    const errorIcon = el.readerError.querySelector('.ph-warning-diamond');
-    if (errorIcon) errorIcon.style.display = 'block';
-
-    const uploadDesc = document.getElementById('reader-upload-desc');
-    if (uploadDesc) {
-      uploadDesc.innerHTML = 'El servidor de la revista bloqueó la descarga automática directa del PDF.<br><br>Puedes descargar el PDF manualmente y adjuntarlo aquí para traducirlo:';
-    }
-
-    el.readerErrorMsg.innerHTML = error.message || 'Error al traducir el artículo.';
+    handleReaderTranslationError(error, paper);
   }
 }
 
