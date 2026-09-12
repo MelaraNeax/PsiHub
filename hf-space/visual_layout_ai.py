@@ -50,7 +50,7 @@ VISION_TIMEOUT = int(os.getenv("DEEPSEEK_VISION_TIMEOUT", "90"))
 VISION_RENDER_SCALE = float(os.getenv("DEEPSEEK_VISION_RENDER_SCALE", "1.35"))
 VISION_IMAGE_MAX_PX = int(os.getenv("DEEPSEEK_VISION_IMAGE_MAX_PX", "900"))
 VISION_CROP_RATIO = float(os.getenv("DEEPSEEK_VISION_CROP_RATIO", "0.30"))
-VISION_MODE = os.getenv("DEEPSEEK_VISION_MODE", "all").strip().lower()
+VISION_MODE = os.getenv("DEEPSEEK_VISION_MODE", "selective").strip().lower()
 VISION_MIN_CONFIDENCE = float(os.getenv("DEEPSEEK_VISION_MIN_CONFIDENCE", "0.70"))
 VISION_CACHE_DIR = Path(os.getenv("CACHE_DIR", "./cache")) / "vision_layout"
 VISION_CACHE_DIR.mkdir(parents=True, exist_ok=True)

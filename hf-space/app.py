@@ -124,7 +124,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v16"
+PIPELINE_VERSION = "2026-09-12-reader-master-v17"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1472,24 +1472,54 @@ async def translate_single_table(table_md: str, model: Optional[str] = None) -> 
         if line.strip().startswith("|") and line.strip().endswith("|")
     ]
 
+    original_table_lines = [
+        line.strip()
+        for line in table_md.splitlines()
+        if line.strip().startswith("|") and line.strip().endswith("|")
+    ]
+
     if len(table_lines) < 2:
-        print("[TABLE] Respuesta inválida; se conserva la tabla original.")
+        print(
+            f"[TABLE] Respuesta inválida: no se detectaron filas de tabla. "
+            f"Preview respuesta: {translated[:200]!r}"
+        )
         return table_md
 
-    separator_index = next(
+    # Validación relajada: si la traducción tiene AL MENOS el mismo número
+    # de filas que el original menos 1, y la primera columna de pipes coincide
+    # aproximadamente, la aceptamos.
+    if len(table_lines) < len(original_table_lines) - 1:
+        print(
+            f"[TABLE] Traducción incompleta: "
+            f"{len(table_lines)} filas vs {len(original_table_lines)} originales. "
+            f"Se conserva la original."
+        )
+        return table_md
+
+    # Verificar que la fila separadora siga estando en posición 1
+    sep_idx = next(
         (i for i, line in enumerate(table_lines) if is_markdown_table_separator(line)),
         None
     )
-    if separator_index != 1:
-        print("[TABLE] Estructura alterada; se conserva la tabla original.")
+    if sep_idx != 1:
+        print(
+            f"[TABLE] Separador en posición {sep_idx} en vez de 1. "
+            f"Preview: {table_lines[:3]!r}"
+        )
         return table_md
 
-    header_columns = table_lines[0].count("|")
-    if header_columns < 3:
-        return table_md
-
-    if any(line.count("|") != header_columns for line in table_lines):
-        print("[TABLE] Número de columnas alterado; se conserva la tabla original.")
+    # Aceptar si el número de pipes del header coincide con al menos
+    # una fila del original.
+    header_pipes = table_lines[0].count("|")
+    if not any(
+        line.count("|") == header_pipes
+        for line in original_table_lines
+    ):
+        print(
+            f"[TABLE] Header tiene {header_pipes} pipes, "
+            f"originales: {[line.count('|') for line in original_table_lines[:3]]}. "
+            f"Preview: {table_lines[0]!r}"
+        )
         return table_md
 
     return "\n".join(table_lines)
@@ -2027,19 +2057,44 @@ def _make_visible_page_markers(
     if not markdown:
         return markdown
 
+    # Paso 1: normalizar TODOS los marcadores a su propia línea aislada.
+    # Esto captura el caso en el que DeepSeek los dejó pegados al texto.
+    markdown = re.sub(
+        r"[ \t]*(<!--\s*PAGE:\d+\s*-->)[ \t]*",
+        r"\n\n\1\n\n",
+        markdown,
+    )
+    # Colapsar los excesos que pueda haber dejado el paso anterior.
+    markdown = re.sub(r"\n{4,}", "\n\n\n", markdown)
+
     lines = markdown.splitlines()
     output = []
+
     for line in lines:
         match = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
         if not match:
             output.append(line)
             continue
+
         page = int(match.group(1))
         source_page = page + page_offset
         total = source_page_count or page_count
-        output.append("")
+
+        # Asegurar que el marcador queda separado por línea vacía antes
+        # y después. Si no, en Markdown el bloque siguiente se pega a la
+        # cita por "lazy continuation".
+        while output and not output[-1].strip():
+            output.pop()
+        if output:
+            output.append("")
+
         output.append(f"> **Página {source_page} de {total}**")
         output.append("")
+
+    # Colapsar excesos de líneas vacías al final.
+    while output and not output[-1].strip():
+        output.pop()
+
     return "\n".join(output)
 
 
