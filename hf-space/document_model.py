@@ -153,7 +153,8 @@ def build_document_model(doc: fitz.Document) -> DocumentModel:
                         texts.append(span["text"])
                         sizes.append(float(span.get("size", 10)))
             text = _clean(" ".join(texts))
-            bbox = tuple(float(x) for x in block.get("bbox", (0, 0, 0, 0)))
+            raw_bbox = block.get("bbox", (0.0, 0.0, 0.0, 0.0))
+            bbox = (float(raw_bbox[0]), float(raw_bbox[1]), float(raw_bbox[2]), float(raw_bbox[3]))
             if not text:
                 continue
             size = statistics.median(sizes) if sizes else 10.0

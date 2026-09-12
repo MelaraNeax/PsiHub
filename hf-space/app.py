@@ -27,7 +27,6 @@
 #
 # ============================================================
 
-from huggingface_hub import _eval_results
 import os
 import sys
 import re
@@ -123,7 +122,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 
 # Cambiar esta versión invalida automáticamente caches generados por
 # versiones anteriores del pipeline.
-PIPELINE_VERSION = "2026-09-12-reader-master-v11"
+PIPELINE_VERSION = "2026-09-12-reader-master-v12-extraction-guard"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1585,6 +1584,71 @@ def normalize_page_chunk_layout(
     return normalized
 
 
+def _markdown_text_signal(markdown: str) -> int:
+    """Cuenta texto real del Markdown, ignorando etiquetas de imagen."""
+    if not markdown:
+        return 0
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", markdown)
+    text = re.sub(r"<img\b[^>]*>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    text = re.sub(r"^>\s*\*?Página\s+\d+[^\n]*$", " ", text, flags=re.MULTILINE | re.IGNORECASE)
+    return len(re.sub(r"\s+", " ", text).strip())
+
+
+def _native_markdown_fallback(doc: fitz.Document) -> list[dict]:
+    """
+    Fallback duro cuando el extractor devuelve esencialmente imágenes.
+
+    Usa el texto nativo del PDF como fuente de contenido. No usa Vision ni
+    interpreta una captura de página como texto: esto evita que una regresión
+    del extractor convierta párrafos/tablas en imágenes.
+    """
+    pages = []
+    for page_number, page in enumerate(doc, start=1):
+        blocks = []
+        raw_blocks = page.get_text("blocks", sort=True)
+        for block in raw_blocks:
+            if len(block) < 5:
+                continue
+            x0, y0, x1, y1, text = block[:5]
+            text = str(text or "").strip()
+            if not text:
+                continue
+            # Evita bloques que sean solo números de página.
+            if re.fullmatch(r"(?:page\s*)?\d{1,4}", text, re.IGNORECASE):
+                continue
+            blocks.append((float(x0), float(y0), float(x1), float(y1), text))
+
+        # Orden robusto para papers de dos columnas: columna izquierda completa
+        # antes de la derecha; dentro de cada columna, orden vertical.
+        if blocks:
+            page_width = page.rect.width
+            center = page_width / 2.0
+            left = [b for b in blocks if (b[0] + b[2]) / 2.0 < center]
+            right = [b for b in blocks if (b[0] + b[2]) / 2.0 >= center]
+            if len(left) >= 3 and len(right) >= 3:
+                ordered = sorted(left, key=lambda b: (b[1], b[0])) + sorted(right, key=lambda b: (b[1], b[0]))
+            else:
+                ordered = sorted(blocks, key=lambda b: (b[1], b[0]))
+        else:
+            ordered = []
+
+        text_parts = []
+        for _, _, _, _, text in ordered:
+            # Los bloques de PyMuPDF ya contienen saltos de línea internos.
+            cleaned = re.sub(r"[ \t]+", " ", text)
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+            if cleaned:
+                text_parts.append(cleaned)
+
+        pages.append({
+            "text": "\n\n".join(text_parts),
+            "metadata": {"page_number": page_number},
+            "_native_fallback": True,
+        })
+    return pages
+
+
 def extract_markdown_and_images(
     doc: fitz.Document,
     output_dir: Path
@@ -1601,18 +1665,43 @@ def extract_markdown_and_images(
         image_path=str(output_dir)
     )
 
+    # Con page_chunks=True, pymupdf4llm SIEMPRE devuelve list[dict] (una
+    # entrada por página), nunca un str. Nos defendemos igual por si una
+    # versión distinta de la librería cambiara ese contrato, para no
+    # romper el resto del pipeline (que asume una lista de páginas).
     if isinstance(pages, str):
-        return pages
+        pages = [{"text": pages, "metadata": {"page_number": 1}}]
 
     corrected_pages = []
+    extracted_chars = 0
+    native_chars = 0
+
     for page_number, page in enumerate(pages, start=1):
-        corrected_pages.append(
-            normalize_page_chunk_layout(
-                page,
-                page_width=doc[page_number - 1].rect.width,
-                page_number=page_number,
-            )
+        doc_index = page_number - 1
+        if doc_index >= len(doc):
+            # No debería pasar (pymupdf4llm devuelve 1 chunk por página),
+            # pero si ocurre no queremos un IndexError a mitad de pipeline.
+            corrected_pages.append(page if isinstance(page, dict) else {"text": str(page)})
+            continue
+
+        normalized = normalize_page_chunk_layout(
+            page,
+            page_width=doc[doc_index].rect.width,
+            page_number=page_number,
         )
+        corrected_pages.append(normalized)
+        extracted_chars += _markdown_text_signal(str(normalized.get("text", "")))
+        native_chars += len(re.sub(r"\s+", " ", doc[doc_index].get_text("text")).strip())
+
+    # Invariante crítica: si el PDF tiene texto nativo pero pymupdf4llm
+    # devolvió casi exclusivamente imágenes, NO seguimos hacia traducción.
+    # De lo contrario, esas imágenes terminan siendo el "contenido" del lector.
+    if native_chars >= 500 and extracted_chars < max(500, int(native_chars * 0.20)):
+        print(
+            f"[EXTRACT] FALLBACK: pymupdf4llm produjo {extracted_chars} chars "
+            f"frente a {native_chars} chars nativos; reconstruyendo desde PDF."
+        )
+        return _native_markdown_fallback(doc)
 
     return corrected_pages
 
@@ -2391,10 +2480,15 @@ async def translate_tables(
     )
 
     for (key, original), result in zip(items, pairs):
+
         if isinstance(result, BaseException):
+
             print(f"[TABLE] Error en {key}; se conserva la tabla original: {result}")
+
             results[key] = original
+
         else:
+
             result_key, translated = result
             results[result_key] = translated
 
