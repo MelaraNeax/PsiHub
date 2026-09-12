@@ -301,60 +301,83 @@ def classify_region(
 
 def collect_page_elements(
     doc: fitz.Document,
-    header_fraction: float = 0.12,
-    footer_fraction: float = 0.12
+    header_fraction: float = 0.08,
+    footer_fraction: float = 0.08
 ):
     """
-    Extrae bloques con coordenadas.
+    Extrae líneas de texto con coordenadas.
 
-    No elimina absolutamente nada todavía.
+    Se utilizan líneas y no bloques completos para evitar que
+    un bloque que contenga simultáneamente contenido académico
+    y elementos editoriales termine siendo eliminado completo.
     """
 
     elements = []
 
     for page_index, page in enumerate(doc):
+
         rect = page.rect
 
         header_height = rect.height * header_fraction
         footer_height = rect.height * footer_fraction
 
-        blocks = page.get_text("blocks")
+        page_dict = page.get_text("dict")
 
-        for block in blocks:
+        for block in page_dict.get("blocks", []):
 
-            if len(block) < 5:
+            if block.get("type") != 0:
                 continue
 
-            x0, y0, x1, y1, text = block[:5]
+            for line in block.get("lines", []):
 
-            text = text.strip()
+                spans = line.get("spans", [])
 
-            if not text:
-                continue
+                if not spans:
+                    continue
 
-            block_rect = fitz.Rect(x0, y0, x1, y1)
+                text = "".join(
+                    span.get("text", "")
+                    for span in spans
+                ).strip()
 
-            region = classify_region(
-                block_rect,
-                rect,
-                header_height,
-                footer_height
-            )
+                if not text:
+                    continue
 
-            elements.append(
-                LayoutElement(
-                    text=text,
-                    normalized=normalize_editorial_text(text),
-                    x0=x0,
-                    y0=y0,
-                    x1=x1,
-                    y1=y1,
-                    page=page_index + 1,
-                    width=x1 - x0,
-                    height=y1 - y0,
-                    region=region,
+                bbox = line.get("bbox")
+
+                if not bbox or len(bbox) != 4:
+                    continue
+
+                x0, y0, x1, y1 = bbox
+
+                line_rect = fitz.Rect(
+                    x0,
+                    y0,
+                    x1,
+                    y1
                 )
-            )
+
+                region = classify_region(
+                    line_rect,
+                    rect,
+                    header_height,
+                    footer_height
+                )
+
+                elements.append(
+                    LayoutElement(
+                        text=text,
+                        normalized=normalize_editorial_text(text),
+                        x0=x0,
+                        y0=y0,
+                        x1=x1,
+                        y1=y1,
+                        page=page_index + 1,
+                        width=x1 - x0,
+                        height=y1 - y0,
+                        region=region,
+                    )
+                )
 
     return elements
 
@@ -365,14 +388,13 @@ def detect_repeated_elements(
     region: str
 ):
     """
-    Busca elementos repetidos entre páginas.
+    Detecta elementos repetidos entre páginas.
 
-    Importante:
-    la repetición se calcula por páginas distintas,
-    no por cantidad total de bloques.
+    La repetición se calcula por cantidad de páginas distintas,
+    no por cantidad de apariciones.
 
-    Esto evita que un mismo bloque duplicado dentro de una
-    página distorsione el resultado.
+    Para documentos de más de dos páginas se exige que el elemento
+    aparezca en al menos el 30% de las páginas, con un mínimo de 2.
     """
 
     pages_by_text = defaultdict(set)
@@ -387,7 +409,9 @@ def detect_repeated_elements(
         if not normalized:
             continue
 
-        pages_by_text[normalized].add(element.page)
+        pages_by_text[normalized].add(
+            element.page
+        )
 
     if page_count <= 2:
         minimum_pages = 2
@@ -399,12 +423,135 @@ def detect_repeated_elements(
 
     repeated = set()
 
-    for text, pages in pages_by_text.items():
+    for normalized, pages in pages_by_text.items():
 
         if len(pages) >= minimum_pages:
-            repeated.add(text)
+            repeated.add(normalized)
 
     return repeated
+
+
+def detect_page_numbers(elements):
+
+    pages_with_numbers = set()
+
+    for element in elements:
+
+        if element.region != "footer":
+            continue
+
+        if is_page_number(element.text):
+            pages_with_numbers.add(
+                element.page
+            )
+
+    return pages_with_numbers
+
+
+def collect_page_elements(
+    doc: fitz.Document,
+    header_fraction: float = 0.08,
+    footer_fraction: float = 0.08
+):
+    """
+    Extrae líneas de texto con coordenadas.
+
+    Se utilizan líneas y no bloques completos porque un PDF puede
+    fusionar un header/footer con una línea de contenido académico.
+
+    Ejemplo problemático:
+
+        "...menos del 2 | Alcohol Research | Vol 40 No 1 | 2019"
+
+    Si se analizara por bloques, se podría borrar contenido legítimo.
+    Analizando líneas podemos aislar solamente la parte editorial.
+    """
+
+    elements = []
+
+    for page_index, page in enumerate(doc):
+
+        rect = page.rect
+
+        header_height = rect.height * header_fraction
+        footer_height = rect.height * footer_fraction
+
+        page_dict = page.get_text("dict")
+
+        for block in page_dict.get("blocks", []):
+
+            if block.get("type") != 0:
+                continue
+
+            for line in block.get("lines", []):
+
+                spans = line.get("spans", [])
+
+                if not spans:
+                    continue
+
+                text_parts = []
+
+                for span in spans:
+
+                    span_text = span.get(
+                        "text",
+                        ""
+                    )
+
+                    if span_text:
+                        text_parts.append(
+                            span_text
+                        )
+
+                text = "".join(
+                    text_parts
+                ).strip()
+
+                if not text:
+                    continue
+
+                bbox = line.get(
+                    "bbox"
+                )
+
+                if not bbox or len(bbox) != 4:
+                    continue
+
+                x0, y0, x1, y1 = bbox
+
+                block_rect = fitz.Rect(
+                    x0,
+                    y0,
+                    x1,
+                    y1
+                )
+
+                region = classify_region(
+                    block_rect,
+                    rect,
+                    header_height,
+                    footer_height
+                )
+
+                elements.append(
+                    LayoutElement(
+                        text=text,
+                        normalized=normalize_editorial_text(
+                            text
+                        ),
+                        x0=x0,
+                        y0=y0,
+                        x1=x1,
+                        y1=y1,
+                        page=page_index + 1,
+                        width=x1 - x0,
+                        height=y1 - y0,
+                        region=region,
+                    )
+                )
+
+    return elements
 
 
 def detect_page_numbers(elements):
@@ -550,17 +697,22 @@ def analyze_document_layout(
 ) -> DocumentLayoutProfile:
 
     if doc.page_count == 0:
-        raise ValueError("El PDF no contiene páginas.")
+        raise ValueError(
+            "El PDF no contiene páginas."
+        )
 
     first_page = doc[0]
 
     page_width = first_page.rect.width
     page_height = first_page.rect.height
 
+    HEADER_FRACTION = 0.08
+    FOOTER_FRACTION = 0.08
+
     elements = collect_page_elements(
         doc,
-        header_fraction=0.12,
-        footer_fraction=0.12
+        header_fraction=HEADER_FRACTION,
+        footer_fraction=FOOTER_FRACTION
     )
 
     repeated_headers = detect_repeated_elements(
@@ -575,33 +727,70 @@ def analyze_document_layout(
         "footer"
     )
 
-    page_number_pages = detect_page_numbers(elements)
+    page_number_pages = detect_page_numbers(
+        elements
+    )
 
-    columns = detect_columns(doc)
+    columns = detect_columns(
+        doc
+    )
 
-    body_top, body_bottom = calculate_body_bounds(
-        doc,
-        elements,
-        repeated_headers,
-        repeated_footers
+    body_top, body_bottom = (
+        calculate_body_bounds(
+            doc,
+            elements,
+            repeated_headers,
+            repeated_footers
+        )
     )
 
     profile = DocumentLayoutProfile(
         page_count=doc.page_count,
-        page_width=round(page_width, 2),
-        page_height=round(page_height, 2),
-        header_height=round(page_height * 0.12, 2),
-        footer_height=round(page_height * 0.12, 2),
+
+        page_width=round(
+            page_width,
+            2
+        ),
+
+        page_height=round(
+            page_height,
+            2
+        ),
+
+        header_height=round(
+            page_height * HEADER_FRACTION,
+            2
+        ),
+
+        footer_height=round(
+            page_height * FOOTER_FRACTION,
+            2
+        ),
+
         repeated_headers=sorted(
             list(repeated_headers)
         ),
+
         repeated_footers=sorted(
             list(repeated_footers)
         ),
-        page_numbers=bool(page_number_pages),
+
+        page_numbers=bool(
+            page_number_pages
+        ),
+
         likely_columns=columns,
-        body_top=round(body_top, 2),
-        body_bottom=round(body_bottom, 2),
+
+        body_top=round(
+            body_top,
+            2
+        ),
+
+        body_bottom=round(
+            body_bottom,
+            2
+        ),
+
         first_page_special=True,
     )
 
@@ -678,6 +867,19 @@ def clean_pdf_using_layout(
     doc: fitz.Document,
     profile: DocumentLayoutProfile
 ):
+    """
+    Limpieza física conservadora basada en líneas.
+
+    Nunca elimina un bloque completo si dentro puede existir
+    contenido académico legítimo.
+
+    Se eliminan únicamente:
+      - números de página claramente identificados
+      - headers repetidos
+      - footers repetidos
+
+    La primera página queda protegida frente a headers repetidos.
+    """
 
     removed = 0
 
@@ -688,48 +890,102 @@ def clean_pdf_using_layout(
 
         rect = page.rect
 
-        blocks = page.get_text("blocks")
+        page_dict = page.get_text("dict")
 
-        for block in blocks:
+        redactions = []
 
-            if len(block) < 5:
+        for block in page_dict.get(
+            "blocks",
+            []
+        ):
+
+            if block.get("type") != 0:
                 continue
 
-            x0, y0, x1, y1, text = block[:5]
+            for line in block.get(
+                "lines",
+                []
+            ):
 
-            text = text.strip()
+                spans = line.get(
+                    "spans",
+                    []
+                )
 
-            if not text:
-                continue
+                if not spans:
+                    continue
 
-            element = LayoutElement(
-                text=text,
-                normalized=normalize_editorial_text(text),
-                x0=x0,
-                y0=y0,
-                x1=x1,
-                y1=y1,
-                page=page_number,
-                width=x1 - x0,
-                height=y1 - y0,
-                region=classify_region(
-                    fitz.Rect(x0, y0, x1, y1),
+                text = "".join(
+                    span.get(
+                        "text",
+                        ""
+                    )
+                    for span in spans
+                ).strip()
+
+                if not text:
+                    continue
+
+                bbox = line.get(
+                    "bbox"
+                )
+
+                if not bbox or len(bbox) != 4:
+                    continue
+
+                x0, y0, x1, y1 = bbox
+
+                line_rect = fitz.Rect(
+                    x0,
+                    y0,
+                    x1,
+                    y1
+                )
+
+                region = classify_region(
+                    line_rect,
                     rect,
                     profile.header_height,
                     profile.footer_height
                 )
-            )
 
-            should_remove, reason = should_remove_element(
-                element,
-                profile
-            )
+                element = LayoutElement(
+                    text=text,
+                    normalized=normalize_editorial_text(
+                        text
+                    ),
+                    x0=x0,
+                    y0=y0,
+                    x1=x1,
+                    y1=y1,
+                    page=page_number,
+                    width=x1 - x0,
+                    height=y1 - y0,
+                    region=region
+                )
 
-            if not should_remove:
-                continue
+                should_remove, reason = (
+                    should_remove_element(
+                        element,
+                        profile
+                    )
+                )
+
+                if not should_remove:
+                    continue
+
+                redactions.append(
+                    (
+                        line_rect,
+                        reason,
+                        text
+                    )
+                )
+
+        for rect_to_remove, reason, text in redactions:
 
             page.add_redact_annot(
-                fitz.Rect(x0, y0, x1, y1),
+                rect_to_remove,
                 fill=(1, 1, 1)
             )
 
@@ -737,10 +993,11 @@ def clean_pdf_using_layout(
 
             print(
                 f"[PDF CLEAN] Página {page_number}: "
-                f"{reason}: {text[:100]}"
+                f"{reason}: {text[:120]}"
             )
 
-        page.apply_redactions()
+        if redactions:
+            page.apply_redactions()
 
     profile.elements_removed_estimate = removed
 
@@ -996,26 +1253,147 @@ def remove_obvious_editorial_noise(
             cleaned.append(line)
             continue
 
-        # ----------------------------------------------------
-        # números de página aislados
-        # ----------------------------------------------------
+        # Nunca tocar page markers.
+        if re.fullmatch(
+            r"<!--\s*PAGE:\d+\s*-->",
+            stripped,
+            re.IGNORECASE
+        ):
+            cleaned.append(line)
+            continue
 
+        # Solo eliminar números de página aislados.
         if is_page_number(stripped):
             continue
 
-        # ----------------------------------------------------
-        # copyright extremadamente evidente
+        # NO eliminar copyright aquí.
         #
-        # Solo se elimina cuando ocupa una línea propia.
-        # ----------------------------------------------------
-
-        if is_copyright_line(stripped):
-            continue
+        # Puede formar parte de información editorial
+        # legítima del documento y ya no tenemos coordenadas
+        # para determinar si estaba realmente en el footer.
 
         cleaned.append(line)
 
-    return "\n".join(cleaned)
+    return "\n".join(
+        cleaned
+    )
 
+def remove_residual_editorial_lines(
+    text: str,
+    profile: DocumentLayoutProfile
+) -> str:
+    """
+    Segunda barrera de seguridad después de pymupdf4llm.
+
+    Solo elimina un header/footer repetitivo cuando aparece
+    como una línea prácticamente independiente dentro de su página.
+
+    NUNCA elimina un fragmento editorial incrustado dentro de
+    una línea que también contiene contenido académico.
+    """
+
+    if not text:
+        return ""
+
+    repeated = set(
+        profile.repeated_headers
+        + profile.repeated_footers
+    )
+
+    if not repeated:
+        return text
+
+    cleaned = []
+
+    current_page = 1
+    page_lines = []
+
+    def flush_page(lines):
+
+        if not lines:
+            return []
+
+        result = []
+
+        non_empty_indices = [
+            i
+            for i, line in enumerate(lines)
+            if line.strip()
+        ]
+
+        first_indices = set(
+            non_empty_indices[:3]
+        )
+
+        last_indices = set(
+            non_empty_indices[-3:]
+        )
+
+        for i, line in enumerate(lines):
+
+            stripped = line.strip()
+
+            if not stripped:
+                result.append(line)
+                continue
+
+            if (
+                i in first_indices
+                or i in last_indices
+            ):
+
+                normalized = normalize_whitespace(
+                    stripped
+                )
+
+                if any(
+                    normalized == value
+                    for value in repeated
+                ):
+                    continue
+
+                if is_page_number(
+                    stripped
+                ):
+                    continue
+
+            result.append(line)
+
+        return result
+
+    for line in text.splitlines():
+
+        stripped = line.strip()
+
+        if re.fullmatch(
+            r"<!--\s*PAGE:\d+\s*-->",
+            stripped,
+            re.IGNORECASE
+        ):
+
+            cleaned.extend(
+                flush_page(
+                    page_lines
+                )
+            )
+
+            page_lines = []
+
+            cleaned.append(line)
+
+            continue
+
+        page_lines.append(line)
+
+    cleaned.extend(
+        flush_page(
+            page_lines
+        )
+    )
+
+    return "\n".join(
+        cleaned
+    )
 
 def preprocess_raw_markdown(
     text: str
@@ -1176,13 +1554,6 @@ def optimize_markdown_for_mobile(
     text: str
 ) -> str:
 
-    """
-    Limpieza final específicamente orientada a lectura
-    en celular.
-
-    No resume ni reescribe el contenido.
-    """
-
     if not text:
         return ""
 
@@ -1201,7 +1572,10 @@ def optimize_markdown_for_mobile(
         text
     )
 
-    # máximo 2 líneas vacías consecutivas
+    # ----------------------------------------------
+    # no más de 2 líneas vacías consecutivas
+    # ----------------------------------------------
+
     text = re.sub(
         r"\n{4,}",
         "\n\n\n",
@@ -1209,7 +1583,7 @@ def optimize_markdown_for_mobile(
     )
 
     # ----------------------------------------------
-    # separar headings
+    # headings
     # ----------------------------------------------
 
     text = re.sub(
@@ -1219,7 +1593,7 @@ def optimize_markdown_for_mobile(
     )
 
     # ----------------------------------------------
-    # separar page markers
+    # page markers
     # ----------------------------------------------
 
     text = re.sub(
@@ -1229,7 +1603,20 @@ def optimize_markdown_for_mobile(
     )
 
     # ----------------------------------------------
-    # espacios alrededor de tablas
+    # anclas HTML
+    #
+    # No introducir espacios arbitrarios dentro de ellas.
+    # ----------------------------------------------
+
+    text = re.sub(
+    r'\n{3,}(<a\s+id="[^"]+"\s*>)',
+    r"\n\n\1",
+    text,
+    flags=re.IGNORECASE
+)
+
+    # ----------------------------------------------
+    # tablas
     # ----------------------------------------------
 
     text = re.sub(
@@ -1313,48 +1700,132 @@ def detect_language(
 # TABLAS
 # ============================================================
 
-TABLE_BLOCK_PATTERN = re.compile(
-    r"(?ms)"
-    r"(^\|.*?\n"
-    r"\|(?:\s*:?-+:?\s*\|)+.*?"
-    r"(?:\n\|.*?)+)"
-)
+def is_markdown_table_separator(
+    line: str
+) -> bool:
+
+    stripped = line.strip()
+
+    if "|" not in stripped:
+        return False
+
+    cells = [
+        cell.strip()
+        for cell in stripped.strip("|").split("|")
+    ]
+
+    if len(cells) < 2:
+        return False
+
+    return all(
+        re.fullmatch(
+            r":?-{2,}:?",
+            cell
+        )
+        for cell in cells
+    )
+
+
+def is_markdown_table_row(
+    line: str
+) -> bool:
+
+    stripped = line.strip()
+
+    return (
+        stripped.startswith("|")
+        and stripped.endswith("|")
+        and stripped.count("|") >= 2
+    )
 
 
 def isolate_tables(
     text: str
 ):
 
+    if not text:
+        return text, {}
+
     tables = {}
 
+    lines = text.splitlines()
+
+    output = []
+
     counter = 0
+    i = 0
 
-    def replace(match):
+    while i < len(lines):
 
-        nonlocal counter
+        line = lines[i]
 
-        key = (
-            f"@@TABLE_{counter}@@"
-        )
+        # ----------------------------------------------------
+        # Posible inicio de tabla
+        # ----------------------------------------------------
 
-        tables[key] = match.group(1)
+        if (
+            i + 1 < len(lines)
+            and is_markdown_table_row(line)
+            and is_markdown_table_separator(
+                lines[i + 1]
+            )
+        ):
 
-        counter += 1
+            table_lines = [
+                line,
+                lines[i + 1]
+            ]
 
-        return key
+            i += 2
 
-    result = TABLE_BLOCK_PATTERN.sub(
-        replace,
-        text
+            while i < len(lines):
+
+                current = lines[i]
+
+                if not is_markdown_table_row(
+                    current
+                ):
+                    break
+
+                table_lines.append(
+                    current
+                )
+
+                i += 1
+
+            key = (
+                f"@@TABLE_{counter}@@"
+            )
+
+            tables[key] = "\n".join(
+                table_lines
+            )
+
+            output.append(
+                key
+            )
+
+            counter += 1
+
+            continue
+
+        output.append(line)
+
+        i += 1
+
+    return (
+        "\n".join(output),
+        tables
     )
-
-    return result, tables
 
 
 def restore_tables(
     text: str,
     tables: dict
 ):
+
+    if not tables:
+        return text
 
     for key, value in tables.items():
 
@@ -1520,6 +1991,34 @@ IMPORTANTE SOBRE REFERENCIAS:
 
 Las referencias bibliográficas forman parte del documento.
 No las resumas ni las elimines.
+
+Conserva cada referencia como una unidad independiente.
+
+NO combines dos referencias.
+NO dividas una referencia en varias.
+NO cambies el orden de las referencias.
+NO inventes numeración.
+NO elimines autores, años, títulos, revistas, volúmenes,
+páginas, DOI ni URLs.
+
+Si aparecen marcadores HTML, anchors o enlaces internos
+relacionados con las referencias, consérvalos exactamente.
+
+IMPORTANTE SOBRE CITAS:
+
+No cambies las citas bibliográficas del cuerpo.
+
+Por ejemplo:
+
+(Smith, 2020)
+(Smith et al., 2020)
+[12]
+[12, 13]
+
+deben conservar su contenido y formato esencial.
+
+No conviertas citas en explicaciones.
+No elimines citas.
 
 Los nombres de autores y títulos bibliográficos deben conservarse
 según corresponda al original, salvo que el contexto exija
@@ -1837,22 +2336,405 @@ def convert_local_images_to_base64(
 
 
 # ============================================================
-# ENLACES AL PDF
+# REFERENCIAS E ÍNDICE INTERNO
 # ============================================================
+
+REFERENCE_HEADINGS = re.compile(
+    r"^\s{0,3}"
+    r"(?:#{1,6}\s*)?"
+    r"(references|bibliography|referencias|bibliografía|"
+    r"reference list|literature cited)"
+    r"\s*$",
+    re.IGNORECASE
+)
+
+
+def find_references_start(
+    lines: list[str]
+) -> Optional[int]:
+
+    for index, line in enumerate(lines):
+
+        if REFERENCE_HEADINGS.match(
+            line.strip()
+        ):
+            return index
+
+    return None
+
+
+def looks_like_reference_start(
+    line: str
+) -> bool:
+
+    s = line.strip()
+
+    if not s:
+        return False
+
+    # --------------------------------------------------------
+    # Referencias numeradas
+    # --------------------------------------------------------
+
+    if re.match(
+        r"^(?:\[\d+\]|\d+[.)])\s+",
+        s
+    ):
+        return True
+
+    # --------------------------------------------------------
+    # Autor + año
+    # --------------------------------------------------------
+
+    if re.search(
+        r"\b(?:19|20)\d{2}[a-z]?\s*\)",
+        s[:300]
+    ):
+
+        if re.match(
+            r"^[A-ZÁÉÍÓÚÑ]"
+            r"[A-Za-zÁÉÍÓÚÑáéíóúñü'’\-]+",
+            s
+        ):
+            return True
+
+    return False
+
+
+def split_reference_entries(
+    lines: list[str]
+) -> list[str]:
+
+    entries = []
+
+    current = []
+
+    for line in lines:
+
+        stripped = line.strip()
+
+        if not stripped:
+
+            if current:
+                entries.append(
+                    "\n".join(
+                        current
+                    ).strip()
+                )
+
+                current = []
+
+            continue
+
+        if (
+            current
+            and looks_like_reference_start(
+                stripped
+            )
+        ):
+
+            entries.append(
+                "\n".join(
+                    current
+                ).strip()
+            )
+
+            current = [
+                stripped
+            ]
+
+            continue
+
+        current.append(
+            stripped
+        )
+
+    if current:
+
+        entries.append(
+            "\n".join(
+                current
+            ).strip()
+        )
+
+    return [
+        entry
+        for entry in entries
+        if entry.strip()
+    ]
+
+
+def detect_existing_reference_number(
+    reference: str
+):
+
+    match = re.match(
+        r"^\s*(?:\[(\d+)\]|(\d+)[.)])\s+",
+        reference
+    )
+
+    if not match:
+        return None
+
+    return int(
+        match.group(1)
+        or match.group(2)
+    )
+
+
+def number_references(
+    markdown: str
+) -> str:
+    """
+    Numera las referencias bibliográficas sin crear todavía
+    HTML ni enlaces.
+
+    Esto se ejecuta ANTES de la traducción.
+    """
+
+    if not markdown:
+        return markdown
+
+    lines = markdown.splitlines()
+
+    start = find_references_start(
+        lines
+    )
+
+    if start is None:
+        return markdown
+
+    reference_lines = lines[
+        start + 1:
+    ]
+
+    references = split_reference_entries(
+        reference_lines
+    )
+
+    if not references:
+        return markdown
+
+    numbered = []
+
+    for index, reference in enumerate(
+        references,
+        start=1
+    ):
+
+        reference = re.sub(
+            r"^\s*(?:\[\d+\]|\d+[.)])\s+",
+            "",
+            reference
+        )
+
+        numbered.append(
+            f"[{index}] {reference}"
+        )
+
+    output = []
+
+    output.extend(
+        lines[:start + 1]
+    )
+
+    output.append("")
+
+    output.extend(
+        numbered
+    )
+
+    return "\n".join(
+        output
+    )
+
+
+def add_document_top_anchor(
+    markdown: str
+) -> str:
+
+    if not markdown:
+        return markdown
+
+    if '<a id="top"></a>' in markdown:
+        return markdown
+
+    return (
+        '<a id="top"></a>\n\n'
+        + markdown
+    )
+
+
+def index_references(
+    markdown: str
+) -> str:
+    """
+    Después de la traducción:
+
+      - convierte las referencias en anchors
+      - convierte citas [n] en links
+      - mantiene la numeración
+      - agrega retorno al inicio
+
+    No modifica citas autor-año.
+    """
+
+    if not markdown:
+        return markdown
+
+    markdown = add_document_top_anchor(
+        markdown
+    )
+
+    lines = markdown.splitlines()
+
+    start = find_references_start(
+        lines
+    )
+
+    if start is None:
+        return markdown
+
+    before = lines[:start]
+
+    reference_lines = lines[
+        start + 1:
+    ]
+
+    references = split_reference_entries(
+        reference_lines
+    )
+
+    if not references:
+        return markdown
+
+    normalized_references = []
+
+    for index, reference in enumerate(
+        references,
+        start=1
+    ):
+
+        reference = re.sub(
+            r"^\s*\[(\d+)\]\s+",
+            "",
+            reference
+        )
+
+        reference = re.sub(
+            r"^\s*\d+[.)]\s+",
+            "",
+            reference
+        )
+
+        normalized_references.append(
+            reference
+        )
+
+    # --------------------------------------------------------
+    # Citas numéricas en el cuerpo
+    # --------------------------------------------------------
+
+    body = "\n".join(
+        before
+    )
+
+    def replace_numeric_citation(
+        match
+    ):
+
+        numbers_text = match.group(1)
+
+        numbers = re.findall(
+            r"\d+",
+            numbers_text
+        )
+
+        links = []
+
+        for number in numbers:
+
+            number_int = int(
+                number
+            )
+
+            if not (
+                1
+                <= number_int
+                <= len(normalized_references)
+            ):
+                links.append(
+                    f"[{number_int}]"
+                )
+                continue
+
+            links.append(
+                f'<a href="#ref-{number_int}">'
+                f'[{number_int}]'
+                f'</a>'
+            )
+
+        return ", ".join(
+            links
+        )
+
+    body = re.sub(
+        r"\[((?:\d+\s*,?\s*)+)\]",
+        replace_numeric_citation,
+        body
+    )
+
+    # --------------------------------------------------------
+    # Reconstrucción
+    # --------------------------------------------------------
+
+    output = list(
+        body.splitlines()
+    )
+
+    output.append("")
+    output.append(
+        lines[start]
+    )
+    output.append("")
+
+    for index, reference in enumerate(
+        normalized_references,
+        start=1
+    ):
+
+        output.append(
+            f'<a id="ref-{index}"></a>'
+        )
+
+        output.append(
+            f"**{index}.** {reference}"
+        )
+
+        output.append(
+            '<a href="#top">↩ Volver al texto</a>'
+        )
+
+        output.append("")
+
+    return "\n".join(
+        output
+    )
+
 
 def inject_internal_pdf_links(
     markdown: str
-):
+) -> str:
 
     """
-    Mantiene los page markers como anclas estructurales.
+    Compatibilidad con el pipeline.
 
-    No convierte arbitrariamente cada página en un link,
-    porque eso puede ensuciar la lectura móvil.
+    El índice real se genera mediante index_references().
     """
 
-    return markdown
-
+    return index_references(
+        markdown
+    )
 
 # ============================================================
 # PIPELINE PRINCIPAL
@@ -1998,14 +2880,21 @@ async def process_pdf(
         )
 
         raw_markdown = (
-            preprocess_raw_markdown(
+    preprocess_raw_markdown(
+        raw_markdown
+    )
+)
+
+        raw_markdown = (
+            remove_obvious_editorial_noise(
                 raw_markdown
             )
         )
 
         raw_markdown = (
-            remove_obvious_editorial_noise(
-                raw_markdown
+            remove_residual_editorial_lines(
+                raw_markdown,
+                layout_profile
             )
         )
 
@@ -2039,13 +2928,17 @@ async def process_pdf(
             f"{source_language}"
         )
 
-        # ----------------------------------------------------
-        # 6. TABLAS
-        # ----------------------------------------------------
+        # --------------------------------------------------------
+        # 6. TABLAS + REFERENCIAS
+        # --------------------------------------------------------
 
         print(
             "[PIPELINE] "
-            "6/8 Aislando tablas..."
+            "6/8 Preparando tablas y referencias..."
+        )
+
+        raw_markdown = number_references(
+            raw_markdown
         )
 
         markdown_for_translation, tables = (
@@ -2053,7 +2946,6 @@ async def process_pdf(
                 raw_markdown
             )
         )
-
         # ----------------------------------------------------
         # 7. TRADUCCIÓN
         # ----------------------------------------------------
@@ -2103,11 +2995,9 @@ async def process_pdf(
             )
         )
 
-        translated_markdown = (
-            inject_internal_pdf_links(
-                translated_markdown
-            )
-        )
+        translated_markdown = index_references(
+    translated_markdown
+)
 
         # ----------------------------------------------------
         # RESULTADO
