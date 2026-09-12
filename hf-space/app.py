@@ -169,35 +169,103 @@ async def download_pdf(url: str) -> bytes:
 
 
 def remove_headers_footers(doc: fitz.Document):
-    """Detecta y remueve encabezados y pies de página repetitivos. Como información de la revista, mail, autor o doi constante a lo largo del texto"""
+    """
+    Detecta y elimina encabezados/pies de página repetitivos
+    sin afectar el contenido principal del artículo.
+
+    Para el formato AAAI del PDF analizado:
+    - Encabezado: aproximadamente 5% superior de la página.
+    - Pie: aproximadamente 5% inferior.
+    - Los números de página se eliminan independientemente,
+      aunque cambien de una página a otra.
+    """
+
     if doc.page_count < 3:
         return
-    
+
+    HEADER_MARGIN = 0.05
+    FOOTER_MARGIN = 0.05
+
+    # Expresión para números de página aislados
+    page_number_pattern = re.compile(
+        r"^\s*(?:page\s*)?\d+(?:\s*(?:of|de)\s*\d+)?\s*$",
+        re.IGNORECASE
+    )
+
+    # Textos candidatos que aparecen repetidos en encabezados/pies
     header_texts = {}
     footer_texts = {}
-    
+
     for page in doc:
         rect = page.rect
-        for b in page.get_text("blocks"):
-            b_rect = fitz.Rect(b[:4])
-            text = b[4].strip()
-            if not text or len(text) < 4: continue 
-            
-            # 12% superior o inferior
-            if b_rect.y1 < rect.height * 0.12:
+
+        for block in page.get_text("blocks"):
+            block_rect = fitz.Rect(block[:4])
+            text = block[4].strip()
+
+            if not text:
+                continue
+
+            # Ignorar números de página en esta etapa:
+            # se procesan por separado más abajo.
+            if page_number_pattern.fullmatch(text):
+                continue
+
+            # ENCABEZADO
+            if block_rect.y1 <= rect.height * HEADER_MARGIN:
                 header_texts[text] = header_texts.get(text, 0) + 1
-            elif b_rect.y0 > rect.height * 0.88:
+
+            # PIE
+            elif block_rect.y0 >= rect.height * (1 - FOOTER_MARGIN):
                 footer_texts[text] = footer_texts.get(text, 0) + 1
 
+    # Un elemento se considera repetitivo si aparece
+    # en al menos el 30% de las páginas.
     threshold = max(2, int(doc.page_count * 0.30))
-    bad_texts = {k for k, v in header_texts.items() if v >= threshold} | {k for k, v in footer_texts.items() if v >= threshold}
-    
-    if bad_texts:
-        for page in doc:
-            for b in page.get_text("blocks"):
-                if b[4].strip() in bad_texts:
-                    page.add_redact_annot(fitz.Rect(b[:4]), fill=(1, 1, 1))
-            page.apply_redactions()
+
+    bad_texts = {
+        text
+        for text, count in header_texts.items()
+        if count >= threshold
+    }
+
+    bad_texts.update(
+        text
+        for text, count in footer_texts.items()
+        if count >= threshold
+    )
+
+    # Eliminar los elementos detectados
+    for page in doc:
+        rect = page.rect
+
+        for block in page.get_text("blocks"):
+            block_rect = fitz.Rect(block[:4])
+            text = block[4].strip()
+
+            if not text:
+                continue
+
+            should_remove = False
+
+            # 1. Número de página dentro del margen inferior
+            if (
+                block_rect.y0 >= rect.height * (1 - FOOTER_MARGIN)
+                and page_number_pattern.fullmatch(text)
+            ):
+                should_remove = True
+
+            # 2. Encabezado/pie repetitivo
+            elif text in bad_texts:
+                should_remove = True
+
+            if should_remove:
+                page.add_redact_annot(
+                    block_rect,
+                    fill=(1, 1, 1)
+                )
+
+        page.apply_redactions()
 
 
 def extract_markdown_and_images(pdf_bytes: bytes) -> tuple[str, dict[str, str]]:
