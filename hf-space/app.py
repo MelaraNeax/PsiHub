@@ -57,6 +57,9 @@ load_dotenv()
 load_dotenv(Path(__file__).parent / ".env")
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+print(f"DEBUG DEEPSEEK_API_KEY cargada: {'Sí (termina en ' + DEEPSEEK_API_KEY[-4:] + ')' if DEEPSEEK_API_KEY else 'NO (VACÍA)'}")
+
 # ══════════════════════════════════════════════════
 # CONFIGURACIÓN DEL MOTOR DE TRADUCCIÓN (DeepSeek / Gemini)
 # ══════════════════════════════════════════════════
