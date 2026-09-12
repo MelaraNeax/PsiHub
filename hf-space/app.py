@@ -166,7 +166,7 @@ async def download_pdf(url: str) -> bytes:
 
 
 def remove_headers_footers(doc: fitz.Document):
-    """Detecta y remueve encabezados y pies de página repetitivos."""
+    """Detecta y remueve encabezados y pies de página repetitivos. Como información de la revista, mail, autor o doi constante a lo largo del texto"""
     if doc.page_count < 3:
         return
     
@@ -425,9 +425,9 @@ def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
     return chunks
 
 def get_system_instruction(doc_lang: str) -> str:
-    """Retorna las directivas académicas de traducción al español."""
+    """Retorna las directivas académicas de traducción AL ESPAÑOL."""
     return (
-        f"Eres un traductor académico profesional y exhaustivo. El idioma origen es {doc_lang}. "
+        f"Eres un traductor académico profesional y exhaustivo. El idioma origen es el español. "
         "Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
         "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
         "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO.\n"
@@ -443,7 +443,7 @@ def get_system_instruction(doc_lang: str) -> str:
     )
 
 async def detect_document_language(first_page_text: str, client: Optional[genai.Client] = None) -> str:
-    """Detecta el idioma original del documento usando el primer fragmento."""
+    """Detecta el idioma original del documento."""
     if not first_page_text.strip(): return "Inglés"
     prompt = f"Detect the primary language of this academic text. Return ONLY the language name (e.g. English, French, Portuguese, German). Do not return anything else.\n\n{first_page_text[:1500]}"
     
