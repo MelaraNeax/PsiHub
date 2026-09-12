@@ -1216,27 +1216,46 @@ def is_affiliation_or_meta(text: str) -> bool:
     return any(re.search(p, s, re.IGNORECASE) for p in patterns) or looks_like_email(s)
 
 
-def clean_and_join_broken_paragraphs(text: str, visual_hints: Optional[dict] = None) -> str:
+def clean_and_join_broken_paragraphs(
+    text: str,
+    visual_hints: Optional[dict] = None,
+) -> str:
+    """
+    Reconstrucción moderada de líneas partidas.
+
+    Une guiones de palabra partida dentro de una misma línea, y (si Vision
+    lo confirma) une párrafos entre páginas. Nunca une líneas que empiezan
+    con #, listas, tablas, blockquotes o imágenes.
+    """
+
     lines = text.splitlines()
     output = []
 
     for i, line in enumerate(lines):
+
         current = line.rstrip()
+
         if not current.strip():
             output.append("")
             continue
 
         stripped = current.strip()
+
         if stripped.startswith("<!-- PAGE:"):
             output.append(current)
             continue
+
         if stripped.startswith("#"):
             output.append(current)
             continue
+
         if stripped.startswith(("-", "*", ">", "|", "<")):
             output.append(current)
             continue
 
+        # ----------------------------------------------------
+        # guión de palabra partido
+        # ----------------------------------------------------
         if current.rstrip().endswith("-"):
             if i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
@@ -1248,6 +1267,9 @@ def clean_and_join_broken_paragraphs(text: str, visual_hints: Optional[dict] = N
 
     cleaned = "\n".join(output)
 
+    # ----------------------------------------------------
+    # Unión inter-página asistida por Vision
+    # ----------------------------------------------------
     if visual_hints:
         lines = cleaned.splitlines()
         i = 0
@@ -1278,27 +1300,26 @@ def clean_and_join_broken_paragraphs(text: str, visual_hints: Optional[dict] = N
             right = lines[nxt].lstrip()
             protected = ("|", ">", "```", "#", "- ", "* ", "![](")
             if (
-                not left or not right
-                or left.startswith(protected) or right.startswith(protected)
+                not left
+                or not right
+                or left.startswith(protected)
+                or right.startswith(protected)
                 or left.endswith((".", ":", ";", "?", "!"))
                 or re.match(r"^[A-ZÁÉÍÓÚÑÜ]", right)
             ):
                 i += 1
                 continue
 
-            # --- FIX: el marcador NUNCA se mete en la línea del texto ---
-            # El párrafo unido va a lines[prev]. El marcador se queda
-            # intacto, solo en su propia línea, en lines[i].
-            # lines[nxt] se vacía (su contenido ya está en lines[prev]).
+            # FIX: el marcador NUNCA se mete dentro de la línea del texto.
+            # El párrafo unido va a lines[prev]; el marcador queda intacto
+            # en su propia línea (lines[i]); el contenido de lines[nxt] se
+            # vacía porque ya está en lines[prev].
             if left.endswith("-") and re.match(r"^[a-záéíóúñü]", right, re.I):
                 lines[prev] = left[:-1] + right
             else:
                 lines[prev] = left + " " + right
             lines[nxt] = ""
-            # lines[i] queda tal cual: <!-- PAGE:N+1 -->, solo en su línea.
             i = nxt + 1
-
-        cleaned = "\n".join(lines)
 
         cleaned = "\n".join(lines)
 
@@ -1324,9 +1345,8 @@ def optimize_markdown_for_mobile(text: str) -> str:
     # ----------------------------------------------
     # headings
     #
-    # FIX: solo aplicar al inicio de línea y exigir un espacio después
-    # de los '#'. Esto evita romper celdas de tabla que empiezan con
-    # '#', como "#seguidores/enlaces entrantes".
+    # FIX: solo al inicio de línea y exigiendo espacio tras los '#'.
+    # Evita romper celdas de tabla que empiezan con '#' (ej: "#followers").
     # ----------------------------------------------
     text = re.sub(
         r"\n*(^#{1,6}\s+[^\n]+$)\n*",
@@ -1346,8 +1366,6 @@ def optimize_markdown_for_mobile(text: str) -> str:
 
     # ----------------------------------------------
     # anclas HTML
-    #
-    # No introducir espacios arbitrarios dentro de ellas.
     # ----------------------------------------------
     text = re.sub(
         r'\n{3,}(<a\s+id="[^"]+"\s*>)',
@@ -1367,6 +1385,459 @@ def optimize_markdown_for_mobile(text: str) -> str:
 def postprocess_markdown(text: str) -> str:
     return optimize_markdown_for_mobile(text)
 
+def postprocess_markdown(text: str) -> str:
+    return optimize_markdown_for_mobile(text)
+
+
+# ============================================================
+# NORMALIZACIÓN DE NOTAS AL PIE
+# ============================================================
+
+def normalize_footnote_formatting(markdown: str) -> str:
+    """
+    Fuerza un formato uniforme para notas al pie: blockquote con número
+    en negrita. Solo actúa fuera de la sección de Referencias.
+    """
+    if not markdown:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    in_references = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if re.match(
+            r"^#{0,6}\s*(references|referencias|bibliography|bibliografía)\s*$",
+            stripped, re.IGNORECASE,
+        ):
+            in_references = True
+            output.append(line)
+            continue
+
+        if in_references:
+            output.append(line)
+            continue
+
+        m = re.match(r"^(\d{1,3})[.)]?\s+(.+)$", stripped)
+        if (
+            m
+            and len(stripped) < 300
+            and not stripped.startswith(("|", "#", ">", "- ", "* ", "!["))
+        ):
+            number = m.group(1)
+            body = m.group(2).strip()
+            output.append(f"> **{number}.** {body}")
+            continue
+
+        output.append(line)
+
+    return "\n".join(output)
+
+
+# ============================================================
+# NOTAS DE CORRESPONDENCIA
+# ============================================================
+
+CORRESPONDENCE_PATTERNS = [
+    r"correspondence\s+(?:should\s+be\s+)?(?:addressed|directed|sent)\s+to",
+    r"la\s+correspondencia\s+debe\s+dirigirse\s+a",
+    r"corresponding\s+author",
+    r"autor\s+correspondiente",
+    r"please\s+address\s+correspondence",
+    r"address\s+correspondence\s+to",
+]
+
+EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+
+
+def _looks_like_correspondence_note(text: str) -> bool:
+    if not text or len(text) > 600:
+        return False
+    low = text.lower()
+    if any(re.search(p, low, re.IGNORECASE) for p in CORRESPONDENCE_PATTERNS):
+        return True
+    if EMAIL_RE.search(text):
+        if re.search(
+            r"\b(?:department|university|institute|college|"
+            r"departamento|universidad|instituto|facultad)\b",
+            text, re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
+def extract_correspondence_notes(markdown: str) -> tuple[str, list[str]]:
+    """
+    Extrae notas de correspondencia del cuerpo del Markdown. Se devuelven
+    por separado para reinsertarlas al final del documento, evitando que
+    partan un párrafo científico en dos.
+    """
+    if not markdown:
+        return markdown, []
+
+    lines = markdown.splitlines()
+    output = []
+    notes = []
+    i = 0
+
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        if _looks_like_correspondence_note(stripped):
+            note_lines = [stripped]
+            j = i + 1
+
+            while j < len(lines) and lines[j].strip():
+                candidate = lines[j].strip()
+
+                if candidate.startswith(("#", "|", "- ", "* ", ">", "<!--", "![")):
+                    break
+
+                joined = " ".join(note_lines)
+                if EMAIL_RE.search(joined) and re.search(r"\b\d{4,6}\b", joined):
+                    break
+
+                if (
+                    len(note_lines) >= 2
+                    and re.match(r"^[A-ZÁÉÍÓÚÑ][a-záéíóúñü]{3,}\s+\w+", candidate)
+                ):
+                    break
+
+                note_lines.append(candidate)
+                j += 1
+
+            notes.append(" ".join(note_lines))
+
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+
+            i = j
+            continue
+
+        output.append(lines[i])
+        i += 1
+
+    return "\n".join(output), notes
+
+
+def merge_split_paragraphs(markdown: str) -> str:
+    """
+    Une párrafos partidos por una línea vacía cuando la segunda mitad
+    empieza con minúscula y la primera no termina en puntuación final.
+    """
+    if not markdown:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+    protected_starts = ("#", "|", "- ", "* ", ">", "<!--", "![", "1.", "2.", "3.")
+
+    while i < len(lines):
+        current = lines[i]
+        output.append(current)
+
+        if (
+            i + 2 < len(lines)
+            and current.strip()
+            and not lines[i + 1].strip()
+            and lines[i + 2].strip()
+        ):
+            curr_s = current.strip()
+            next_s = lines[i + 2].strip()
+
+            if (
+                not curr_s.startswith(protected_starts)
+                and not next_s.startswith(protected_starts)
+                and not curr_s.endswith((".", "!", "?", ":", ";", ")", "»", '"', "”"))
+                and re.match(r"^[a-záéíóúñü]", next_s)
+            ):
+                output.pop()
+                output.append(curr_s + " " + next_s)
+                i += 3
+                continue
+
+        i += 1
+
+    return "\n".join(output)
+
+# ============================================================
+# APLICACIÓN DE SEÑALES DE VISION AL MARKDOWN
+# ============================================================
+
+def _find_prev_nonblank(lines, start_idx):
+    i = start_idx
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    return i
+
+
+def _find_next_nonblank(lines, start_idx):
+    i = start_idx
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    return i
+
+
+def merge_tables_across_pages(markdown: str, visual_hints: dict) -> str:
+    """
+    Une tablas Markdown que Vision detectó como continuadas entre páginas.
+
+    Solo actúa cuando:
+    - El hint `continues_table=True` con confianza >= 0.80
+    - La última línea no vacía antes del marker es fila de tabla (| ... |)
+    - La primera línea no vacía después del marker es fila de tabla (| ... |)
+    - El número de pipes coincide entre ambas filas
+
+    Efecto: elimina el marker de página y las líneas vacías intermedias
+    para que ambas partes queden contiguas. Los marcadores intermedios
+    se pierden (trade-off aceptable: preferimos tabla unida a navegación
+    exacta en mitad de una tabla).
+    """
+    if not markdown or not visual_hints:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+    merged = 0
+
+    while i < len(lines):
+        line = lines[i]
+        marker = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+
+        if not marker:
+            output.append(line)
+            i += 1
+            continue
+
+        page_number = int(marker.group(1))
+        hint = visual_hints.get(page_number)
+
+        if (
+            not hint
+            or not hint.get("continues_table")
+            or hint.get("confidence", 0) < 0.80
+        ):
+            output.append(line)
+            i += 1
+            continue
+
+        prev_idx = _find_prev_nonblank(output, len(output) - 1)
+        next_idx = _find_next_nonblank(lines, i + 1)
+
+        if prev_idx < 0 or next_idx >= len(lines):
+            output.append(line)
+            i += 1
+            continue
+
+        prev_line = output[prev_idx].strip()
+        next_line = lines[next_idx].strip()
+
+        if not (is_markdown_table_row(prev_line) and is_markdown_table_row(next_line)):
+            output.append(line)
+            i += 1
+            continue
+
+        if prev_line.count("|") != next_line.count("|"):
+            print(
+                f"[VISION MERGE] Tabla NO unida pág {page_number}→{page_number + 1}: "
+                f"pipes distintos ({prev_line.count('|')} vs {next_line.count('|')})"
+            )
+            output.append(line)
+            i += 1
+            continue
+
+        # Eliminar blank lines al final de output para pegar la próxima fila.
+        while output and not output[-1].strip():
+            output.pop()
+
+        print(
+            f"[VISION MERGE] Tabla unida pág {page_number}→{page_number + 1} "
+            f"(conf {hint.get('confidence', 0):.2f})"
+        )
+        # El marker se descarta. Saltamos hasta next_idx (exclusive) y la
+        # próxima iteración procesará la fila de tabla.
+        i = next_idx
+        merged += 1
+        continue
+
+    if merged:
+        print(f"[VISION MERGE] Total tablas unidas: {merged}")
+
+    return "\n".join(output)
+
+
+def merge_lists_across_pages(markdown: str, visual_hints: dict) -> str:
+    """
+    Une listas Markdown que Vision detectó como continuadas entre páginas.
+
+    Mismo enfoque que tablas, pero verificando items de lista:
+    `- `, `* `, `+ `, o `N. `.
+    """
+    if not markdown or not visual_hints:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+    merged = 0
+
+    def is_list_item(text: str) -> bool:
+        return bool(re.match(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+\S", text))
+
+    while i < len(lines):
+        line = lines[i]
+        marker = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+
+        if not marker:
+            output.append(line)
+            i += 1
+            continue
+
+        page_number = int(marker.group(1))
+        hint = visual_hints.get(page_number)
+
+        if (
+            not hint
+            or not hint.get("continues_list")
+            or hint.get("confidence", 0) < 0.80
+        ):
+            output.append(line)
+            i += 1
+            continue
+
+        prev_idx = _find_prev_nonblank(output, len(output) - 1)
+        next_idx = _find_next_nonblank(lines, i + 1)
+
+        if prev_idx < 0 or next_idx >= len(lines):
+            output.append(line)
+            i += 1
+            continue
+
+        prev_line = output[prev_idx].strip()
+        next_line = lines[next_idx].strip()
+
+        if not (is_list_item(prev_line) and is_list_item(next_line)):
+            output.append(line)
+            i += 1
+            continue
+
+        while output and not output[-1].strip():
+            output.pop()
+
+        print(
+            f"[VISION MERGE] Lista unida pág {page_number}→{page_number + 1} "
+            f"(conf {hint.get('confidence', 0):.2f})"
+        )
+        i = next_idx
+        merged += 1
+        continue
+
+    if merged:
+        print(f"[VISION MERGE] Total listas unidas: {merged}")
+
+    return "\n".join(output)
+
+
+def merge_interrupted_citations(markdown: str, visual_hints: dict) -> str:
+    """
+    Une citas bibliográficas cortadas entre páginas.
+
+    Ejemplos:
+      "(Smith, 20" + "20)" → "(Smith, 2020)"
+      "[12, 1" + "3]" → "[12, 13]"
+    """
+    if not markdown or not visual_hints:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+    merged = 0
+
+    while i < len(lines):
+        line = lines[i]
+        marker = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+
+        if not marker:
+            output.append(line)
+            i += 1
+            continue
+
+        page_number = int(marker.group(1))
+        hint = visual_hints.get(page_number)
+
+        if (
+            not hint
+            or not hint.get("citation_interrupted")
+            or hint.get("confidence", 0) < 0.80
+        ):
+            output.append(line)
+            i += 1
+            continue
+
+        prev_idx = _find_prev_nonblank(output, len(output) - 1)
+        next_idx = _find_next_nonblank(lines, i + 1)
+
+        if prev_idx < 0 or next_idx >= len(lines):
+            output.append(line)
+            i += 1
+            continue
+
+        prev_line = output[prev_idx].rstrip()
+        next_line = lines[next_idx].lstrip()
+
+        # ¿La línea previa deja algo abierto?
+        prev_interrupted = (
+            re.search(r"\(\s*[^)]*$", prev_line)     # paréntesis abierto
+            or re.search(r"\[\s*[^\]]*$", prev_line)  # corchete abierto
+            or re.search(r"\b(?:19|20)\d{0,3}$", prev_line)  # año incompleto
+        )
+
+        # ¿La línea siguiente cierra algo?
+        next_continuation = (
+            re.match(r"^[\w\s,;.\-–—]+\s*\)", next_line)  # cierra paréntesis
+            or re.match(r"^[\w\s,;.\-–—]+\s*\]", next_line)  # cierra corchete
+            or re.match(r"^\d{1,4}\b", next_line)  # completa año
+        )
+
+        if not (prev_interrupted and next_continuation):
+            output.append(line)
+            i += 1
+            continue
+
+        # Elegir joiner: sin espacio si estamos completando números,
+        # con espacio si estamos uniendo texto.
+        if (
+            re.search(r"\b(?:19|20)\d{0,3}$", prev_line)
+            and re.match(r"^\d{1,4}\b", next_line)
+        ):
+            joiner = ""
+        else:
+            joiner = " "
+
+        while output and not output[-1].strip():
+            output.pop()
+
+        output[prev_idx] = prev_line + joiner + next_line
+
+        print(
+            f"[VISION MERGE] Cita unida pág {page_number}→{page_number + 1} "
+            f"(conf {hint.get('confidence', 0):.2f}): "
+            f"{prev_line[-30:]!r} + {next_line[:30]!r}"
+        )
+
+        i = next_idx + 1
+        merged += 1
+        continue
+
+    if merged:
+        print(f"[VISION MERGE] Total citas unidas: {merged}")
+
+    return "\n".join(output)
 
 # ============================================================
 # DETECCIÓN DE IDIOMA
@@ -1480,14 +1951,13 @@ async def translate_single_table(table_md: str, model: Optional[str] = None) -> 
 
     if len(table_lines) < 2:
         print(
-            f"[TABLE] Respuesta inválida: no se detectaron filas de tabla. "
-            f"Preview respuesta: {translated[:200]!r}"
+            f"[TABLE] Respuesta inválida: no se detectaron filas. "
+            f"Preview: {translated[:200]!r}"
         )
         return table_md
 
-    # Validación relajada: si la traducción tiene AL MENOS el mismo número
-    # de filas que el original menos 1, y la primera columna de pipes coincide
-    # aproximadamente, la aceptamos.
+    # Validación relajada: aceptamos si la traducción tiene al menos
+    # (filas_originales - 1) filas. DeepSeek suele omitir la fila vacía final.
     if len(table_lines) < len(original_table_lines) - 1:
         print(
             f"[TABLE] Traducción incompleta: "
@@ -1496,10 +1966,9 @@ async def translate_single_table(table_md: str, model: Optional[str] = None) -> 
         )
         return table_md
 
-    # Verificar que la fila separadora siga estando en posición 1
     sep_idx = next(
         (i for i, line in enumerate(table_lines) if is_markdown_table_separator(line)),
-        None
+        None,
     )
     if sep_idx != 1:
         print(
@@ -1508,15 +1977,10 @@ async def translate_single_table(table_md: str, model: Optional[str] = None) -> 
         )
         return table_md
 
-    # Aceptar si el número de pipes del header coincide con al menos
-    # una fila del original.
     header_pipes = table_lines[0].count("|")
-    if not any(
-        line.count("|") == header_pipes
-        for line in original_table_lines
-    ):
+    if not any(line.count("|") == header_pipes for line in original_table_lines):
         print(
-            f"[TABLE] Header tiene {header_pipes} pipes, "
+            f"[TABLE] Header con {header_pipes} pipes, "
             f"originales: {[line.count('|') for line in original_table_lines[:3]]}. "
             f"Preview: {table_lines[0]!r}"
         )
@@ -2058,13 +2522,12 @@ def _make_visible_page_markers(
         return markdown
 
     # Paso 1: normalizar TODOS los marcadores a su propia línea aislada.
-    # Esto captura el caso en el que DeepSeek los dejó pegados al texto.
+    # Captura el caso en el que DeepSeek los dejó pegados al texto.
     markdown = re.sub(
         r"[ \t]*(<!--\s*PAGE:\d+\s*-->)[ \t]*",
         r"\n\n\1\n\n",
         markdown,
     )
-    # Colapsar los excesos que pueda haber dejado el paso anterior.
     markdown = re.sub(r"\n{4,}", "\n\n\n", markdown)
 
     lines = markdown.splitlines()
@@ -2080,9 +2543,7 @@ def _make_visible_page_markers(
         source_page = page + page_offset
         total = source_page_count or page_count
 
-        # Asegurar que el marcador queda separado por línea vacía antes
-        # y después. Si no, en Markdown el bloque siguiente se pega a la
-        # cita por "lazy continuation".
+        # Asegurar separación por línea vacía antes y después.
         while output and not output[-1].strip():
             output.pop()
         if output:
@@ -2091,7 +2552,6 @@ def _make_visible_page_markers(
         output.append(f"> **Página {source_page} de {total}**")
         output.append("")
 
-    # Colapsar excesos de líneas vacías al final.
     while output and not output[-1].strip():
         output.pop()
 
@@ -2308,6 +2768,18 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         raw_markdown = extract_markdown_and_images(doc, image_dir)
         raw_markdown = add_page_markers(raw_markdown)
 
+        # Extraer notas de correspondencia antes de limpiar: si quedan en
+        # medio del cuerpo, parten párrafos científicos.
+        raw_markdown, correspondence_notes = extract_correspondence_notes(raw_markdown)
+        if correspondence_notes:
+            print(
+                f"[CORRESPONDENCE] {len(correspondence_notes)} notas detectadas; "
+                f"se moverán al final del documento."
+            )
+
+        # Recomponer párrafos partidos por las notas extraídas.
+        raw_markdown = merge_split_paragraphs(raw_markdown)
+
         # ------------------------------------------------
         # 3.5 VISION
         # ------------------------------------------------
@@ -2378,6 +2850,15 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         raw_markdown = preprocess_raw_markdown(raw_markdown)
         raw_markdown = remove_obvious_editorial_noise(raw_markdown)
         raw_markdown = remove_residual_editorial_lines(raw_markdown, layout_profile)
+
+        # Aplicar señales de Vision ANTES de unir párrafos: las tablas,
+        # listas y citas interrumpidas necesitan ver los markers de página
+        # intactos para identificar dónde ocurre la ruptura.
+        if visual_hints:
+            raw_markdown = merge_tables_across_pages(raw_markdown, visual_hints)
+            raw_markdown = merge_lists_across_pages(raw_markdown, visual_hints)
+            raw_markdown = merge_interrupted_citations(raw_markdown, visual_hints)
+
         raw_markdown = clean_and_join_broken_paragraphs(
             raw_markdown, visual_hints=visual_hints,
         )
@@ -2441,6 +2922,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         # ------------------------------------------------
         print("[PIPELINE] 8/8 Optimizando lectura...")
         translated_markdown = postprocess_markdown(translated_markdown)
+        translated_markdown = normalize_footnote_formatting(translated_markdown)
         translated_markdown = convert_local_images_to_base64(
             translated_markdown, image_dir
         )
@@ -2455,6 +2937,29 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
             document_id=key,
             page_offset=source_page_offset,
         )
+
+        # Reinsertar las notas de correspondencia al final, antes de
+        # las referencias si es posible.
+        if correspondence_notes:
+            notes_block = "\n\n## Notas de correspondencia\n\n"
+            for idx, note in enumerate(correspondence_notes, 1):
+                notes_block += f"> **Nota {idx}.** {note}\n\n"
+
+            ref_match = re.search(
+                r"\n#{1,6}\s*(?:References|Referencias|Bibliography|Bibliografía)\b",
+                translated_markdown,
+                re.IGNORECASE,
+            )
+            if ref_match:
+                insert_at = ref_match.start()
+                translated_markdown = (
+                    translated_markdown[:insert_at]
+                    + notes_block
+                    + translated_markdown[insert_at:]
+                )
+            else:
+                translated_markdown += notes_block
+
         translated_markdown = _make_visible_page_markers(
             translated_markdown,
             page_count=doc.page_count,

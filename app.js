@@ -937,10 +937,10 @@ async function fetchWithBackgroundRetry(url, options, maxRetries = 2) {
       if (msg.includes('DIRECT_UPLOAD_REQUIRED') || msg.includes('403') || msg.includes('bloqueó')) {
         throw err;
       }
-      const isNetworkDrop = !msg || 
-        msg.includes('Failed to fetch') || 
-        msg.includes('NetworkError') || 
-        msg.includes('abort') || 
+      const isNetworkDrop = !msg ||
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('abort') ||
         msg.includes('timeout') ||
         err.name === 'TypeError';
 
@@ -997,12 +997,12 @@ function showReaderRequisiteScreen(paper, customMsg = '') {
 function handleReaderTranslationError(error, paper) {
   el.readerLoading.style.display = 'none';
   el.readerContent.innerHTML = '';
-  
+
   const msg = error?.message || '';
-  const isDirectUploadRequired = msg.includes('DIRECT_UPLOAD_REQUIRED') 
-    || msg.includes('403') 
-    || msg.includes('bloqueó') 
-    || msg.includes('adjuntar') 
+  const isDirectUploadRequired = msg.includes('DIRECT_UPLOAD_REQUIRED')
+    || msg.includes('403')
+    || msg.includes('bloqueó')
+    || msg.includes('adjuntar')
     || msg.includes('manual')
     || msg.includes('bot protection')
     || msg.includes('captcha');
@@ -1018,13 +1018,13 @@ function handleReaderTranslationError(error, paper) {
     }
     const titleEl = document.getElementById('reader-requisite-title');
     if (titleEl) titleEl.textContent = 'Conexión interrumpida';
-    
+
     const errorMsgEl = document.getElementById('reader-error-msg');
     if (errorMsgEl) {
       errorMsgEl.style.display = 'block';
       errorMsgEl.textContent = 'Comprueba tu conexión o reintenta en unos instantes.';
     }
-    
+
     const journalActionWrap = document.getElementById('reader-journal-action-wrap');
     if (journalActionWrap) journalActionWrap.style.display = 'none';
 
@@ -1773,7 +1773,7 @@ const postProcessReaderContent = () => {
       pdfLink = parentP.querySelector('.internal-pdf-link');
       if (!pdfLink && parentP.nextElementSibling) {
         pdfLink = parentP.nextElementSibling.querySelector('.internal-pdf-link') ||
-                  (parentP.nextElementSibling.classList.contains('internal-pdf-link') ? parentP.nextElementSibling : null);
+          (parentP.nextElementSibling.classList.contains('internal-pdf-link') ? parentP.nextElementSibling : null);
       }
     }
 
@@ -2006,7 +2006,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   if (activeTranslations.has(effectiveId)) {
     try {
       const data = await activeTranslations.get(effectiveId);
-      
+
       paperTranslations.set(effectiveId, data.markdown);
       persistTranslation(effectiveId, paperUrl, data.markdown);
       if (paper) {
@@ -2015,7 +2015,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
         updatePaperAutomaticBadges(paper);
       }
       if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-      
+
       if (typeof saveProcessedArticle === 'function') {
         saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper, data.markdown);
       }
@@ -2030,7 +2030,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 
       el.readerLoading.style.display = 'none';
       if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
-      
+
       renderReaderPaperContent(paper, data.markdown);
     } catch (err) {
       if (S.readerPaperId !== effectiveId) return;
@@ -2043,13 +2043,13 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   const translatePromise = (async () => {
     let taskId = null;
     const { BackgroundTask, LocalNotifications } = window.Capacitor?.Plugins || {};
-    
+
     if (BackgroundTask) {
       try {
         taskId = await BackgroundTask.beforeExit(async () => {
           console.log('[BackgroundTask] Notificación de suspensión recibida por el SO');
           if (taskId !== null) {
-            try { BackgroundTask.finish({ taskId }); } catch (e) {}
+            try { BackgroundTask.finish({ taskId }); } catch (e) { }
             taskId = null;
           }
         });
@@ -2063,7 +2063,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
       });
-      
+
       if (LocalNotifications) {
         try {
           await LocalNotifications.requestPermissions();
@@ -2096,7 +2096,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     } finally {
       activeTranslations.delete(effectiveId);
       if (BackgroundTask && taskId !== null) {
-        try { BackgroundTask.finish({ taskId }); } catch (e) {}
+        try { BackgroundTask.finish({ taskId }); } catch (e) { }
         taskId = null;
       }
     }
@@ -2115,7 +2115,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       updatePaperAutomaticBadges(paper);
     }
     if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-    
+
     if (typeof saveProcessedArticle === 'function') {
       saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper, data.markdown);
     }
@@ -2245,7 +2245,7 @@ async function handleReaderFileUpload(file) {
   const translatePromise = (async () => {
     let taskId = null;
     const { BackgroundTask, LocalNotifications } = window.Capacitor?.Plugins || {};
-    
+
     if (BackgroundTask) {
       try {
         taskId = await BackgroundTask.beforeExit(async () => {
@@ -2269,7 +2269,7 @@ async function handleReaderFileUpload(file) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || data.error || 'Error procesando el archivo PDF');
-      
+
       if (LocalNotifications) {
         try {
           await LocalNotifications.requestPermissions();
@@ -2303,7 +2303,7 @@ async function handleReaderFileUpload(file) {
     } finally {
       activeTranslations.delete(effectiveId);
       if (BackgroundTask && taskId !== null) {
-        try { BackgroundTask.finish({ taskId }); } catch (e) {}
+        try { BackgroundTask.finish({ taskId }); } catch (e) { }
       }
     }
   })();
@@ -2317,7 +2317,7 @@ async function handleReaderFileUpload(file) {
     paperTranslations.set(effectiveId, data.markdown);
     if (paper) paper.translatedMarkdown = data.markdown;
     if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-    
+
     if (typeof saveProcessedArticle === 'function') {
       const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
       saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || fileName, data.pdf_url, paper);

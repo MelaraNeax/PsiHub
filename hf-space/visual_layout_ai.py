@@ -51,7 +51,7 @@ VISION_RENDER_SCALE = float(os.getenv("DEEPSEEK_VISION_RENDER_SCALE", "1.35"))
 VISION_IMAGE_MAX_PX = int(os.getenv("DEEPSEEK_VISION_IMAGE_MAX_PX", "900"))
 VISION_CROP_RATIO = float(os.getenv("DEEPSEEK_VISION_CROP_RATIO", "0.30"))
 VISION_MODE = os.getenv("DEEPSEEK_VISION_MODE", "selective").strip().lower()
-VISION_MIN_CONFIDENCE = float(os.getenv("DEEPSEEK_VISION_MIN_CONFIDENCE", "0.70"))
+VISION_MIN_CONFIDENCE = float(os.getenv("DEEPSEEK_VISION_MIN_CONFIDENCE", "0.80"))
 VISION_CACHE_DIR = Path(os.getenv("CACHE_DIR", "./cache")) / "vision_layout"
 VISION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -260,6 +260,11 @@ async def _analyze_boundary(
     result = json.loads(content)
     result["page"] = page_index + 1
     result["next_page"] = page_index + 2
+    # Exponer excerpts truncados para que app.py pueda tomar decisiones
+    # específicas (por ejemplo, para verificar si ambos lados de la
+    # frontera son filas de tabla Markdown).
+    result["excerpt_a"] = excerpt_a[:800]
+    result["excerpt_b"] = excerpt_b[:800]
     return result
 
 
@@ -374,6 +379,9 @@ def boundary_hints_by_page(diagnostics: list[dict[str, Any]]) -> dict[int, dict[
             "column_flow_risk": bool(item.get("column_flow_risk")),
             "confidence": confidence,
             "reason": str(item.get("reason", "")),
+            # NUEVO: excerpts para verificaciones específicas en app.py.
+            "excerpt_a": str(item.get("excerpt_a", "")),
+            "excerpt_b": str(item.get("excerpt_b", "")),
         }
     return hints
 
