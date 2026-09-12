@@ -27,6 +27,7 @@
 #
 # ============================================================
 
+from huggingface_hub import _eval_results
 import os
 import sys
 import re
@@ -57,6 +58,9 @@ import uvicorn
 
 from dotenv import load_dotenv
 
+from visual_layout_ai import analyze_pdf_boundaries, collect_editorial_patterns, boundary_hints_by_page, audit_pages_with_vision
+from document_model import build_document_model, validate_model, page_visual_candidates, build_visual_router, audit_block_sequence
+
 
 # ============================================================
 # CONFIGURACIÓN
@@ -80,7 +84,7 @@ DEEPSEEK_API_KEYS = [key for key in DEEPSEEK_API_KEYS if key]
 # Alias para compatibilidad con partes antiguas del código.
 DEEPSEEK_API_KEY = DEEPSEEK_API_KEYS[0] if DEEPSEEK_API_KEYS else ""
 
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_BASE_URL = os.getenv(
     "DEEPSEEK_BASE_URL",
     "https://api.deepseek.com/chat/completions"
@@ -107,9 +111,22 @@ REQUEST_TIMEOUT = int(
     os.getenv("REQUEST_TIMEOUT", "120")
 )
 
+# Cliente HTTP persistente: evita abrir/cerrar una conexión TCP/TLS por chunk.
+DEEPSEEK_HTTP_LIMITS = httpx.Limits(
+    max_connections=max(20, TRANSLATION_CONCURRENCY * 3),
+    max_keepalive_connections=max(10, TRANSLATION_CONCURRENCY * 2),
+)
+DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
+    limits=DEEPSEEK_HTTP_LIMITS,
+    timeout=httpx.Timeout(REQUEST_TIMEOUT),
+)
+
 # Cambiar esta versión invalida automáticamente caches generados por
 # versiones anteriores del pipeline.
-PIPELINE_VERSION = "2026-09-12-reader-layout-v6-parallel6"
+PIPELINE_VERSION = "2026-09-12-reader-master-v11"
+
+PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
+PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
@@ -1858,7 +1875,8 @@ def is_affiliation_or_meta(
 
 
 def clean_and_join_broken_paragraphs(
-    text: str
+    text: str,
+    visual_hints: Optional[dict[int, dict]] = None,
 ) -> str:
 
     """
@@ -1945,7 +1963,70 @@ def clean_and_join_broken_paragraphs(
 
         output.append(current)
 
-    return "\n".join(output)
+    cleaned = "\n".join(output)
+
+    # ----------------------------------------------------
+    # Unión inter-página asistida por Vision
+    # ----------------------------------------------------
+    # Solo se activa cuando Vision tiene alta confianza de que el final de
+    # página N continúa el mismo párrafo en N+1. El marcador de página se
+    # conserva como comentario HTML, por lo que sigue siendo invisible al
+    # lector pero permanece disponible para navegación/provenance.
+    if visual_hints:
+        lines = cleaned.splitlines()
+        i = 0
+        while i < len(lines):
+            marker = re.fullmatch(r"\s*<!-- PAGE:(\d+) -->\s*", lines[i])
+            if not marker:
+                i += 1
+                continue
+
+            page_number = int(marker.group(1))
+            hint = visual_hints.get(page_number)
+            if not hint or not hint.get("continues_paragraph"):
+                i += 1
+                continue
+
+            # Buscar el último contenido de la página anterior y el primero
+            # de la página actual. Nunca atravesamos headings, tablas, listas,
+            # imágenes o citas en bloque.
+            prev = i - 1
+            while prev >= 0 and not lines[prev].strip():
+                prev -= 1
+            nxt = i + 1
+            while nxt < len(lines) and not lines[nxt].strip():
+                nxt += 1
+
+            if prev < 0 or nxt >= len(lines):
+                i += 1
+                continue
+
+            left = lines[prev].rstrip()
+            right = lines[nxt].lstrip()
+            protected = ("|", ">", "```", "#", "- ", "* ", "![](")
+            if (
+                not left
+                or not right
+                or left.startswith(protected)
+                or right.startswith(protected)
+                or left.endswith((".", ":", ";", "?", "!"))
+                or re.match(r"^[A-ZÁÉÍÓÚÑÜ]", right)
+            ):
+                i += 1
+                continue
+
+            # Si el final termina en guion de palabra, se elimina; si no, se
+            # añade un espacio. El marcador permanece entre ambos fragmentos.
+            if left.endswith("-") and re.match(r"^[a-záéíóúñü]", right, re.I):
+                lines[prev] = left[:-1] + right + " " + lines[i]
+            else:
+                lines[prev] = left + " " + right + " " + lines[i]
+            lines[nxt] = ""
+            i = nxt + 1
+
+        cleaned = "\n".join(lines)
+
+    return cleaned
 
 
 def optimize_markdown_for_mobile(
@@ -2292,20 +2373,32 @@ async def translate_tables(
     tables: dict,
     model: Optional[str] = None
 ) -> dict:
-    """Traduce las tablas aisladas una por una y conserva las fallidas."""
+    """Traduce tablas en paralelo; una tabla no debe bloquear al resto del paper."""
     if not tables:
         return tables
 
-    translated = {}
+    items = list(tables.items())
+    results: dict = {}
 
-    for key, table_md in tables.items():
-        print(f"[TABLE] Traduciendo {key}...")
-        translated[key] = await translate_single_table(
-            table_md,
-            model
-        )
+    async def translate_one(position: int, key: str, table_md: str):
+        print(f"[TABLE] Traduciendo {key} ({position + 1}/{len(items)})...")
+        translated = await translate_single_table(table_md, model)
+        return key, translated
 
-    return translated
+    pairs = await asyncio.gather(
+        *(translate_one(i, key, table_md) for i, (key, table_md) in enumerate(items)),
+        return_exceptions=True,
+    )
+
+    for (key, original), result in zip(items, pairs):
+        if isinstance(result, BaseException):
+            print(f"[TABLE] Error en {key}; se conserva la tabla original: {result}")
+            results[key] = original
+        else:
+            result_key, translated = result
+            results[result_key] = translated
+
+    return results
 
 
 def restore_tables(
@@ -2568,6 +2661,8 @@ Incluye título, autores y afiliaciones cuando estén presentes.
         ],
         "temperature": 0.1,
         "stream": False,
+        # Para traducción no necesitamos razonamiento extendido.
+        "thinking": {"type": "disabled"},
     }
 
     headers = {
@@ -2579,13 +2674,15 @@ Incluye título, autores y afiliaciones cuando estén presentes.
     last_error = None
 
     for attempt in range(max_retries):
+        started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    DEEPSEEK_BASE_URL,
-                    headers=headers,
-                    json=payload,
-                )
+            response = await DEEPSEEK_HTTP_CLIENT.post(
+                DEEPSEEK_BASE_URL,
+                headers=headers,
+                json=payload,
+            )
+            elapsed = time.perf_counter() - started
+            print(f"[TRANSLATION] DeepSeek response: {elapsed:.2f}s")
 
             if response.status_code == 429 or response.status_code >= 500:
                 raise httpx.HTTPStatusError(
@@ -3041,176 +3138,222 @@ def add_document_top_anchor(
     )
 
 
+def _source_pdf_url(document_id: str, page: Optional[int] = None) -> str:
+    url = f"/api/source-pdf/{document_id}"
+    if page is not None and page >= 1:
+        url += f"#page={page}"
+    return url
+
+
+def _current_page_from_marker(line: str, current_page: int) -> int:
+    match = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+    if match:
+        return int(match.group(1))
+    return current_page
+
+
+def _make_visible_page_markers(markdown: str, page_count: int, page_offset: int = 0, source_page_count: Optional[int] = None) -> str:
+    """Convierte los marcadores estructurales en indicadores visibles de página."""
+    if not markdown:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    for line in lines:
+        match = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+        if not match:
+            output.append(line)
+            continue
+        page = int(match.group(1))
+        source_page = page + page_offset
+        total = source_page_count or page_count
+        output.append("")
+        output.append(f"> **Página {source_page} de {total}**")
+        output.append("")
+    return "\n".join(output)
+
+
 def index_references(
-    markdown: str
+    markdown: str,
+    document_id: Optional[str] = None,
+    page_count: Optional[int] = None,
+    page_offset: int = 0,
 ) -> str:
     """
-    Después de la traducción:
+    Indexa referencias y citas bidireccionalmente.
 
-      - convierte las referencias en anchors
-      - convierte citas [n] en links
-      - mantiene la numeración
-      - agrega retorno al inicio
-
-    No modifica citas autor-año.
+    - cada cita numérica recibe un anchor estable;
+    - cada referencia enlaza a la primera aparición de su cita;
+    - "Volver al texto" vuelve a la cita real, no al inicio;
+    - el título de Referencias enlaza a la página correspondiente del PDF;
+    - todos los headings pueden enlazar a su página original mediante
+      `add_pdf_heading_links()`.
     """
 
     if not markdown:
         return markdown
 
-    markdown = add_document_top_anchor(
-        markdown
-    )
-
+    markdown = add_document_top_anchor(markdown)
     lines = markdown.splitlines()
 
-    start = find_references_start(
-        lines
-    )
-
+    start = find_references_start(lines)
     if start is None:
         return markdown
 
     before = lines[:start]
-
-    reference_lines = lines[
-        start + 1:
-    ]
-
-    references = split_reference_entries(
-        reference_lines
-    )
-
+    reference_lines = lines[start + 1:]
+    references = split_reference_entries(reference_lines)
     if not references:
         return markdown
 
     normalized_references = []
+    for reference in references:
+        reference = re.sub(r"^\s*\[(\d+)\]\s+", "", reference)
+        reference = re.sub(r"^\s*\d+[.)]\s+", "", reference)
+        normalized_references.append(reference)
 
-    for index, reference in enumerate(
-        references,
-        start=1
-    ):
+    body = "\n".join(before)
+    first_citation_anchor = {}
+    citation_counts = Counter()
 
-        reference = re.sub(
-            r"^\s*\[(\d+)\]\s+",
-            "",
-            reference
-        )
-
-        reference = re.sub(
-            r"^\s*\d+[.)]\s+",
-            "",
-            reference
-        )
-
-        normalized_references.append(
-            reference
-        )
-
-    # --------------------------------------------------------
-    # Citas numéricas en el cuerpo
-    # --------------------------------------------------------
-
-    body = "\n".join(
-        before
-    )
-
-    def replace_numeric_citation(
-        match
-    ):
-
+    def replace_numeric_citation(match):
         numbers_text = match.group(1)
-
-        numbers = re.findall(
-            r"\d+",
-            numbers_text
-        )
-
+        numbers = [int(n) for n in re.findall(r"\d+", numbers_text)]
         links = []
 
         for number in numbers:
-
-            number_int = int(
-                number
-            )
-
-            if not (
-                1
-                <= number_int
-                <= len(normalized_references)
-            ):
-                links.append(
-                    f"[{number_int}]"
-                )
+            if not 1 <= number <= len(normalized_references):
+                links.append(f"[{number}]")
                 continue
 
+            citation_counts[number] += 1
+            occurrence = citation_counts[number]
+            anchor = f"cite-{number}-{occurrence}"
+            first_citation_anchor.setdefault(number, anchor)
             links.append(
-                f'<a href="#ref-{number_int}">'
-                f'[{number_int}]'
-                f'</a>'
+                f'<a id="{anchor}"></a>'
+                f'<a href="#ref-{number}">[{number}]</a>'
             )
 
-        return ", ".join(
-            links
-        )
+        return ", ".join(links)
 
     body = re.sub(
         r"\[((?:\d+\s*,?\s*)+)\]",
         replace_numeric_citation,
-        body
+        body,
     )
 
-    # --------------------------------------------------------
-    # Reconstrucción
-    # --------------------------------------------------------
-
-    output = list(
-        body.splitlines()
-    )
-
-    output.append("")
-    output.append(
-        lines[start]
-    )
+    output = body.splitlines()
     output.append("")
 
-    for index, reference in enumerate(
-        normalized_references,
-        start=1
-    ):
+    reference_heading = lines[start]
+    output.append(reference_heading)
+    output.append("")
 
-        output.append(
-            f'<a id="ref-{index}"></a>'
-        )
+    reference_page = None
+    current_page = 1
+    for line in lines[:start]:
+        current_page = _current_page_from_marker(line, current_page)
+    reference_page = current_page
 
-        output.append(
-            f"**{index}.** {reference}"
-        )
+    for index, reference in enumerate(normalized_references, start=1):
+        output.append(f'<a id="ref-{index}"></a>')
+        output.append(f"**{index}.** {reference}")
 
-        output.append(
-            '<a href="#top">↩ Volver al texto</a>'
-        )
-
+        target = first_citation_anchor.get(index)
+        if target:
+            output.append(f'<a href="#{target}">↩ Volver al texto</a>')
+        else:
+            output.append('↩ Sin cita localizada en el texto')
         output.append("")
 
-    return "\n".join(
-        output
+    result = "\n".join(output)
+
+    if document_id and reference_page:
+        result = _link_heading_to_pdf_page(
+            result,
+            r"references|referencias|bibliography|bibliografía|reference list|literature cited",
+            document_id,
+            reference_page + page_offset,
+        )
+
+    return result
+
+
+def _link_heading_to_pdf_page(
+    markdown: str,
+    heading_pattern: str,
+    document_id: str,
+    page: int,
+) -> str:
+    """Hace clickeable un heading concreto hacia su página original."""
+    url = _source_pdf_url(document_id, page)
+    pattern = re.compile(
+        rf"^(\s*#{{1,6}}\s*)({heading_pattern})\s*$",
+        re.IGNORECASE,
     )
+
+    lines = markdown.splitlines()
+    for i, line in enumerate(lines):
+        match = pattern.match(line)
+        if not match:
+            continue
+        prefix = match.group(1)
+        title = match.group(2)
+        lines[i] = f"{prefix}[{title}]({url})"
+        break
+    return "\n".join(lines)
+
+
+def add_pdf_heading_links(
+    markdown: str,
+    document_id: str,
+    page_offset: int = 0,
+) -> str:
+    """Enlaza títulos/secciones detectables con la página original del PDF."""
+    if not markdown or not document_id:
+        return markdown
+
+    lines = markdown.splitlines()
+    current_page = 1
+    output = []
+    seen = set()
+
+    for line in lines:
+        page_match = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+        if page_match:
+            current_page = int(page_match.group(1))
+            output.append(line)
+            continue
+
+        heading = re.match(r"^(\s*#{1,6}\s+)(.+?)\s*$", line)
+        if not heading:
+            output.append(line)
+            continue
+
+        title = heading.group(2).strip()
+        if title.startswith("[") and title.endswith(")"):
+            output.append(line)
+            continue
+
+        key = (title.casefold(), current_page)
+        if key in seen:
+            output.append(line)
+            continue
+        seen.add(key)
+
+        url = _source_pdf_url(document_id, current_page + page_offset)
+        output.append(
+            f"{heading.group(1)}[{title}]({url})"
+        )
+
+    return "\n".join(output)
 
 
 def inject_internal_pdf_links(
     markdown: str
 ) -> str:
-
-    """
-    Compatibilidad con el pipeline.
-
-    El índice real se genera mediante index_references().
-    """
-
-    return index_references(
-        markdown
-    )
+    return index_references(markdown)
 
 # ============================================================
 # PIPELINE PRINCIPAL
@@ -3269,15 +3412,24 @@ async def process_pdf(
     # ABRIR PDF
     # --------------------------------------------------------
 
+    original_pdf_path = PDF_STORE_DIR / f"{key}.pdf"
+    if not original_pdf_path.exists():
+        original_pdf_path.write_bytes(pdf_bytes)
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as original_doc:
+        original_page_count = original_doc.page_count
+    source_page_offset = 0
+
     doc = fitz.open(
         stream=pdf_bytes,
         filetype="pdf"
     )
 
-    # Algunos PDFs de editoriales incluyen una página web/editorial
-    # antes del artículo. Eliminarla aquí evita que entren portada,
-    # logos, iconos, métricas y metadatos en la traducción.
-    remove_publisher_landing_page(doc)
+    # La extracción puede quitar una portada editorial, pero la copia
+    # interna conserva el PDF original para que #page=N coincida con
+    # lo que el usuario ve al abrirlo.
+    if remove_publisher_landing_page(doc):
+        source_page_offset = 1
 
     try:
 
@@ -3296,8 +3448,23 @@ async def process_pdf(
             )
         )
 
+        # Documento intermedio independiente de Markdown. Conserva geometría,
+        # tipos de bloque, orden de lectura y provenance para auditoría y futuras
+        # re-extracciones selectivas.
+        document_model = build_document_model(doc)
+        model_issues = validate_model(document_model)
+        visual_candidate_pages = page_visual_candidates(document_model, threshold=0.25)
+        visual_router = build_visual_router(document_model, threshold=float(os.getenv("VISUAL_PAGE_RISK_THRESHOLD", "0.32")))
+        model_sequence_issues = audit_block_sequence(document_model)
+
         print_layout_profile(
             layout_profile
+        )
+        print(
+            f"[DOC MODEL] {document_model.page_count} páginas | "
+            f"{len(document_model.blocks)} bloques | "
+            f"{len(visual_candidate_pages)} páginas de alta complejidad | "
+            f"{len(model_issues)} anomalías estructurales"
         )
 
         # ----------------------------------------------------
@@ -3319,6 +3486,12 @@ async def process_pdf(
             f"Elementos eliminados: {removed}"
         )
 
+
+        # Guardamos una copia del PDF ya limpiado para que el árbitro visual
+        # use exactamente la misma paginación que la extracción posterior.
+        visual_pdf_path = temp_dir / "visual_source.pdf"
+        doc.save(str(visual_pdf_path), garbage=3, deflate=True)
+
         # ----------------------------------------------------
         # 3. EXTRACCIÓN MARKDOWN
         # ----------------------------------------------------
@@ -3338,6 +3511,59 @@ async def process_pdf(
         raw_markdown = add_page_markers(
             raw_markdown
         )
+
+        # ----------------------------------------------------
+        # 3.5. DIAGNÓSTICO VISUAL SEMÁNTICO
+        # ----------------------------------------------------
+
+        visual_diagnostics = []
+        if os.getenv("ENABLE_VISUAL_LAYOUT_AI", "1").strip().lower() not in {"0", "false", "no"}:
+            print("[PIPELINE] 3.5/8 Analizando fronteras con visión...")
+            # La extracción nativa y el arbitraje visual son independientes:
+            # el módulo visual usa el PDF original y por eso puede ejecutarse
+            # sin contaminar la extracción determinista.
+            # Boundary arbitration and full-page arbitration are independent.
+            # Run the cheap structural model first, then spend Vision budget only
+            # on pages whose geometry is genuinely ambiguous.
+            visual_diagnostics = await analyze_pdf_boundaries(str(visual_pdf_path))
+            visual_hints = boundary_hints_by_page(visual_diagnostics)
+            visual_patterns = collect_editorial_patterns(visual_diagnostics)
+
+            routed_pages = [p for p, route in visual_router.items() if route == "visual"]
+            page_payloads = []
+            for pno in routed_pages:
+                page = next((p for p in document_model.pages if p.page == pno), None)
+                if page:
+                    page_payloads.append({
+                        "page": pno,
+                        "blocks": [
+                            {"id": b.id, "kind": b.kind, "text": b.text[:260],
+                             "bbox": [round(x, 1) for x in b.bbox],
+                             "order": b.reading_order, "column": b.column}
+                            for b in page.blocks
+                        ],
+                    })
+            visual_page_audits = await audit_pages_with_vision(str(visual_pdf_path), page_payloads)
+            for audit in visual_page_audits:
+                if audit.get("reading_order_ok") is False and float(audit.get("confidence", 0) or 0) >= 0.80:
+                    pno = int(audit.get("page", 0))
+                    visual_hints.setdefault(pno, {})["reading_order_warning"] = True
+                    visual_hints[pno]["visual_audit"] = audit
+            print(f"[VISION] {len(visual_diagnostics)} fronteras + {len(visual_page_audits)} auditorías de página")
+
+            # La IA no borra nada directamente: solo aporta patrones que el
+            # limpiador determinista ya sabe eliminar con criterios conservadores.
+            for pattern in visual_patterns:
+                if pattern not in layout_profile.repeated_headers:
+                    layout_profile.repeated_headers.append(pattern)
+
+            print(
+                f"[VISION] {len(visual_diagnostics)} fronteras analizadas | "
+                f"{len(visual_patterns)} patrones editoriales confirmados"
+            )
+        else:
+            visual_hints = {}
+            print("[VISION] Desactivado por ENABLE_VISUAL_LAYOUT_AI")
 
         # ----------------------------------------------------
         # 4. LIMPIEZA MARKDOWN
@@ -3369,7 +3595,8 @@ async def process_pdf(
 
         raw_markdown = (
             clean_and_join_broken_paragraphs(
-                raw_markdown
+                raw_markdown,
+                visual_hints=visual_hints,
             )
         )
 
@@ -3416,24 +3643,13 @@ async def process_pdf(
             )
         )
 
-        tables = await translate_tables(
-            tables,
-            model
-        )
-        # ----------------------------------------------------
-        # 7. TRADUCCIÓN
-        # ----------------------------------------------------
-
-        print(
-            "[PIPELINE] "
-            "7/8 Traduciendo..."
-        )
-
-        translated_markdown = (
-            await translate_markdown(
-                markdown_for_translation,
-                model
-            )
+        # Las tablas y el cuerpo son independientes: se traducen a la vez.
+        # Antes, una tabla podía añadir 15-30 s antes de que siquiera arrancara
+        # el pool de chunks.
+        print("[PIPELINE] 7/8 Traduciendo cuerpo + tablas en paralelo...")
+        tables, translated_markdown = await asyncio.gather(
+            translate_tables(tables, model),
+            translate_markdown(markdown_for_translation, model),
         )
 
         # ----------------------------------------------------
@@ -3470,8 +3686,24 @@ async def process_pdf(
         )
 
         translated_markdown = index_references(
-    translated_markdown
-)
+            translated_markdown,
+            document_id=key,
+            page_count=doc.page_count,
+            page_offset=source_page_offset,
+        )
+
+        translated_markdown = add_pdf_heading_links(
+            translated_markdown,
+            document_id=key,
+            page_offset=source_page_offset,
+        )
+
+        translated_markdown = _make_visible_page_markers(
+            translated_markdown,
+            page_count=doc.page_count,
+            page_offset=source_page_offset,
+            source_page_count=original_page_count,
+        )
 
         # ----------------------------------------------------
         # RESULTADO
@@ -3486,7 +3718,16 @@ async def process_pdf(
             "layout_profile": asdict(
                 layout_profile
             ),
+            "document_model": document_model.to_dict(),
+            "document_model_summary": document_model.summary(),
+            "document_model_issues": model_issues,
+            "visual_candidate_pages": visual_candidate_pages,
+            "visual_diagnostics": visual_diagnostics,
             "page_count": doc.page_count,
+            "document_id": key,
+            "source_pdf_url": _source_pdf_url(key),
+            "source_page_count": original_page_count,
+            "source_page_offset": source_page_offset,
         }
 
         save_cache(
@@ -3521,6 +3762,24 @@ async def process_url(
     return await process_pdf(
         pdf_bytes,
         model
+    )
+
+
+# ============================================================
+# ENDPOINT: SOURCE PDF
+# ============================================================
+
+@app.get("/api/source-pdf/{document_id}")
+async def api_source_pdf(document_id: str):
+    pdf_path = PDF_STORE_DIR / f"{document_id}.pdf"
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF interno no encontrado.")
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename="psihub-source.pdf",
+        headers={"Content-Disposition": "inline; filename=psihub-source.pdf"},
     )
 
 

@@ -8,3 +8,5 @@ google-genai>=0.2.2
 pydantic>=2.0.0
 onnxruntime>=1.19.0
 python-multipart>=0.0.9
+Pillow
+python-dotenv
