@@ -183,13 +183,13 @@ def remove_headers_footers(doc: fitz.Document):
             text = b[4].strip()
             if not text or len(text) < 4: continue 
             
-            # 10% superior o inferior
-            if b_rect.y1 < rect.height * 0.10:
+            # 12% superior o inferior
+            if b_rect.y1 < rect.height * 0.12:
                 header_texts[text] = header_texts.get(text, 0) + 1
-            elif b_rect.y0 > rect.height * 0.90:
+            elif b_rect.y0 > rect.height * 0.88:
                 footer_texts[text] = footer_texts.get(text, 0) + 1
 
-    threshold = max(2, int(doc.page_count * 0.35))
+    threshold = max(2, int(doc.page_count * 0.30))
     bad_texts = {k for k, v in header_texts.items() if v >= threshold} | {k for k, v in footer_texts.items() if v >= threshold}
     
     if bad_texts:
