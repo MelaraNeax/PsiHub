@@ -425,12 +425,12 @@ def chunk_markdown(markdown: str, max_chars: int = 12000) -> list[str]:
     return chunks
 
 def get_system_instruction(doc_lang: str) -> str:
-    """Retorna las directivas académicas de traducción AL ESPAÑOL."""
+    """Retorna las directivas académicas de traducción al español desde el idioma detectado."""
     return (
-        f"Eres un traductor académico profesional y exhaustivo. El idioma origen es el español. "
-        "Tu misión es traducir TODO el texto científico al español de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
+        f"Eres un traductor académico profesional y exhaustivo. El idioma de origen del texto es {doc_lang}. "
+        "Tu misión es traducir TODO el texto científico al ESPAÑOL de forma fiel, rigurosa, completa y palabra por palabra.\n\n"
         "REGLAS CRÍTICAS E INQUEBRANTABLES:\n"
-        "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO.\n"
+        "1. INTEGRIDAD TOTAL: Está TERMINANTEMENTE PROHIBIDO saltarse páginas o recortar contenido. Traduce TODO al español.\n"
         "2. NUNCA RESUMAS: No hagas síntesis, resúmenes ejecutivos ni recortes.\n"
         "3. FORMATO DE TÍTULOS: Usa estrictamente sintaxis Markdown estándar para los encabezados (`# Título`, `## Subtítulo`, `### Sección`). NUNCA dejes marcas de texto sueltas ni etiquetas literales.\n"
         "4. MARCADORES DE PÁGINA: Si aparecen marcas de página, NUNCA partas una oración o párrafo en dos por culpa del salto de página. Mantén la oración unida fluidamente.\n"
@@ -480,7 +480,7 @@ async def detect_document_language(first_page_text: str, client: Optional[genai.
             return "Inglés"
 
 async def translate_chunk_deepseek(chunk: str, system_instruction: str, chunk_num: int = 1, total_chunks: int = 1, max_retries: int = 3) -> str:
-    """Traduce un bloque de Markdown usando la API de DeepSeek (modelo deepseek-chat)."""
+    """Traduce un bloque de Markdown usando la API de DeepSeek asegurando que traduzca al español."""
     if not chunk or not chunk.strip():
         return ""
 
@@ -488,11 +488,18 @@ async def translate_chunk_deepseek(chunk: str, system_instruction: str, chunk_nu
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
     }
+    
+    # Forzamos la instrucción también en el prompt de usuario para que DeepSeek no la ignore
+    user_prompt = (
+        "INSTRUCCIÓN OBLIGATORIA: Traduce todo el siguiente texto académico al ESPAÑOL de forma rigurosa. "
+        "No devuelvas el texto en su idioma original.\n\n" + chunk
+    )
+
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": system_instruction},
-            {"role": "user", "content": chunk}
+            {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.1,
         "stream": False
