@@ -1884,7 +1884,7 @@ function startReaderLoadingProgress(isLocalFile = false) {
     } else if (elapsed < 8) {
       stepText = 'Extrayendo estructura y figuras del PDF…';
     } else if (elapsed < 16) {
-      stepText = 'Traduciendo secciones con IA (Gemini)…';
+      stepText = 'Traduciendo secciones';
     } else if (elapsed < 25) {
       stepText = 'Adaptando conceptos científicos al español…';
     } else if (elapsed < 36) {

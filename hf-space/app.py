@@ -45,9 +45,6 @@ import httpx
 import fitz
 import pymupdf4llm
 
-from google import genai
-from google.genai import types
-
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -67,28 +64,37 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_KEYS = [
+    os.getenv(f"DEEPSEEK_API_KEY_{i}", "").strip()
+    for i in range(1, 7)
+]
+
+# Compatibilidad: si todavía existe la variable antigua, puede usarse
+# como única clave. Para el nuevo esquema se recomienda usar _1 ... _6.
+_legacy_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+if not any(DEEPSEEK_API_KEYS) and _legacy_key:
+    DEEPSEEK_API_KEYS = [_legacy_key]
+
+DEEPSEEK_API_KEYS = [key for key in DEEPSEEK_API_KEYS if key]
+
+# Alias para compatibilidad con partes antiguas del código.
+DEEPSEEK_API_KEY = DEEPSEEK_API_KEYS[0] if DEEPSEEK_API_KEYS else ""
+
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE_URL = os.getenv(
     "DEEPSEEK_BASE_URL",
     "https://api.deepseek.com/chat/completions"
 )
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+TRANSLATION_CONCURRENCY = max(
+    1,
+    min(
+        int(os.getenv("TRANSLATION_CONCURRENCY", "6")),
+        len(DEEPSEEK_API_KEYS) if DEEPSEEK_API_KEYS else 1
+    )
+)
 
-MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash",
-]
-
-MODEL_SWITCH = int(os.getenv("MODELOGEMINI", "0"))
-
-TRANSLATION_DELAY = float(os.getenv("TRANSLATION_DELAY", "1"))
+TRANSLATION_DELAY = float(os.getenv("TRANSLATION_DELAY", "0"))
 
 CACHE_DIR = Path(os.getenv("CACHE_DIR", "./cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,23 +107,10 @@ REQUEST_TIMEOUT = int(
     os.getenv("REQUEST_TIMEOUT", "120")
 )
 
+# Cambiar esta versión invalida automáticamente caches generados por
+# versiones anteriores del pipeline.
+PIPELINE_VERSION = "2026-09-12-reader-cleanup-v5-parallel6"
 
-# ============================================================
-# CLIENTE GEMINI
-# ============================================================
-
-gemini_client = None
-
-if GEMINI_API_KEY:
-    try:
-        gemini_client = genai.Client(
-            api_key=GEMINI_API_KEY,
-            http_options={
-                "timeout": REQUEST_TIMEOUT * 1000
-            }
-        )
-    except Exception as e:
-        print(f"[Gemini] Error inicializando cliente: {e}")
 
 
 # ============================================================
@@ -298,54 +291,6 @@ def classify_region(
 
     return "body"
 
-def detect_repeated_elements(
-    elements,
-    page_count: int,
-    region: str
-):
-    """
-    Detecta elementos repetidos entre páginas.
-
-    La repetición se calcula por cantidad de páginas distintas,
-    no por cantidad de apariciones.
-
-    Para documentos de más de dos páginas se exige que el elemento
-    aparezca en al menos el 30% de las páginas, con un mínimo de 2.
-    """
-
-    pages_by_text = defaultdict(set)
-
-    for element in elements:
-
-        if element.region != region:
-            continue
-
-        normalized = element.normalized
-
-        if not normalized:
-            continue
-
-        pages_by_text[normalized].add(
-            element.page
-        )
-
-    if page_count <= 2:
-        minimum_pages = 2
-    else:
-        minimum_pages = max(
-            2,
-            int(page_count * 0.30)
-        )
-
-    repeated = set()
-
-    for normalized, pages in pages_by_text.items():
-
-        if len(pages) >= minimum_pages:
-            repeated.add(normalized)
-
-    return repeated
-
 
 def collect_page_elements(
     doc: fitz.Document,
@@ -451,6 +396,45 @@ def collect_page_elements(
                 )
 
     return elements
+
+
+def detect_repeated_elements(
+    elements,
+    page_count: int,
+    region: str
+):
+    """
+    Detecta texto que se repite en la misma zona (header/footer)
+    a lo largo de varias páginas.
+
+    Se cuenta una sola vez por página para evitar que varias líneas
+    idénticas dentro de una misma página inflen artificialmente la
+    frecuencia. El umbral es conservador: al menos 2 páginas y,
+    cuando el documento es grande, aproximadamente el 40% de las
+    páginas.
+    """
+    if not elements or page_count <= 1:
+        return set()
+
+    pages_by_text = defaultdict(set)
+
+    for element in elements:
+        if element.region != region:
+            continue
+
+        normalized = element.normalized.strip()
+        if not normalized or len(normalized) < 2:
+            continue
+
+        pages_by_text[normalized].add(element.page)
+
+    threshold = max(2, int(page_count * 0.40 + 0.9999))
+
+    return {
+        text
+        for text, pages in pages_by_text.items()
+        if len(pages) >= threshold
+    }
 
 
 def detect_page_numbers(elements):
@@ -591,6 +575,84 @@ def calculate_body_bounds(
     return body_top, body_bottom
 
 
+def is_publisher_landing_page(page: fitz.Page) -> bool:
+    """
+    Detecta la primera página de portales editoriales como Taylor & Francis.
+
+    Algunas descargas no empiezan directamente con el artículo: primero
+    incluyen una página web/editorial con portada, botones, métricas,
+    "To cite this article", etc. Esa página no forma parte del contenido
+    científico y además suele contener imágenes decorativas.
+
+    La detección exige varias señales simultáneas para no eliminar una
+    primera página académica legítima.
+    """
+    text = page.get_text("text").lower()
+
+    markers = [
+        "to cite this article",
+        "to link to this article",
+        "published online",
+        "submit your article",
+        "article views:",
+        "view related articles",
+        "citing articles:",
+        "full terms & conditions",
+    ]
+
+    hits = sum(
+        1
+        for marker in markers
+        if marker in text
+    )
+
+    return (
+        hits >= 3
+        and (
+            "to cite this article" in text
+            or "to link to this article" in text
+        )
+    )
+
+
+def remove_publisher_landing_page(doc: fitz.Document) -> bool:
+    """Elimina únicamente una portada editorial detectada en la primera página."""
+    if doc.page_count <= 1:
+        return False
+
+    if not is_publisher_landing_page(doc[0]):
+        return False
+
+    print(
+        "[PDF CLEAN] Primera página detectada como portada/página editorial; "
+        "se elimina antes de la extracción."
+    )
+    doc.delete_page(0)
+    return True
+
+
+def is_editorial_artifact_line(text: str) -> bool:
+    """Detecta artefactos editoriales de producción/cabecera claramente aislados."""
+    s = normalize_whitespace(text)
+    low = s.lower()
+
+    if re.search(
+        r"pages_[^\s]+\.qxd",
+        s,
+        re.IGNORECASE
+    ):
+        return True
+
+    if re.search(
+        r"^dialogues\s+clin\s+neurosci\.\s*\d{4};\d+:\d+[-–]\d+\.?$",
+        s,
+        re.IGNORECASE
+    ):
+        return True
+
+    return False
+
+
 def analyze_document_layout(
     doc: fitz.Document
 ) -> DocumentLayoutProfile:
@@ -605,7 +667,7 @@ def analyze_document_layout(
     page_width = first_page.rect.width
     page_height = first_page.rect.height
 
-    HEADER_FRACTION = 0.08
+    HEADER_FRACTION = 0.14
     FOOTER_FRACTION = 0.08
 
     elements = collect_page_elements(
@@ -767,129 +829,137 @@ def clean_pdf_using_layout(
     profile: DocumentLayoutProfile
 ):
     """
-    Limpieza física conservadora basada en líneas.
+    Limpieza física conservadora basada en líneas de texto + artefactos
+    gráficos claramente editoriales.
 
-    Nunca elimina un bloque completo si dentro puede existir
-    contenido académico legítimo.
-
-    Se eliminan únicamente:
+    Nunca elimina figuras científicas normales. Solo elimina: 
       - números de página claramente identificados
-      - headers repetidos
-      - footers repetidos
-
-    La primera página queda protegida frente a headers repetidos.
+      - headers/footers repetidos
+      - reglas gráficas horizontales/verticales muy finas
+        que son decoración editorial
+      - imágenes que quedan prácticamente fuera de la página
     """
 
     removed = 0
 
-    for page_number, page in enumerate(
-        doc,
-        start=1
-    ):
-
+    for page_number, page in enumerate(doc, start=1):
         rect = page.rect
-
         page_dict = page.get_text("dict")
-
         redactions = []
 
-        for block in page_dict.get(
-            "blocks",
-            []
-        ):
-
+        for block in page_dict.get("blocks", []):
             if block.get("type") != 0:
                 continue
 
-            for line in block.get(
-                "lines",
-                []
-            ):
-
-                spans = line.get(
-                    "spans",
-                    []
-                )
-
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
                 if not spans:
                     continue
 
                 text = "".join(
-                    span.get(
-                        "text",
-                        ""
-                    )
+                    span.get("text", "")
                     for span in spans
                 ).strip()
 
                 if not text:
                     continue
 
-                bbox = line.get(
-                    "bbox"
-                )
-
+                bbox = line.get("bbox")
                 if not bbox or len(bbox) != 4:
                     continue
 
                 x0, y0, x1, y1 = bbox
-
-                line_rect = fitz.Rect(
-                    x0,
-                    y0,
-                    x1,
-                    y1
-                )
-
-                region = classify_region(
-                    line_rect,
-                    rect,
-                    profile.header_height,
-                    profile.footer_height
-                )
+                line_rect = fitz.Rect(x0, y0, x1, y1)
 
                 element = LayoutElement(
                     text=text,
-                    normalized=normalize_editorial_text(
-                        text
-                    ),
-                    x0=x0,
-                    y0=y0,
-                    x1=x1,
-                    y1=y1,
+                    normalized=normalize_editorial_text(text),
+                    x0=x0, y0=y0, x1=x1, y1=y1,
                     page=page_number,
                     width=x1 - x0,
                     height=y1 - y0,
-                    region=region
-                )
-
-                should_remove, reason = (
-                    should_remove_element(
-                        element,
-                        profile
+                    region=classify_region(
+                        line_rect,
+                        rect,
+                        profile.header_height,
+                        profile.footer_height
                     )
                 )
 
-                if not should_remove:
+                should_remove, reason = should_remove_element(
+                    element,
+                    profile
+                )
+
+                if should_remove:
+                    redactions.append((line_rect, reason, text))
+
+        # --------------------------------------------------------
+        # Artefactos gráficos editoriales
+        # --------------------------------------------------------
+        for image_info in page.get_images(full=True):
+            xref = image_info[0]
+
+            for image_rect in page.get_image_rects(xref):
+                if image_rect.is_empty:
                     continue
 
-                redactions.append(
-                    (
-                        line_rect,
-                        reason,
-                        text
-                    )
+                width = image_rect.width
+                height = image_rect.height
+
+                outside_left = image_rect.x1 <= 0
+                outside_right = image_rect.x0 >= rect.width
+                outside_top = image_rect.y1 <= 0
+                outside_bottom = image_rect.y0 >= rect.height
+
+                mostly_outside = (
+                    outside_left
+                    or outside_right
+                    or outside_top
+                    or outside_bottom
                 )
 
-        for rect_to_remove, reason, text in redactions:
+                horizontal_rule = (
+                    width >= rect.width * 0.35
+                    and height <= 15
+                )
 
+                vertical_rule = (
+                    height >= rect.height * 0.35
+                    and width <= 15
+                )
+
+                in_editorial_header = (
+                    image_rect.y1 <= rect.height * 0.14
+                )
+
+                in_editorial_footer = (
+                    image_rect.y0 >= rect.height * 0.92
+                )
+
+                if (
+                    mostly_outside
+                    or horizontal_rule
+                    or vertical_rule
+                    or in_editorial_header
+                    or in_editorial_footer
+                ):
+                    reason = "editorial graphic"
+                    redactions.append(
+                        (
+                            image_rect,
+                            reason,
+                            f"image xref={xref}"
+                        )
+                    )
+
+        for rect_to_remove, reason, text in redactions:
             page.add_redact_annot(
                 rect_to_remove,
                 fill=(1, 1, 1)
             )
 
             removed += 1
-
             print(
                 f"[PDF CLEAN] Página {page_number}: "
                 f"{reason}: {text[:120]}"
@@ -899,7 +969,6 @@ def clean_pdf_using_layout(
             page.apply_redactions()
 
     profile.elements_removed_estimate = removed
-
     return removed
 
 
@@ -1016,7 +1085,11 @@ def cache_key(
         model.encode("utf-8")
     ).hexdigest()[:12]
 
-    return f"{digest}_{model_digest}"
+    version_digest = hashlib.sha256(
+        PIPELINE_VERSION.encode("utf-8")
+    ).hexdigest()[:12]
+
+    return f"{digest}_{model_digest}_{version_digest}"
 
 
 def get_cache_path(key: str):
@@ -1141,18 +1214,15 @@ def remove_obvious_editorial_noise(
         return ""
 
     lines = text.splitlines()
-
     cleaned = []
 
     for line in lines:
-
         stripped = line.strip()
 
         if not stripped:
             cleaned.append(line)
             continue
 
-        # Nunca tocar page markers.
         if re.fullmatch(
             r"<!--\s*PAGE:\d+\s*-->",
             stripped,
@@ -1161,21 +1231,18 @@ def remove_obvious_editorial_noise(
             cleaned.append(line)
             continue
 
-        # Solo eliminar números de página aislados.
+        # Números de página aislados.
         if is_page_number(stripped):
             continue
 
-        # NO eliminar copyright aquí.
-        #
-        # Puede formar parte de información editorial
-        # legítima del documento y ya no tenemos coordenadas
-        # para determinar si estaba realmente en el footer.
+        # Artefactos de producción/editoriales que no pertenecen al texto.
+        if is_editorial_artifact_line(stripped):
+            continue
 
         cleaned.append(line)
 
-    return "\n".join(
-        cleaned
-    )
+    return "\n".join(cleaned)
+
 
 def remove_residual_editorial_lines(
     text: str,
@@ -1718,6 +1785,97 @@ def isolate_tables(
     )
 
 
+async def translate_single_table(
+    table_md: str,
+    model: Optional[str] = None
+) -> str:
+    """Traduce una tabla completa sin permitir que el modelo la convierta en prosa."""
+    if not table_md.strip():
+        return table_md
+
+    instruction = (
+        "TRADUCE ESTA TABLA ACADÉMICA AL ESPAÑOL.\n\n"
+        "REGLAS OBLIGATORIAS:\n"
+        "- Devuelve ÚNICAMENTE la tabla Markdown.\n"
+        "- Mantén exactamente el mismo número de columnas y filas.\n"
+        "- Mantén intacta la fila separadora Markdown.\n"
+        "- Traduce encabezados, categorías y texto de las celdas.\n"
+        "- NO traduzcas números, porcentajes, siglas, DSM-IV, nombres propios ni símbolos científicos.\n"
+        "- NO agregues explicaciones, introducciones ni comentarios.\n\n"
+        + table_md
+    )
+
+    translated = await translate_chunk(
+        instruction,
+        0,
+        1,
+    )
+
+    translated = translated.strip()
+    translated = re.sub(
+        r"^```(?:markdown)?\s*|\s*```$",
+        "",
+        translated,
+        flags=re.IGNORECASE
+    ).strip()
+
+    table_lines = [
+        line.strip()
+        for line in translated.splitlines()
+        if line.strip().startswith("|")
+        and line.strip().endswith("|")
+    ]
+
+    if len(table_lines) < 2:
+        print("[TABLE] Respuesta inválida; se conserva la tabla original.")
+        return table_md
+
+    separator_index = next(
+        (
+            i for i, line in enumerate(table_lines)
+            if is_markdown_table_separator(line)
+        ),
+        None
+    )
+
+    if separator_index != 1:
+        print("[TABLE] Estructura alterada; se conserva la tabla original.")
+        return table_md
+
+    header_columns = table_lines[0].count("|")
+    if header_columns < 3:
+        return table_md
+
+    if any(
+        line.count("|") != header_columns
+        for line in table_lines
+    ):
+        print("[TABLE] Número de columnas alterado; se conserva la tabla original.")
+        return table_md
+
+    return "\n".join(table_lines)
+
+
+async def translate_tables(
+    tables: dict,
+    model: Optional[str] = None
+) -> dict:
+    """Traduce las tablas aisladas una por una y conserva las fallidas."""
+    if not tables:
+        return tables
+
+    translated = {}
+
+    for key, table_md in tables.items():
+        print(f"[TABLE] Traduciendo {key}...")
+        translated[key] = await translate_single_table(
+            table_md,
+            model
+        )
+
+    return translated
+
+
 def restore_tables(
     text: str,
     tables: dict
@@ -1727,10 +1885,9 @@ def restore_tables(
         return text
 
     for key, value in tables.items():
-
         text = text.replace(
             key,
-            value
+            "\n\n" + value + "\n\n"
         )
 
     return text
@@ -1873,6 +2030,9 @@ Los marcadores:
 
 son estructurales.
 
+Los tokens `@@TABLE_N@@` son marcadores internos de tablas.
+NO los traduzcas, NO los reformatees y NO los elimines.
+
 NO los traduzcas.
 NO los elimines.
 NO los dupliques.
@@ -1942,18 +2102,18 @@ No digas "Aquí está la traducción".
 
 
 # ============================================================
-# DEEPSEEK
+# DEEPSEEK — TRADUCCIÓN ASÍNCRONA CON POOL DE 6 CLAVES
 # ============================================================
 
 async def translate_with_deepseek(
     text: str,
-    first_chunk: bool = False
+    api_key: str,
+    first_chunk: bool = False,
+    max_retries: int = 3
 ) -> str:
-
-    if not DEEPSEEK_API_KEY:
-        raise RuntimeError(
-            "DEEPSEEK_API_KEY no está configurada."
-        )
+    """Traduce un bloque usando una API key concreta."""
+    if not api_key:
+        raise RuntimeError("No hay una API key de DeepSeek disponible.")
 
     user_prompt = ""
 
@@ -1966,208 +2126,199 @@ Incluye título, autores y afiliaciones cuando estén presentes.
 
 """
 
-    user_prompt += (
-        "TRADUCE EL SIGUIENTE CONTENIDO:\n\n"
-        + text
-    )
+    user_prompt += "TRADUCE EL SIGUIENTE CONTENIDO:\n\n" + text
 
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
-            {
-                "role": "system",
-                "content": TRANSLATION_SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
+            {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.1,
         "stream": False,
     }
 
     headers = {
-        "Authorization": (
-            f"Bearer {DEEPSEEK_API_KEY}"
-        ),
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    timeout = httpx.Timeout(
-        REQUEST_TIMEOUT
+    timeout = httpx.Timeout(REQUEST_TIMEOUT)
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    DEEPSEEK_BASE_URL,
+                    headers=headers,
+                    json=payload,
+                )
+
+            if response.status_code == 429 or response.status_code >= 500:
+                raise httpx.HTTPStatusError(
+                    f"DeepSeek HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+
+            response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+
+            if not content or not content.strip():
+                raise RuntimeError("DeepSeek devolvió una respuesta vacía.")
+
+            return content
+
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+
+    raise RuntimeError(
+        f"Falló la traducción después de {max_retries} intentos: {last_error}"
     )
 
-    async with httpx.AsyncClient(
-        timeout=timeout
-    ) as client:
-
-        response = await client.post(
-            DEEPSEEK_BASE_URL,
-            headers=headers,
-            json=payload,
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-    return (
-        data["choices"][0]
-        ["message"]
-        ["content"]
-    )
-
-
-# ============================================================
-# GEMINI
-# ============================================================
-
-async def translate_with_gemini(
-    text: str,
-    model: str,
-    first_chunk: bool = False
-) -> str:
-
-    if gemini_client is None:
-        raise RuntimeError(
-            "GEMINI_API_KEY no está configurada "
-            "o el cliente Gemini no pudo inicializarse."
-        )
-
-    user_prompt = ""
-
-    if first_chunk:
-        user_prompt += """
-ESTE ES EL COMIENZO DEL DOCUMENTO.
-
-Comienza desde la primera palabra disponible.
-Incluye título, autores y afiliaciones.
-
-"""
-
-    user_prompt += (
-        "TRADUCE EL SIGUIENTE CONTENIDO:\n\n"
-        + text
-    )
-
-    def call_gemini():
-        response = gemini_client.models.generate_content(
-            model=model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=TRANSLATION_SYSTEM_PROMPT,
-                temperature=0.1,
-            )
-        )
-
-        if not response or not response.text:
-            raise RuntimeError(
-                "Gemini devolvió una respuesta vacía."
-            )
-
-        return response.text
-
-    return await asyncio.to_thread(
-        call_gemini
-    )
-
-
-# ============================================================
-# SELECTOR DE MODELO
-# ============================================================
 
 async def translate_chunk(
     text: str,
     index: int,
     total: int,
-    model: Optional[str] = None
-):
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> str:
+    """Traduce un chunk. model se conserva solo por compatibilidad."""
+    key = api_key or DEEPSEEK_API_KEYS[index % len(DEEPSEEK_API_KEYS)]
 
-    first_chunk = index == 0
+    print(
+        f"[TRANSLATION] DeepSeek chunk {index + 1}/{total} "
+        f"(key {DEEPSEEK_API_KEYS.index(key) + 1})"
+    )
 
-    if MODEL_SWITCH == 0:
-
-        print(
-            f"[TRANSLATION] "
-            f"DeepSeek chunk {index + 1}/{total}"
-        )
-
-        result = await translate_with_deepseek(
-            text,
-            first_chunk=first_chunk
-        )
-
-    else:
-
-        selected_model = (
-            model
-            or MODELS[
-                min(
-                    MODEL_SWITCH - 1,
-                    len(MODELS) - 1
-                )
-            ]
-        )
-
-        print(
-            f"[TRANSLATION] "
-            f"Gemini {selected_model} "
-            f"chunk {index + 1}/{total}"
-        )
-
-        result = await translate_with_gemini(
-            text,
-            selected_model,
-            first_chunk=first_chunk
-        )
+    result = await translate_with_deepseek(
+        text,
+        api_key=key,
+        first_chunk=(index == 0),
+    )
 
     if TRANSLATION_DELAY > 0:
-        await asyncio.sleep(
-            TRANSLATION_DELAY
-        )
+        await asyncio.sleep(TRANSLATION_DELAY)
 
     return result
 
 
-# ============================================================
-# TRADUCCIÓN COMPLETA
-# ============================================================
+async def _translation_worker(
+    worker_id: int,
+    queue: asyncio.Queue,
+    results: list,
+    total: int,
+    api_key: str,
+):
+    """Worker persistente: cuando termina un chunk toma el siguiente."""
+    while True:
+        item = await queue.get()
+        if item is None:
+            queue.task_done()
+            return
+
+        index, chunk = item
+        try:
+            print(
+                f"[TRANSLATION] Worker {worker_id} → "
+                f"chunk {index + 1}/{total}"
+            )
+            results[index] = await translate_chunk(
+                chunk,
+                index,
+                total,
+                api_key=api_key,
+            )
+        except Exception as exc:
+            results[index] = exc
+        finally:
+            queue.task_done()
+
 
 async def translate_markdown(
     markdown: str,
-    model: Optional[str] = None
+    model: Optional[str] = None,
 ):
+    """
+    Traduce todos los chunks en paralelo usando hasta 6 API keys.
 
-    chunks = chunk_markdown(
-        markdown
+    El orden final siempre coincide con el orden original del Markdown,
+    independientemente de qué request termine primero.
+    """
+
+    chunks = chunk_markdown(markdown)
+
+    if not chunks:
+        return ""
+
+    if not DEEPSEEK_API_KEYS:
+        raise RuntimeError(
+            "No hay ninguna DEEPSEEK_API_KEY_1..._6 configurada en .env."
+        )
+
+    worker_count = min(
+        TRANSLATION_CONCURRENCY,
+        len(DEEPSEEK_API_KEYS),
+        len(chunks),
     )
 
     print(
-        f"[TRANSLATION] "
-        f"{len(chunks)} chunks"
+        f"[TRANSLATION] {len(chunks)} chunks | "
+        f"{worker_count} workers / API keys"
     )
 
-    translated_chunks = []
+    queue = asyncio.Queue()
+    results: list[Optional[str] | Exception] = [None] * len(chunks)
 
-    for index, chunk in enumerate(
-        chunks
-    ):
+    for index, chunk in enumerate(chunks):
+        await queue.put((index, chunk))
 
-        translated = await translate_chunk(
-            chunk,
-            index,
-            len(chunks),
-            model
+    workers = [
+        asyncio.create_task(
+            _translation_worker(
+                worker_id=i + 1,
+                queue=queue,
+                results=results,
+                total=len(chunks),
+                api_key=DEEPSEEK_API_KEYS[i],
+            )
+        )
+        for i in range(worker_count)
+    ]
+
+    await queue.join()
+
+    for _ in workers:
+        await queue.put(None)
+
+    await asyncio.gather(*workers)
+
+    errors = [
+        result
+        for result in results
+        if isinstance(result, Exception)
+    ]
+
+    if errors:
+        raise errors[0]
+
+    translated_results = [
+        result
+        for result in results
+        if isinstance(result, str)
+    ]
+
+    if len(translated_results) != len(chunks):
+        raise RuntimeError(
+            "La traducción terminó sin producir todos los chunks."
         )
 
-        translated_chunks.append(
-            translated
-        )
-
-    return "\n\n".join(
-        translated_chunks
-    )
+    return "\n\n".join(translated_results)
 
 
 # ============================================================
@@ -2273,33 +2424,23 @@ def looks_like_reference_start(
 
     # --------------------------------------------------------
     # Referencias numeradas
-    #
-    # Reconoce:
-    # [1]
-    # 1.
-    # 1)
-    # **1.**
-    # **1)**
     # --------------------------------------------------------
 
     if re.match(
-        r"^(?:"
-        r"\[\d+\]"
-        r"|\d+[.)]"
-        r"|\*\*\d+[.)]\*\*"
-        r")\s*",
+        r"^(?:\[\d+\]|\d+[.)])\s+",
         s
     ):
         return True
 
     # --------------------------------------------------------
-    # Referencias autor-año
+    # Autor + año
     # --------------------------------------------------------
 
     if re.search(
         r"\b(?:19|20)\d{2}[a-z]?\s*\)",
         s[:300]
     ):
+
         if re.match(
             r"^[A-ZÁÉÍÓÚÑ]"
             r"[A-Za-zÁÉÍÓÚÑáéíóúñü'’\-]+",
@@ -2394,14 +2535,11 @@ def detect_existing_reference_number(
 def number_references(
     markdown: str
 ) -> str:
-
     """
-    Detecta la sección de referencias y asigna una numeración
-    uniforme y explícita.
+    Numera las referencias bibliográficas sin crear todavía
+    HTML ni enlaces.
 
-    Cada referencia queda separada por una línea en blanco para
-    que pueda ser reconocida como unidad independiente durante
-    las etapas posteriores.
+    Esto se ejecuta ANTES de la traducción.
     """
 
     if not markdown:
@@ -2435,13 +2573,7 @@ def number_references(
     ):
 
         reference = re.sub(
-            r"^\s*"
-            r"(?:"
-            r"\[\d+\]"
-            r"|\d+[.)]"
-            r"|\*\*\d+[.)]\*\*"
-            r")"
-            r"\s*",
+            r"^\s*(?:\[\d+\]|\d+[.)])\s+",
             "",
             reference
         )
@@ -2458,14 +2590,13 @@ def number_references(
 
     output.append("")
 
-    for reference in numbered:
-
-        output.append(reference)
-        output.append("")
+    output.extend(
+        numbered
+    )
 
     return "\n".join(
         output
-    ).rstrip()
+    )
 
 
 def add_document_top_anchor(
@@ -2487,30 +2618,15 @@ def add_document_top_anchor(
 def index_references(
     markdown: str
 ) -> str:
-
     """
-    Construye un índice interno de referencias.
+    Después de la traducción:
 
-    Hace tres cosas:
+      - convierte las referencias en anchors
+      - convierte citas [n] en links
+      - mantiene la numeración
+      - agrega retorno al inicio
 
-      1. Conserva la numeración de las referencias.
-      2. Convierte citas numéricas del cuerpo en enlaces.
-      3. Crea un anchor individual para cada referencia.
-
-    Ejemplo:
-
-        El resultado fue significativo [12, 13].
-
-    se convierte en:
-
-        El resultado fue significativo
-        <a href="#ref-12">[12]</a>, <a href="#ref-13">[13]</a>.
-
-    Y la referencia 12 recibe:
-
-        <a id="ref-12"></a>
-        **12.** ...
-
+    No modifica citas autor-año.
     """
 
     if not markdown:
@@ -2549,21 +2665,17 @@ def index_references(
         start=1
     ):
 
-        # ----------------------------------------------------
-        # Eliminar cualquier numeración previa
-        # ----------------------------------------------------
-
         reference = re.sub(
-            r"^\s*"
-            r"(?:"
-            r"\[\d+\]"
-            r"|\d+[.)]"
-            r"|\*\*\d+[.)]\*\*"
-            r")"
-            r"\s*",
+            r"^\s*\[(\d+)\]\s+",
             "",
             reference
-        ).strip()
+        )
+
+        reference = re.sub(
+            r"^\s*\d+[.)]\s+",
+            "",
+            reference
+        )
 
         normalized_references.append(
             reference
@@ -2626,10 +2738,14 @@ def index_references(
     # Reconstrucción
     # --------------------------------------------------------
 
-    output = body.splitlines()
+    output = list(
+        body.splitlines()
+    )
 
     output.append("")
-    output.append(lines[start])
+    output.append(
+        lines[start]
+    )
     output.append("")
 
     for index, reference in enumerate(
@@ -2653,7 +2769,7 @@ def index_references(
 
     return "\n".join(
         output
-    ).rstrip()
+    )
 
 
 def inject_internal_pdf_links(
@@ -2688,19 +2804,7 @@ async def process_pdf(
     # HASH
     # --------------------------------------------------------
 
-    effective_model = (
-        model
-        or (
-            DEEPSEEK_MODEL
-            if MODEL_SWITCH == 0
-            else MODELS[
-                min(
-                    MODEL_SWITCH - 1,
-                    len(MODELS) - 1
-                )
-            ]
-        )
-    )
+    effective_model = model or DEEPSEEK_MODEL
 
     key = cache_key(
         pdf_bytes,
@@ -2743,6 +2847,11 @@ async def process_pdf(
         stream=pdf_bytes,
         filetype="pdf"
     )
+
+    # Algunos PDFs de editoriales incluyen una página web/editorial
+    # antes del artículo. Eliminarla aquí evita que entren portada,
+    # logos, iconos, métricas y metadatos en la traducción.
+    remove_publisher_landing_page(doc)
 
     try:
 
@@ -2879,6 +2988,11 @@ async def process_pdf(
             isolate_tables(
                 raw_markdown
             )
+        )
+
+        tables = await translate_tables(
+            tables,
+            model
         )
         # ----------------------------------------------------
         # 7. TRADUCCIÓN
@@ -3142,17 +3256,10 @@ async def health():
     return {
         "status": "ok",
         "service": "PsiHub Reader",
-        "deepseek": bool(
-            DEEPSEEK_API_KEY
-        ),
-        "gemini": bool(
-            GEMINI_API_KEY
-        ),
-        "translation_backend": (
-            "DeepSeek"
-            if MODEL_SWITCH == 0
-            else "Gemini"
-        ),
+        "deepseek": bool(DEEPSEEK_API_KEYS),
+        "deepseek_keys": len(DEEPSEEK_API_KEYS),
+        "translation_backend": "DeepSeek",
+        "translation_concurrency": TRANSLATION_CONCURRENCY,
     }
 
 
@@ -3162,7 +3269,7 @@ async def health():
 
 async def gradio_translate_url(
     url,
-    model_name
+    model_name=None
 ):
 
     if not url or not url.strip():
@@ -3216,7 +3323,7 @@ async def gradio_translate_url(
 
 async def gradio_translate_file(
     file,
-    model_name
+    model_name=None
 ):
 
     if file is None:
@@ -3301,17 +3408,6 @@ sin eliminar contenido académico legítimo.
             placeholder="https://..."
         )
 
-        model_dropdown = gr.Dropdown(
-            choices=MODELS,
-            value=(
-                MODELS[0]
-                if MODEL_SWITCH != 0
-                else None
-            ),
-            label="Modelo Gemini",
-            allow_custom_value=False
-        )
-
         translate_url_button = gr.Button(
             "Traducir PDF",
             variant="primary"
@@ -3327,10 +3423,7 @@ sin eliminar contenido académico legítimo.
 
         translate_url_button.click(
             fn=gradio_translate_url,
-            inputs=[
-                url_input,
-                model_dropdown
-            ],
+            inputs=[url_input],
             outputs=[
                 url_output,
                 url_info
@@ -3342,16 +3435,6 @@ sin eliminar contenido académico legítimo.
         file_input = gr.File(
             label="PDF",
             file_types=[".pdf"]
-        )
-
-        file_model_dropdown = gr.Dropdown(
-            choices=MODELS,
-            value=(
-                MODELS[0]
-                if MODEL_SWITCH != 0
-                else None
-            ),
-            label="Modelo Gemini"
         )
 
         translate_file_button = gr.Button(
@@ -3369,10 +3452,7 @@ sin eliminar contenido académico legítimo.
 
         translate_file_button.click(
             fn=gradio_translate_file,
-            inputs=[
-                file_input,
-                file_model_dropdown
-            ],
+            inputs=[file_input],
             outputs=[
                 file_output,
                 file_info
