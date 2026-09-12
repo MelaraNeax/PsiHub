@@ -62,6 +62,12 @@ from dotenv import load_dotenv
 # CONFIGURACIÓN
 # ============================================================
 
+DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
+
+TRANSLATION_CONCURRENCY = 6
+TRANSLATION_DELAY = 0
+
 load_dotenv()
 
 DEEPSEEK_API_KEYS = [
