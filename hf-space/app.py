@@ -122,7 +122,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 
 # Cambiar esta versión invalida automáticamente caches generados por
 # versiones anteriores del pipeline.
-PIPELINE_VERSION = "2026-09-12-reader-master-v12-extraction-guard"
+PIPELINE_VERSION = "2026-09-12-reader-master--v13-cache-guard"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1295,13 +1295,6 @@ def _detect_two_columns_from_page_boxes(page: dict, page_width: float) -> bool:
 
 
 def _reorder_two_column_page(page: dict, page_width: float) -> str:
-    """
-    Reconstruye conservadoramente el orden de lectura de una página de dos
-    columnas usando los page_boxes de PyMuPDF4LLM.
-
-    La unidad de reordenamiento es la caja completa: nunca se reconstruyen
-    palabras ni se reescribe el Markdown interno de una caja.
-    """
     text = str(page.get("text", "") or "")
     boxes = page.get("page_boxes") or []
 
@@ -1314,26 +1307,22 @@ def _reorder_two_column_page(page: dict, page_width: float) -> str:
     for box in boxes:
         if not isinstance(box, dict):
             continue
-
         pos = _safe_box_pos(box, len(text))
         if pos is None:
             continue
-
         box_class = str(box.get("class", "")).lower()
         if box_class == "footnote":
             footnotes.append((box, pos))
             continue
-
         bbox = _safe_box_bbox(box)
         if bbox is None:
             continue
-
         usable.append((box, pos, bbox))
 
-    if not usable:
-        cleaned = text
-    else:
-        # Detectar cajas que realmente pertenecen a las dos columnas.
+    original_len = len(text)
+    rebuilt = None
+
+    if usable:
         narrow = []
         for box, pos, bbox in usable:
             x0, y0, x1, y1 = bbox
@@ -1349,26 +1338,19 @@ def _reorder_two_column_page(page: dict, page_width: float) -> str:
             center = (x0 + x1) / 2.0
             if center < page_width * 0.5:
                 left_boxes.append(item)
-            elif center >= page_width * 0.5:
+            else:
                 right_boxes.append(item)
 
         has_two_columns = (
             len(left_boxes) >= 2
             and len(right_boxes) >= 2
-            and max((b[2][0] + b[2][2]) / 2 for b in left_boxes)
-            < page_width * 0.47
-            and min((b[2][0] + b[2][2]) / 2 for b in right_boxes)
-            > page_width * 0.53
+            and max((b[2][0] + b[2][2]) / 2 for b in left_boxes) < page_width * 0.47
+            and min((b[2][0] + b[2][2]) / 2 for b in right_boxes) > page_width * 0.53
         )
 
         if not has_two_columns:
-            cleaned = _remove_ranges_from_text(
-                text,
-                [pos for _, pos in footnotes]
-            )
+            cleaned = _remove_ranges_from_text(text, [pos for _, pos in footnotes])
         else:
-            # Cajas de ancho completo funcionan como anclas entre bloques de
-            # columnas: título, figura, tabla, caption, etc.
             full_width = []
             column_boxes = []
             for item in usable:
@@ -1376,7 +1358,6 @@ def _reorder_two_column_page(page: dict, page_width: float) -> str:
                 x0, y0, x1, y1 = bbox
                 width = x1 - x0
                 center = (x0 + x1) / 2.0
-
                 if (
                     width >= page_width * 0.68
                     or (x0 <= page_width * 0.08 and x1 >= page_width * 0.92)
@@ -1393,71 +1374,33 @@ def _reorder_two_column_page(page: dict, page_width: float) -> str:
             left_items.sort(key=_box_sort_key)
             right_items.sort(key=_box_sort_key)
 
-            # El inicio de la zona de columnas evita mandar un título de ancho
-            # completo al final de la página.
             if left_items and right_items:
-                column_start_y = min(
-                    item[2][1]
-                    for item in left_items + right_items
-                )
+                column_start_y = min(item[2][1] for item in left_items + right_items)
             else:
                 column_start_y = float("inf")
 
             ordered = []
-
-            # Todo lo que precede claramente al comienzo de las columnas.
-            leading_full = [
-                item for item in full_width
-                if item[2][3] <= column_start_y + 8
-            ]
-            middle_full = [
-                item for item in full_width
-                if item not in leading_full
-            ]
-
+            leading_full = [item for item in full_width if item[2][3] <= column_start_y + 8]
+            middle_full = [item for item in full_width if item not in leading_full]
             ordered.extend(sorted(leading_full, key=_box_sort_key))
 
             if left_items or right_items:
-                # Para el cuerpo académico estándar: columna izquierda completa
-                # y luego columna derecha completa.
                 if middle_full:
-                    # Si hay una figura/tabla de ancho completo en medio, usarla
-                    # como ancla y dividir el contenido de columnas por su y0.
                     remaining_left = list(left_items)
                     remaining_right = list(right_items)
-
                     for full_item in middle_full:
                         full_bbox = _safe_box_bbox(full_item[0])
                         if full_bbox is None:
                             continue
                         full_y0 = full_bbox[1]
-
-                        left_before = [
-                            item for item in remaining_left
-                            if item[2][1] < full_y0
-                        ]
-                        right_before = [
-                            item for item in remaining_right
-                            if item[2][1] < full_y0
-                        ]
-
-                        # No se consume el contenido de una columna antes de
-                        # tiempo si todavía no existe suficiente evidencia de
-                        # que el ancla corta ambas columnas.
+                        left_before = [i for i in remaining_left if i[2][1] < full_y0]
+                        right_before = [i for i in remaining_right if i[2][1] < full_y0]
                         if left_before or right_before:
                             ordered.extend(left_before)
                             ordered.extend(right_before)
-                            remaining_left = [
-                                item for item in remaining_left
-                                if item not in left_before
-                            ]
-                            remaining_right = [
-                                item for item in remaining_right
-                                if item not in right_before
-                            ]
-
+                            remaining_left = [i for i in remaining_left if i not in left_before]
+                            remaining_right = [i for i in remaining_right if i not in right_before]
                         ordered.append(full_item)
-
                     ordered.extend(remaining_left)
                     ordered.extend(remaining_right)
                 else:
@@ -1466,13 +1409,8 @@ def _reorder_two_column_page(page: dict, page_width: float) -> str:
             else:
                 ordered.extend(middle_full)
 
-            # Cualquier caja no cubierta por la clasificación anterior se añade
-            # al final en su orden espacial, evitando pérdida de contenido.
             used_ids = {id(item) for item in ordered}
-            leftovers = [
-                item for item in usable
-                if id(item) not in used_ids
-            ]
+            leftovers = [item for item in usable if id(item) not in used_ids]
             ordered.extend(sorted(leftovers, key=_box_sort_key))
 
             segments = []
@@ -1485,34 +1423,43 @@ def _reorder_two_column_page(page: dict, page_width: float) -> str:
                 if segment:
                     segments.append(segment)
 
-            # Las cajas de page_boxes normalmente ya contienen sus separadores
-            # Markdown. Solo añadimos un salto cuando el segmento anterior no
-            # termina en whitespace.
-            rebuilt = ""
+            candidate = ""
             for segment in segments:
-                if not rebuilt:
-                    rebuilt = segment
+                if not candidate:
+                    candidate = segment
                     continue
-                if not rebuilt.endswith(("\n", " ", "\t")) and not segment.startswith("\n"):
-                    rebuilt += "\n\n"
-                rebuilt += segment
-            cleaned = rebuilt
+                if not candidate.endswith(("\n", " ", "\t")) and not segment.startswith("\n"):
+                    candidate += "\n\n"
+                candidate += segment
 
-    # Footnotes: se eliminan de su posición física y se colocan al final de la
-    # página, nunca en medio de un párrafo o entre dos columnas.
+            # ---------------------------------------------------
+            # RED DE SEGURIDAD: si el reordenamiento pierde >20%
+            # del texto, descartarlo y usar el original (sin pies).
+            # ---------------------------------------------------
+            if len(candidate) >= int(original_len * 0.80):
+                rebuilt = candidate
+            else:
+                print(
+                    f"[LAYOUT] Reordenamiento de dos columnas descartado "
+                    f"(pérdida {100 - int(len(candidate) * 100 / max(1, original_len))}% "
+                    f"del texto). Se conserva el orden original."
+                )
+                rebuilt = _remove_ranges_from_text(text, [pos for _, pos in footnotes])
+
+    if rebuilt is None:
+        rebuilt = _remove_ranges_from_text(text, [pos for _, pos in footnotes])
+
+    # Footnotes al final de la página.
     footnote_blocks = []
     for box, pos in sorted(
         footnotes,
-        key=lambda item: (
-            _footnote_y_key(item),
-            int(item[0].get("index", 0)),
-        )
+        key=lambda item: (_footnote_y_key(item), int(item[0].get("index", 0))),
     ):
         note = _normalize_footnote_markdown(text[pos[0]:pos[1]])
         if note:
             footnote_blocks.append(note)
 
-    cleaned = cleaned.strip()
+    cleaned = rebuilt.strip()
     if footnote_blocks:
         cleaned += "\n\n" + "\n\n".join(footnote_blocks)
 
@@ -1653,10 +1600,7 @@ def extract_markdown_and_images(
     doc: fitz.Document,
     output_dir: Path
 ):
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     pages = pymupdf4llm.to_markdown(
         doc,
@@ -1665,43 +1609,87 @@ def extract_markdown_and_images(
         image_path=str(output_dir)
     )
 
-    # Con page_chunks=True, pymupdf4llm SIEMPRE devuelve list[dict] (una
-    # entrada por página), nunca un str. Nos defendemos igual por si una
-    # versión distinta de la librería cambiara ese contrato, para no
-    # romper el resto del pipeline (que asume una lista de páginas).
     if isinstance(pages, str):
         pages = [{"text": pages, "metadata": {"page_number": 1}}]
+
+    # Precomputar fallback nativo una sola vez.
+    native_fallback_pages = _native_markdown_fallback(doc)
 
     corrected_pages = []
     extracted_chars = 0
     native_chars = 0
+    page_fallbacks = 0
 
     for page_number, page in enumerate(pages, start=1):
         doc_index = page_number - 1
         if doc_index >= len(doc):
-            # No debería pasar (pymupdf4llm devuelve 1 chunk por página),
-            # pero si ocurre no queremos un IndexError a mitad de pipeline.
-            corrected_pages.append(page if isinstance(page, dict) else {"text": str(page)})
+            corrected_pages.append(
+                page if isinstance(page, dict) else {"text": str(page)}
+            )
             continue
+
+        page_width = doc[doc_index].rect.width
+        native_page_text = re.sub(
+            r"\s+", " ", doc[doc_index].get_text("text")
+        ).strip()
+        native_page_chars = len(native_page_text)
 
         normalized = normalize_page_chunk_layout(
             page,
-            page_width=doc[doc_index].rect.width,
+            page_width=page_width,
             page_number=page_number,
         )
-        corrected_pages.append(normalized)
-        extracted_chars += _markdown_text_signal(str(normalized.get("text", "")))
-        native_chars += len(re.sub(r"\s+", " ", doc[doc_index].get_text("text")).strip())
+        page_text = str(normalized.get("text", ""))
+        page_signal = _markdown_text_signal(page_text)
 
-    # Invariante crítica: si el PDF tiene texto nativo pero pymupdf4llm
-    # devolvió casi exclusivamente imágenes, NO seguimos hacia traducción.
-    # De lo contrario, esas imágenes terminan siendo el "contenido" del lector.
+        # ---------------------------------------------------------
+        # Fallback POR PÁGINA: si esta página tiene texto nativo
+        # significativo pero la extracción produjo muy poco texto,
+        # se reemplaza SOLO esta página por su texto nativo.
+        # ---------------------------------------------------------
+        if (
+            native_page_chars >= 200
+            and page_signal < max(100, int(native_page_chars * 0.20))
+        ):
+            fallback = (
+                native_fallback_pages[doc_index]
+                if doc_index < len(native_fallback_pages)
+                else None
+            )
+            if fallback is not None:
+                fallback_text = str(fallback.get("text", "") or "")
+                fallback_signal = _markdown_text_signal(fallback_text)
+                if fallback_signal > page_signal:
+                    print(
+                        f"[EXTRACT] Página {page_number}: extracción pobre "
+                        f"({page_signal} chars) vs nativo ({native_page_chars} chars). "
+                        f"Usando texto nativo."
+                    )
+                    normalized = {
+                        "text": fallback_text,
+                        "metadata": {"page_number": page_number},
+                        "_native_fallback": True,
+                    }
+                    page_text = fallback_text
+                    page_signal = fallback_signal
+                    page_fallbacks += 1
+
+        corrected_pages.append(normalized)
+        extracted_chars += page_signal
+        native_chars += native_page_chars
+
+    # ---------------------------------------------------------
+    # Fallback GLOBAL (cinturón y tirantes)
+    # ---------------------------------------------------------
     if native_chars >= 500 and extracted_chars < max(500, int(native_chars * 0.20)):
         print(
-            f"[EXTRACT] FALLBACK: pymupdf4llm produjo {extracted_chars} chars "
-            f"frente a {native_chars} chars nativos; reconstruyendo desde PDF."
+            f"[EXTRACT] FALLBACK GLOBAL: {extracted_chars} chars extraídos vs "
+            f"{native_chars} nativos. Reconstruyendo desde PDF."
         )
-        return _native_markdown_fallback(doc)
+        return native_fallback_pages
+
+    if page_fallbacks:
+        print(f"[EXTRACT] {page_fallbacks} páginas reemplazadas por texto nativo.")
 
     return corrected_pages
 
@@ -2852,12 +2840,9 @@ async def _translation_worker(
                 f"chunk {index + 1}/{total}"
             )
             results[index] = await translate_chunk(
-                chunk,
-                index,
-                total,
-                api_key=api_key,
+                chunk, index, total, api_key=api_key,
             )
-        except Exception as exc:
+        except BaseException as exc:   # incluye CancelledError
             results[index] = exc
         finally:
             queue.task_done()
@@ -2867,12 +2852,6 @@ async def translate_markdown(
     markdown: str,
     model: Optional[str] = None,
 ):
-    """
-    Traduce todos los chunks en paralelo usando hasta 6 API keys.
-
-    El orden final siempre coincide con el orden original del Markdown,
-    independientemente de qué request termine primero.
-    """
     chunks = chunk_markdown(markdown)
 
     if not chunks:
@@ -2895,7 +2874,7 @@ async def translate_markdown(
     )
 
     queue = asyncio.Queue()
-    results: list[Optional[str] | Exception] = [None] * len(chunks)
+    results: list[Optional[str] | BaseException] = [None] * len(chunks)
 
     for index, chunk in enumerate(chunks):
         await queue.put((index, chunk))
@@ -2918,17 +2897,13 @@ async def translate_markdown(
     for _ in workers:
         await queue.put(None)
 
-    await asyncio.gather(*workers)
+    await asyncio.gather(*workers, return_exceptions=True)
 
-    errors = [result for result in results if isinstance(result, Exception)]
+    errors = [r for r in results if isinstance(r, BaseException)]
     if errors:
         raise errors[0]
 
-    translated_results = [
-        result
-        for result in results
-        if isinstance(result, str)
-    ]
+    translated_results = [r for r in results if isinstance(r, str)]
 
     if len(translated_results) != len(chunks):
         raise RuntimeError(
@@ -3800,6 +3775,17 @@ async def process_pdf(
         )
 
         # ----------------------------------------------------
+        # GUARD FINAL: nunca devolver un documento vacío o 100% imágenes
+        # ----------------------------------------------------
+        final_signal = _markdown_text_signal(translated_markdown)
+        if final_signal < 200:
+            raise RuntimeError(
+                "La extracción no produjo texto suficiente "
+                f"(señal de texto = {final_signal}). "
+                "Revisá el PDF de entrada o la configuración de pymupdf4llm."
+            )
+
+        # ----------------------------------------------------
         # RESULTADO
         # ----------------------------------------------------
 
@@ -3834,6 +3820,7 @@ async def process_pdf(
     finally:
 
         doc.close()
+
 
 
 # ============================================================

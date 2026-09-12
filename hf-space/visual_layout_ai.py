@@ -4,7 +4,8 @@ Diseño:
 - La extracción barata (PyMuPDF/page_boxes) sigue siendo la fuente primaria.
 - Vision actúa como árbitro semántico en fronteras ambiguas.
 - Una sola imagen compuesta por frontera reduce tokens/costo frente a dos imágenes.
-- El PDF se abre una sola vez y el cliente HTTP es persistente.
+- Thread safety: cada worker abre su PROPIO fitz.Document.
+- El PDF se abre una sola vez por worker y el cliente HTTP es persistente.
 - Los diagnósticos se cachean para no volver a pagar Vision sobre el mismo PDF.
 - La IA nunca modifica directamente el Markdown: devuelve evidencia estructural.
 """
@@ -25,19 +26,31 @@ import fitz
 import httpx
 from PIL import Image, ImageOps, ImageDraw
 
-VISION_API_KEYS = [os.getenv(f"DEEPSEEK_VISION_API_KEY_{i}", "").strip() for i in range(1, 7)]
+VISION_API_KEYS = [
+    os.getenv(f"DEEPSEEK_VISION_API_KEY_{i}", "").strip()
+    for i in range(1, 7)
+]
 if not any(VISION_API_KEYS):
-    VISION_API_KEYS = [os.getenv(f"DEEPSEEK_API_KEY_{i}", "").strip() for i in range(1, 7)]
+    VISION_API_KEYS = [
+        os.getenv(f"DEEPSEEK_API_KEY_{i}", "").strip()
+        for i in range(1, 7)
+    ]
 VISION_API_KEYS = [k for k in VISION_API_KEYS if k]
 
 VISION_MODEL = os.getenv("DEEPSEEK_VISION_MODEL", "deepseek-v4-flash-vision-exp")
-VISION_BASE_URL = os.getenv("DEEPSEEK_VISION_BASE_URL", "https://api.deepseek.com/chat/completions")
-VISION_CONCURRENCY = max(1, min(int(os.getenv("DEEPSEEK_VISION_CONCURRENCY", "6")), len(VISION_API_KEYS) or 1))
+VISION_BASE_URL = os.getenv(
+    "DEEPSEEK_VISION_BASE_URL",
+    "https://api.deepseek.com/chat/completions",
+)
+VISION_CONCURRENCY = max(
+    1,
+    min(int(os.getenv("DEEPSEEK_VISION_CONCURRENCY", "4")), len(VISION_API_KEYS) or 1),
+)
 VISION_TIMEOUT = int(os.getenv("DEEPSEEK_VISION_TIMEOUT", "90"))
 VISION_RENDER_SCALE = float(os.getenv("DEEPSEEK_VISION_RENDER_SCALE", "1.35"))
 VISION_IMAGE_MAX_PX = int(os.getenv("DEEPSEEK_VISION_IMAGE_MAX_PX", "900"))
 VISION_CROP_RATIO = float(os.getenv("DEEPSEEK_VISION_CROP_RATIO", "0.30"))
-VISION_MODE = os.getenv("DEEPSEEK_VISION_MODE", "all").strip().lower()  # all | selective
+VISION_MODE = os.getenv("DEEPSEEK_VISION_MODE", "all").strip().lower()
 VISION_MIN_CONFIDENCE = float(os.getenv("DEEPSEEK_VISION_MIN_CONFIDENCE", "0.70"))
 VISION_CACHE_DIR = Path(os.getenv("CACHE_DIR", "./cache")) / "vision_layout"
 VISION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -77,8 +90,7 @@ Devuelve JSON válido con exactamente estas claves:
 
 Reglas:
 - Marca continues_paragraph solo si el final de N y el comienzo de N+1 son
-  claramente la continuación del mismo párrafo (no simplemente porque el
-  artículo continúa).
+  claramente la continuación del mismo párrafo.
 - Marca continues_table/list solo con evidencia visual clara.
 - column_flow_risk = verdadero si la frontera sugiere que el orden de lectura
   puede cruzar columnas, una caja de ancho completo o un bloque intercalado.
@@ -92,16 +104,30 @@ Reglas:
 """
 
 
+# ---------------------------------------------------------------
+# Utilidades de render (thread-safe: cada worker tiene su propio doc)
+# ---------------------------------------------------------------
+
 def _page_excerpt(page: fitz.Page, top: bool) -> str:
     h = page.rect.height * VISION_CROP_RATIO
-    rect = fitz.Rect(0, 0, page.rect.width, h) if top else fitz.Rect(0, page.rect.height - h, page.rect.width, page.rect.height)
+    if top:
+        rect = fitz.Rect(0, 0, page.rect.width, h)
+    else:
+        rect = fitz.Rect(0, page.rect.height - h, page.rect.width, page.rect.height)
     return re.sub(r"\s+", " ", page.get_text("text", clip=rect)).strip()[:2200]
 
 
 def _render_strip(page: fitz.Page, top: bool) -> Image.Image:
     h = page.rect.height * VISION_CROP_RATIO
-    clip = fitz.Rect(0, 0, page.rect.width, h) if top else fitz.Rect(0, page.rect.height - h, page.rect.width, page.rect.height)
-    pix = page.get_pixmap(matrix=fitz.Matrix(VISION_RENDER_SCALE, VISION_RENDER_SCALE), clip=clip, alpha=False)
+    if top:
+        clip = fitz.Rect(0, 0, page.rect.width, h)
+    else:
+        clip = fitz.Rect(0, page.rect.height - h, page.rect.width, page.rect.height)
+    pix = page.get_pixmap(
+        matrix=fitz.Matrix(VISION_RENDER_SCALE, VISION_RENDER_SCALE),
+        clip=clip,
+        alpha=False,
+    )
     return Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
 
 
@@ -133,7 +159,9 @@ def _local_boundary_score(page_a: fitz.Page, page_b: fitz.Page) -> float:
             score += 0.35
         if re.match(r"^[a-záéíóúñü0-9(]", b, re.I):
             score += 0.35
-        if re.search(r"(?:Table|Tabla|Figure|Figura|Fig\.?|Table\.)\s*\d", a, re.I) or re.search(r"(?:Table|Tabla|Figure|Figura|Fig\.?|Table\.)\s*\d", b, re.I):
+        if re.search(r"(?:Table|Tabla|Figure|Figura|Fig\.?|Table\.)\s*\d", a, re.I) or re.search(
+            r"(?:Table|Tabla|Figure|Figura|Fig\.?|Table\.)\s*\d", b, re.I
+        ):
             score += 0.20
         if re.search(r"\b(?:doi|et al\.|19\d{2}|20\d{2})\b", a + " " + b, re.I):
             score += 0.10
@@ -145,7 +173,7 @@ def _cache_key(pdf_path: str) -> str:
     with open(pdf_path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
-    meta = f"{VISION_MODEL}|{VISION_MODE}|{VISION_CROP_RATIO}|{VISION_IMAGE_MAX_PX}|v9"
+    meta = f"{VISION_MODEL}|{VISION_MODE}|{VISION_CROP_RATIO}|{VISION_IMAGE_MAX_PX}|v10"
     h.update(meta.encode())
     return h.hexdigest()
 
@@ -160,6 +188,10 @@ def _load_cache(pdf_path: str) -> Optional[list[dict[str, Any]]]:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, list):
+                # Descartar cache si contiene errores.
+                if any(item.get("error") for item in data):
+                    print("[VISION] Cache contiene errores; se descarta.")
+                    return None
                 print(f"[VISION] Cache visual encontrado: {len(data)} diagnósticos")
                 return data
     except Exception as exc:
@@ -168,29 +200,46 @@ def _load_cache(pdf_path: str) -> Optional[list[dict[str, Any]]]:
 
 
 def _save_cache(pdf_path: str, diagnostics: list[dict[str, Any]]) -> None:
+    # No guardar si hay errores: la próxima ejecución debería reintentar.
+    if any(item.get("error") for item in diagnostics):
+        return
     try:
-        _cache_path(pdf_path).write_text(json.dumps(diagnostics, ensure_ascii=False), encoding="utf-8")
+        _cache_path(pdf_path).write_text(
+            json.dumps(diagnostics, ensure_ascii=False), encoding="utf-8"
+        )
     except Exception as exc:
         print(f"[VISION] No se pudo guardar cache: {exc}")
 
 
-async def _analyze_boundary(doc: fitz.Document, page_index: int, api_key: str) -> dict[str, Any]:
+# ---------------------------------------------------------------
+# Boundary Vision
+# ---------------------------------------------------------------
+
+async def _analyze_boundary(
+    doc: fitz.Document, page_index: int, api_key: str
+) -> dict[str, Any]:
     page_a, page_b = doc[page_index], doc[page_index + 1]
-    image = await asyncio.to_thread(_compose_boundary, page_a, page_b)
+    image = _compose_boundary(page_a, page_b)
     excerpt_a = _page_excerpt(page_a, False)
     excerpt_b = _page_excerpt(page_b, True)
     payload = {
         "model": VISION_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "text", "text": (
-                    f"Frontera {page_index + 1} → {page_index + 2}.\n"
-                    f"OCR final N: {excerpt_a}\n"
-                    f"OCR inicio N+1: {excerpt_b}"
-                )},
-                {"type": "image_url", "image_url": {"url": image}},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Frontera {page_index + 1} → {page_index + 2}.\n"
+                            f"OCR final N: {excerpt_a}\n"
+                            f"OCR inicio N+1: {excerpt_b}"
+                        ),
+                    },
+                    {"type": "image_url", "image_url": {"url": image}},
+                ],
+            },
         ],
         "temperature": 0,
         "thinking": {"type": "disabled"},
@@ -222,6 +271,7 @@ async def analyze_pdf_boundaries(pdf_path: str) -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
+    # Abrir sólo para medir y puntuar (rápido, secuencial, sin threads).
     with fitz.open(pdf_path) as doc:
         page_count = doc.page_count
         if page_count < 2:
@@ -229,20 +279,25 @@ async def analyze_pdf_boundaries(pdf_path: str) -> list[dict[str, Any]]:
         candidates = list(range(page_count - 1))
         if VISION_MODE == "selective":
             scored = [(_local_boundary_score(doc[i], doc[i + 1]), i) for i in candidates]
-            # Siempre inspeccionamos al menos las fronteras donde el extractor
-            # tiene mayor probabilidad de haber cortado una frase.
             candidates = [i for score, i in scored if score >= 0.30]
             if not candidates:
-                candidates = [i for _, i in sorted(scored, reverse=True)[:min(3, len(scored))]]
+                candidates = [i for _, i in sorted(scored, reverse=True)[: min(3, len(scored))]]
             print(f"[VISION] Modo selectivo: {len(candidates)}/{page_count - 1} fronteras")
 
-        queue: asyncio.Queue[Optional[int]] = asyncio.Queue()
-        for i in candidates:
-            await queue.put(i)
-        results: dict[int, dict[str, Any]] = {}
-        worker_count = min(VISION_CONCURRENCY, len(VISION_API_KEYS), len(candidates))
+    if not candidates:
+        _save_cache(pdf_path, [])
+        return []
 
-        async def worker(worker_id: int, key: str) -> None:
+    queue: asyncio.Queue[Optional[int]] = asyncio.Queue()
+    for i in candidates:
+        await queue.put(i)
+    results: dict[int, dict[str, Any]] = {}
+    worker_count = min(VISION_CONCURRENCY, len(VISION_API_KEYS), len(candidates))
+
+    async def worker(worker_id: int, key: str) -> None:
+        # Documento PROPIO del worker: PyMuPDF no es thread-safe.
+        worker_doc = fitz.open(pdf_path)
+        try:
             while True:
                 index = await queue.get()
                 if index is None:
@@ -250,30 +305,48 @@ async def analyze_pdf_boundaries(pdf_path: str) -> list[dict[str, Any]]:
                     return
                 try:
                     print(f"[VISION] Worker {worker_id} → {index + 1}→{index + 2}")
-                    results[index] = await _analyze_boundary(doc, index, key)
+                    results[index] = await _analyze_boundary(worker_doc, index, key)
                 except Exception as exc:
                     print(f"[VISION] Error {index + 1}→{index + 2}: {exc}")
-                    results[index] = {"page": index + 1, "next_page": index + 2, "error": str(exc)}
+                    results[index] = {
+                        "page": index + 1,
+                        "next_page": index + 2,
+                        "error": str(exc),
+                    }
                 finally:
                     queue.task_done()
+        finally:
+            worker_doc.close()
 
-        workers = [asyncio.create_task(worker(i + 1, VISION_API_KEYS[i])) for i in range(worker_count)]
-        await queue.join()
-        for _ in workers:
-            await queue.put(None)
-        await asyncio.gather(*workers)
+    workers = [
+        asyncio.create_task(worker(i + 1, VISION_API_KEYS[i]))
+        for i in range(worker_count)
+    ]
+    await queue.join()
+    for _ in workers:
+        await queue.put(None)
+    await asyncio.gather(*workers, return_exceptions=True)
 
-    diagnostics = [results[i] for i in sorted(results)]
+    diagnostics = [results[i] for i in sorted(results) if i in results]
     _save_cache(pdf_path, diagnostics)
     return diagnostics
 
 
+# ---------------------------------------------------------------
+# Señales exportables
+# ---------------------------------------------------------------
+
 def collect_editorial_patterns(diagnostics: list[dict[str, Any]]) -> list[str]:
     counts: dict[str, int] = {}
     for item in diagnostics:
+        if item.get("error"):
+            continue
         if not item.get("repeated_editorial_pattern"):
             continue
-        for text in item.get("editorial_text", []):
+        texts = item.get("editorial_text") or []
+        if isinstance(texts, str):
+            texts = [texts]
+        for text in texts:
             value = re.sub(r"\s+", " ", str(text)).strip()
             if len(value) >= 4:
                 counts[value] = counts.get(value, 0) + 1
@@ -289,7 +362,9 @@ def boundary_hints_by_page(diagnostics: list[dict[str, Any]]) -> dict[int, dict[
         confidence = float(item.get("confidence", 0) or 0)
         if confidence < VISION_MIN_CONFIDENCE:
             continue
-        page = int(item.get("page", 0))
+        page = int(item.get("page", 0) or 0)
+        if page <= 0:
+            continue
         hints[page] = {
             "continues_paragraph": bool(item.get("continues_paragraph")),
             "continues_table": bool(item.get("continues_table")),
@@ -302,6 +377,10 @@ def boundary_hints_by_page(diagnostics: list[dict[str, Any]]) -> dict[int, dict[
         }
     return hints
 
+
+# ---------------------------------------------------------------
+# Full-page audit
+# ---------------------------------------------------------------
 
 FULL_PAGE_SYSTEM_PROMPT = r"""
 Eres el auditor visual estructural de PsiHub Reader.
@@ -332,29 +411,36 @@ def _render_full_page(page: fitz.Page, max_px: int = 1500) -> str:
     pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
     img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
     img.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
-    out = io.BytesIO(); img.save(out, format="JPEG", quality=82, optimize=True)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=82, optimize=True)
     return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
 
 
-async def audit_pages_with_vision(pdf_path: str, page_payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Block-level visual arbitration for routed high-risk pages."""
+async def audit_pages_with_vision(
+    pdf_path: str, page_payloads: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Auditoría visual por página en páginas de riesgo alto."""
     if not VISION_API_KEYS or not page_payloads:
         return []
-    results = {}
-    with fitz.open(pdf_path) as doc:
-        queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
-        for item in page_payloads:
-            await queue.put(item)
-        workers = min(VISION_CONCURRENCY, len(VISION_API_KEYS), len(page_payloads))
+    results: dict[int, dict[str, Any]] = {}
 
-        async def worker(wid: int, key: str):
+    queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
+    for item in page_payloads:
+        await queue.put(item)
+    workers = min(VISION_CONCURRENCY, len(VISION_API_KEYS), len(page_payloads))
+
+    async def worker(wid: int, key: str) -> None:
+        # Documento propio del worker.
+        worker_doc = fitz.open(pdf_path)
+        try:
             while True:
                 item = await queue.get()
                 if item is None:
-                    queue.task_done(); return
+                    queue.task_done()
+                    return
                 page_no = int(item["page"])
                 try:
-                    page = doc[page_no - 1]
+                    page = worker_doc[page_no - 1]
                     catalog = item.get("blocks", [])
                     prompt = (
                         f"Página {page_no}. Catálogo de bloques nativos:\n"
@@ -363,28 +449,53 @@ async def audit_pages_with_vision(pdf_path: str, page_payloads: list[dict[str, A
                     payload = {
                         "model": VISION_MODEL,
                         "messages": [
-                            {"role":"system","content":FULL_PAGE_SYSTEM_PROMPT},
-                            {"role":"user","content":[
-                                {"type":"text","text":prompt},
-                                {"type":"image_url","image_url":{"url":_render_full_page(page)}}
-                            ]}
+                            {"role": "system", "content": FULL_PAGE_SYSTEM_PROMPT},
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt},
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": _render_full_page(page)},
+                                    },
+                                ],
+                            },
                         ],
                         "temperature": 0,
-                        "thinking": {"type":"disabled"},
-                        "response_format": {"type":"json_object"},
+                        "thinking": {"type": "disabled"},
+                        "response_format": {"type": "json_object"},
                         "max_tokens": 1200,
                         "stream": False,
                     }
-                    response = await HTTP_CLIENT.post(VISION_BASE_URL, headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"}, json=payload)
+                    response = await HTTP_CLIENT.post(
+                        VISION_BASE_URL,
+                        headers={
+                            "Authorization": f"Bearer {key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
                     response.raise_for_status()
-                    data=json.loads(response.json()["choices"][0]["message"]["content"])
-                    data["page"]=page_no
-                    results[page_no]=data
+                    data = json.loads(response.json()["choices"][0]["message"]["content"])
+                    data["page"] = page_no
+                    results[page_no] = data
                 except Exception as exc:
-                    results[page_no]={"page":page_no,"error":str(exc),"confidence":0}
+                    results[page_no] = {
+                        "page": page_no,
+                        "error": str(exc),
+                        "confidence": 0,
+                    }
                 finally:
                     queue.task_done()
-        tasks=[asyncio.create_task(worker(i+1,VISION_API_KEYS[i])) for i in range(workers)]
-        for _ in tasks: await queue.put(None)
-        await queue.join(); await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            worker_doc.close()
+
+    tasks = [
+        asyncio.create_task(worker(i + 1, VISION_API_KEYS[i]))
+        for i in range(workers)
+    ]
+    await queue.join()
+    for _ in tasks:
+        await queue.put(None)
+    await asyncio.gather(*tasks, return_exceptions=True)
     return [results[k] for k in sorted(results)]
