@@ -124,7 +124,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v17"
+PIPELINE_VERSION = "2026-09-12-reader-master-v18"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -578,14 +578,53 @@ def print_layout_profile(profile):
 # ============================================================
 
 async def download_pdf(url: str) -> bytes:
-    timeout = httpx.Timeout(REQUEST_TIMEOUT)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=15.0)
+
+    headers = {
+        # Muchos publishers bloquean user-agents genéricos.
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0 Safari/537.36"
+        ),
+        "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
         response = await client.get(url)
         response.raise_for_status()
         data = response.content
-        if not data.startswith(b"%PDF"):
-            raise ValueError("La URL no parece devolver un PDF válido.")
-        return data
+        content_type = (response.headers.get("content-type") or "").lower()
+
+    # Aceptar si:
+    #   - los primeros bytes son %PDF, o
+    #   - el content-type es application/pdf, o
+    #   - hay %PDF en los primeros 4 KB (BOM/preámbulo)
+    looks_like_pdf = (
+        data.startswith(b"%PDF")
+        or "application/pdf" in content_type
+        or b"%PDF" in data[:4096]
+    )
+
+    if not looks_like_pdf:
+        snippet = data[:200].decode("utf-8", errors="replace")
+        raise ValueError(
+            f"La URL no devuelve un PDF. Content-Type: {content_type!r}. "
+            f"Primeros bytes: {snippet!r}"
+        )
+
+    # Si el PDF está desplazado (por BOM o preámbulo), recortar hasta %PDF.
+    if not data.startswith(b"%PDF"):
+        idx = data.find(b"%PDF")
+        if 0 < idx < 4096:
+            data = data[idx:]
+
+    return data
 
 
 # ============================================================
@@ -1396,7 +1435,12 @@ def postprocess_markdown(text: str) -> str:
 def normalize_footnote_formatting(markdown: str) -> str:
     """
     Fuerza un formato uniforme para notas al pie: blockquote con número
-    en negrita. Solo actúa fuera de la sección de Referencias.
+    en negrita.
+
+    NO toca:
+      - referencias bibliográficas (detectadas por heading o por tener año)
+      - líneas ya indexadas como referencias (**N.** texto)
+      - headings, tablas, listas, blockquotes, imágenes
     """
     if not markdown:
         return markdown
@@ -1408,10 +1452,8 @@ def normalize_footnote_formatting(markdown: str) -> str:
     for line in lines:
         stripped = line.strip()
 
-        if re.match(
-            r"^#{0,6}\s*(references|referencias|bibliography|bibliografía)\s*$",
-            stripped, re.IGNORECASE,
-        ):
+        # Detección robusta de inicio de referencias
+        if not in_references and _is_references_heading(stripped):
             in_references = True
             output.append(line)
             continue
@@ -1420,6 +1462,17 @@ def normalize_footnote_formatting(markdown: str) -> str:
             output.append(line)
             continue
 
+        # Línea ya formateada como referencia indexada → no tocar
+        if re.match(r"^\*\*\d+\.\*\*", stripped):
+            output.append(line)
+            continue
+
+        # Línea con año de 4 dígitos → probablemente referencia, no tocar
+        if _looks_like_reference_entry(stripped):
+            output.append(line)
+            continue
+
+        # Nota al pie: número + espacio + texto corto
         m = re.match(r"^(\d{1,3})[.)]?\s+(.+)$", stripped)
         if (
             m
@@ -1467,6 +1520,63 @@ def _looks_like_correspondence_note(text: str) -> bool:
             return True
     return False
 
+# ============================================================
+# HELPERS DE REFERENCIAS / NOTAS
+# ============================================================
+
+def _is_references_heading(text: str) -> bool:
+    """Detecta cualquier variante de encabezado de referencias."""
+    if not text:
+        return False
+    # Quitar markdown de heading/bold/italic
+    clean = re.sub(r"^\s*[#*_>\s]+", "", text)
+    clean = re.sub(r"[#*_\s:]+$", "", clean)
+    clean = clean.strip().lower()
+    return clean in {
+        "references", "referencias", "bibliography", "bibliografía",
+        "bibliografia", "reference list", "literature cited",
+        "referencias bibliográficas",
+    }
+
+
+def _looks_like_reference_entry(text: str) -> bool:
+    """
+    Heurística: una referencia típica tiene un año de 4 dígitos y
+    formato autor-año. Las notas al pie casi nunca contienen un año.
+    """
+    if not text or len(text) > 800:
+        return False
+    s = text.strip().lstrip("> ").strip()
+    # Contiene año → muy probablemente referencia
+    return bool(re.search(r"\b(?:19|20)\d{2}\b", s))
+
+
+def strip_page_markers_from_references(markdown: str) -> str:
+    """
+    Quita todos los `<!-- PAGE:N -->` que caigan dentro de la sección de
+    referencias. Los markers ahí solo fragmentan entradas y rompen el
+    indexado. La navegación por página no se pierde porque ya hay markers
+    en todo el resto del documento.
+    """
+    if not markdown:
+        return markdown
+
+    lines = markdown.splitlines()
+    ref_start = None
+
+    for i, line in enumerate(lines):
+        if _is_references_heading(line):
+            ref_start = i
+            break
+
+    if ref_start is None:
+        return markdown
+
+    marker_re = re.compile(r"^\s*<!--\s*PAGE:\d+\s*-->\s*$")
+    before = lines[:ref_start]
+    after = [ln for ln in lines[ref_start:] if not marker_re.match(ln)]
+
+    return "\n".join(before + after)
 
 def extract_correspondence_notes(markdown: str) -> tuple[str, list[str]]:
     """
@@ -2425,9 +2535,13 @@ REFERENCE_HEADINGS = re.compile(
 )
 
 
-def find_references_start(lines):
+def find_references_start(lines) -> Optional[int]:
+    """
+    Encuentra la línea donde empiezan las referencias. Acepta variantes
+    de heading (# ## ### ...) y también texto plano.
+    """
     for index, line in enumerate(lines):
-        if REFERENCE_HEADINGS.match(line.strip()):
+        if _is_references_heading(line):
             return index
     return None
 
@@ -2518,11 +2632,18 @@ def _make_visible_page_markers(
     page_offset: int = 0,
     source_page_count: Optional[int] = None,
 ) -> str:
+    """
+    Convierte los marcadores estructurales en indicadores visibles.
+
+    Reglas estrictas:
+    - El marker SIEMPRE queda en su propia línea.
+    - SIEMPRE queda una línea en blanco antes y después.
+    - Nunca queda dentro de un blockquote ni pegado a texto.
+    """
     if not markdown:
         return markdown
 
-    # Paso 1: normalizar TODOS los marcadores a su propia línea aislada.
-    # Captura el caso en el que DeepSeek los dejó pegados al texto.
+    # Paso 1: aislar todos los markers a su propia línea.
     markdown = re.sub(
         r"[ \t]*(<!--\s*PAGE:\d+\s*-->)[ \t]*",
         r"\n\n\1\n\n",
@@ -2543,15 +2664,25 @@ def _make_visible_page_markers(
         source_page = page + page_offset
         total = source_page_count or page_count
 
-        # Asegurar separación por línea vacía antes y después.
+        # Eliminar TODAS las líneas vacías al final para colocar el marker
+        # en posición limpia.
         while output and not output[-1].strip():
             output.pop()
+
+        # Si la última línea de output es un blockquote, agregar una línea
+        # en blanco extra para forzar el cierre del blockquote antes del
+        # marker. Sin esto, el marker puede heredar el contexto de cita.
+        if output and output[-1].lstrip().startswith(">"):
+            output.append("")
+
         if output:
             output.append("")
 
         output.append(f"> **Página {source_page} de {total}**")
         output.append("")
+        output.append("")  # doble blank line: garantiza salida del blockquote
 
+    # Colapsar excesos al final.
     while output and not output[-1].strip():
         output.pop()
 
@@ -2917,15 +3048,19 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         # ------------------------------------------------
         translated_markdown = restore_tables(translated_markdown, tables)
 
-        # ------------------------------------------------
+                # ------------------------------------------------
         # 8. POSTPROCESADO
         # ------------------------------------------------
         print("[PIPELINE] 8/8 Optimizando lectura...")
         translated_markdown = postprocess_markdown(translated_markdown)
-        translated_markdown = normalize_footnote_formatting(translated_markdown)
         translated_markdown = convert_local_images_to_base64(
             translated_markdown, image_dir
         )
+
+        # Quitar markers dentro de la sección de referencias ANTES de
+        # indexar, para que las referencias no queden cortadas.
+        translated_markdown = strip_page_markers_from_references(translated_markdown)
+
         translated_markdown = index_references(
             translated_markdown,
             document_id=key,
@@ -2938,8 +3073,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
             page_offset=source_page_offset,
         )
 
-        # Reinsertar las notas de correspondencia al final, antes de
-        # las referencias si es posible.
+        # Reinsertar las notas de correspondencia antes de referencias.
         if correspondence_notes:
             notes_block = "\n\n## Notas de correspondencia\n\n"
             for idx, note in enumerate(correspondence_notes, 1):
@@ -2959,6 +3093,11 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
                 )
             else:
                 translated_markdown += notes_block
+
+        # IMPORTANTE: normalize_footnote_formatting corre DESPUÉS de
+        # index_references, para que las referencias ya estén formateadas
+        # como "**N.** texto" y no sean confundidas con notas al pie.
+        translated_markdown = normalize_footnote_formatting(translated_markdown)
 
         translated_markdown = _make_visible_page_markers(
             translated_markdown,

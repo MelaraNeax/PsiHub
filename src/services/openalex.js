@@ -103,6 +103,64 @@ export function reconstructAbstract(invertedIndex) {
 }
 
 /**
+ * Extrae la mejor URL de PDF de un work de OpenAlex.
+ *
+ * Prioridad:
+ *   1. best_oa_location.pdf_url (es la ubicación OA "ganadora")
+ *   2. Cualquier location.pdf_url que sea OA
+ *   3. primary_location.pdf_url
+ *   4. oa_url si termina en .pdf o matchea patrones típicos de descarga
+ *
+ * Devuelve null si no hay ninguna URL con forma de PDF.
+ */
+function extractPdfUrl(w) {
+  const candidates = [];
+
+  if (w.best_oa_location?.pdf_url) {
+    candidates.push(w.best_oa_location.pdf_url);
+  }
+
+  for (const loc of w.locations || []) {
+    if (loc?.pdf_url) {
+      candidates.push(loc.pdf_url);
+    }
+  }
+
+  if (w.primary_location?.pdf_url) {
+    candidates.push(w.primary_location.pdf_url);
+  }
+
+  // Filtrar duplicados preservando orden.
+  const seen = new Set();
+  const unique = candidates.filter(u => u && !seen.has(u) && (seen.add(u), true));
+
+  if (unique.length > 0) {
+    return unique[0];
+  }
+
+  // Fallback: oa_url si tiene pinta de ser un PDF directo.
+  const oaUrl = w.open_access?.oa_url;
+  if (oaUrl) {
+    if (
+      oaUrl.toLowerCase().endsWith('.pdf') ||
+      /\/(?:pdf|download|fulltext|full-text|article\/[^/]+\/pdf)/i.test(oaUrl)
+    ) {
+      return oaUrl;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Determina si un paper es "auto-descargable": OA + tiene URL de PDF.
+ */
+function isAutoDownloadable(w) {
+  if (!w?.open_access?.is_oa) return false;
+  return Boolean(extractPdfUrl(w));
+}
+
+/**
  * Busca papers en OpenAlex con Polite Pool y reintentos automáticos.
  * @param {Object} opts
  * @param {string} opts.query      - Término base de búsqueda
@@ -196,7 +254,8 @@ export async function fetchPapers({
       year: w.publication_year || null,
       isOa: w.open_access?.is_oa ?? false,
       oaUrl,
-      pdfUrl: w.primary_location?.pdf_url || w.best_oa_location?.pdf_url || (oaUrl && oaUrl.toLowerCase().endsWith('.pdf') ? oaUrl : null),
+      pdfUrl: extractPdfUrl(w),
+isAutoDownloadable: isAutoDownloadable(w),
       citations: w.cited_by_count ?? 0,
       abstract,
       topics,
@@ -255,7 +314,8 @@ export async function fetchWorkById(id, signal = null) {
     year: w.publication_year || null,
     isOa: w.open_access?.is_oa ?? false,
     oaUrl,
-    pdfUrl: w.primary_location?.pdf_url || w.best_oa_location?.pdf_url || (oaUrl && oaUrl.toLowerCase().endsWith('.pdf') ? oaUrl : null),
+    pdfUrl: extractPdfUrl(w),
+isAutoDownloadable: isAutoDownloadable(w),
     citations: w.cited_by_count ?? 0,
     abstract,
     topics,
