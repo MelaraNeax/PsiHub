@@ -138,7 +138,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v21"
+PIPELINE_VERSION = "2026-09-12-reader-master-v22"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1121,6 +1121,68 @@ def _looks_like_table_region(blocks: list[dict], page_width: float) -> bool:
 
     return table_rows >= 3
 
+def _detect_tables_in_page(page) -> list[dict]:
+    """
+    Usa el detector nativo de PyMuPDF. Devuelve lista de tablas
+    con su bbox y contenido como lista de filas.
+    """
+    try:
+        tables = page.find_tables()
+    except Exception as e:
+        print(f"    [TABLE-DETECT] find_tables falló: {e}")
+        return []
+
+    result = []
+    for table in tables:
+        try:
+            extracted = table.extract()  # list[list[str]]
+            if not extracted or len(extracted) < 2:
+                continue
+            # Descarta tablas basura (una celda con mucho texto)
+            if len(extracted[0]) < 2:
+                continue
+            result.append({
+                "bbox": table.bbox,
+                "rows": extracted,
+                "n_cols": len(extracted[0]),
+                "n_rows": len(extracted),
+            })
+        except Exception as e:
+            print(f"    [TABLE-DETECT] extract falló: {e}")
+            continue
+    return result
+
+def _table_to_markdown(rows: list[list[str]]) -> str:
+    """Convierte las filas extraídas por PyMuPDF a Markdown."""
+    if not rows:
+        return ""
+
+    # Limpiar celdas: colapsar espacios, escapar pipes
+    def clean(cell):
+        if cell is None:
+            return ""
+        s = re.sub(r"\s+", " ", str(cell)).strip()
+        s = s.replace("|", "\\|")
+        return s
+
+    n_cols = max(len(r) for r in rows)
+    norm_rows = []
+    for r in rows:
+        row = [clean(c) for c in r]
+        while len(row) < n_cols:
+            row.append("")
+        norm_rows.append(row[:n_cols])
+
+    # Header = primera fila
+    header = norm_rows[0]
+    body = norm_rows[1:]
+
+    md = "| " + " | ".join(header) + " |\n"
+    md += "|" + "|".join(["---"] * n_cols) + "|\n"
+    for row in body:
+        md += "| " + " | ".join(row) + " |\n"
+
+    return md.strip()
 
 def extract_page_column_aware(
     page,
@@ -1132,6 +1194,28 @@ def extract_page_column_aware(
     page_width = page_rect.width
     page_height = page_rect.height
 
+    # 1. Detectar tablas PRIMERO. Sus bboxes se reservan para
+    #    extracción independiente.
+    detected_tables = _detect_tables_in_page(page)
+    table_bboxes = [t["bbox"] for t in detected_tables]
+
+    def _inside_any_table(bbox) -> bool:
+        bx0, by0, bx1, by1 = bbox
+        for tx0, ty0, tx1, ty1 in table_bboxes:
+            # Solapamiento >50% del área del bloque
+            ix0 = max(bx0, tx0)
+            iy0 = max(by0, ty0)
+            ix1 = min(bx1, tx1)
+            iy1 = min(by1, ty1)
+            if ix1 <= ix0 or iy1 <= iy0:
+                continue
+            inter = (ix1 - ix0) * (iy1 - iy0)
+            block_area = max(1, (bx1 - bx0) * (by1 - by0))
+            if inter / block_area > 0.5:
+                return True
+        return False
+
+    # 2. Extraer bloques de texto, excluyendo los que están dentro de tablas
     page_dict = page.get_text("dict")
     blocks = []
     for b in page_dict.get("blocks", []):
@@ -1143,83 +1227,96 @@ def extract_page_column_aware(
         x0, y0, x1, y1 = bbox
         if y1 <= header_height or y0 >= page_height - footer_height:
             continue
+        if _inside_any_table(bbox):
+            continue
         text = _block_text_from_pymupdf(b)
         if not text:
             continue
         blocks.append({
-            "bbox": bbox,
-            "text": text,
+            "bbox": bbox, "text": text,
             "x0": x0, "x1": x1, "y0": y0, "y1": y1,
             "x_center": (x0 + x1) / 2,
             "kind": _classify_block_kind(b, page_height),
         })
 
-    if not blocks:
-        return ""
-
-    # ------------------------------------------------------------
-    # FIX CRÍTICO: si hay tabla, NO reordenar por columnas.
-    # Se usa el orden natural de PyMuPDF (ya respeta tablas).
-    # ------------------------------------------------------------
-    if _looks_like_table_region(blocks, page_width):
-        print(f"    [COLUMN-AWARE] Tabla detectada; usando orden natural.")
-        blocks.sort(key=lambda b: (b["y0"], b["x0"]))
-        return "\n\n".join(b["text"] for b in blocks)
-
-    # ... resto del código original sin cambios ...
-    if layout_hint and not layout_hint.get("error"):
-        n_cols = int(layout_hint.get("num_columns", 1) or 1)
-        split_pct = float(layout_hint.get("column_split_x_pct") or 0.5)
-        order = str(layout_hint.get("reading_order", "top_to_bottom"))
-        column_split_x = page_width * split_pct
-    else:
-        n_cols = 1
-        order = "top_to_bottom"
-        column_split_x = page_width * 0.5
-
-    if n_cols == 1:
-        blocks.sort(key=lambda b: (b["y0"], b["x0"]))
-        return "\n\n".join(b["text"] for b in blocks)
-
-    left, right, full = [], [], []
-    for b in blocks:
-        if b["x0"] < column_split_x - page_width * 0.12 and \
-           b["x1"] > column_split_x + page_width * 0.12:
-            full.append(b)
-        elif b["x_center"] < column_split_x:
-            left.append(b)
+    # 3. Orden de columnas si aplica
+    ordered_text = ""
+    if blocks:
+        if layout_hint and not layout_hint.get("error"):
+            n_cols = int(layout_hint.get("num_columns", 1) or 1)
+            split_pct = float(layout_hint.get("column_split_x_pct") or 0.5)
+            order = str(layout_hint.get("reading_order", "top_to_bottom"))
+            column_split_x = page_width * split_pct
         else:
-            right.append(b)
+            n_cols = 1
+            order = "top_to_bottom"
+            column_split_x = page_width * 0.5
 
-    left.sort(key=lambda b: b["y0"])
-    right.sort(key=lambda b: b["y0"])
-    full.sort(key=lambda b: b["y0"])
-
-    column_start_y = min([b["y0"] for b in (left + right)] or [page_height])
-    leading_full = [b for b in full if b["y0"] < column_start_y - 5]
-    middle_full = [b for b in full if b["y0"] >= column_start_y - 5]
-
-    if order == "left_then_right":
-        ordered = leading_full + left + right + middle_full
-    elif order == "mixed" and middle_full:
-        ordered = leading_full + left + right
-        for fb in middle_full:
-            insert_idx = len(ordered)
-            for i, ob in enumerate(ordered):
-                if ob["y0"] > fb["y0"]:
-                    insert_idx = i
-                    break
-            ordered.insert(insert_idx, fb)
-    else:
-        ordered = leading_full + left + right + middle_full
-
-    md_parts = []
-    for b in ordered:
-        if b["kind"] == "heading":
-            md_parts.append(f"## {b['text'].strip()}")
+        if n_cols == 1:
+            blocks.sort(key=lambda b: (b["y0"], b["x0"]))
+            ordered_text = "\n\n".join(b["text"] for b in blocks)
         else:
-            md_parts.append(b["text"])
-    return "\n\n".join(md_parts)
+            left, right, full = [], [], []
+            for b in blocks:
+                if b["x0"] < column_split_x - page_width * 0.12 and \
+                   b["x1"] > column_split_x + page_width * 0.12:
+                    full.append(b)
+                elif b["x_center"] < column_split_x:
+                    left.append(b)
+                else:
+                    right.append(b)
+
+            left.sort(key=lambda b: b["y0"])
+            right.sort(key=lambda b: b["y0"])
+            full.sort(key=lambda b: b["y0"])
+
+            column_start_y = min([b["y0"] for b in (left + right)] or [page_height])
+            leading_full = [b for b in full if b["y0"] < column_start_y - 5]
+            middle_full = [b for b in full if b["y0"] >= column_start_y - 5]
+
+            if order == "left_then_right":
+                ordered = leading_full + left + right + middle_full
+            else:
+                ordered = leading_full + left + right + middle_full
+
+            parts = []
+            for b in ordered:
+                if b["kind"] == "heading":
+                    parts.append(f"## {b['text'].strip()}")
+                else:
+                    parts.append(b["text"])
+            ordered_text = "\n\n".join(parts)
+
+    # 4. Insertar tablas en su posición por Y
+    output_parts = []
+    if detected_tables:
+        # Ordenar tablas por Y ascendente
+        detected_tables.sort(key=lambda t: t["bbox"][1])
+
+        # Mezclar con el texto por posición Y
+        all_items = [{"kind": "text", "y": 0, "content": ordered_text}]
+        for t in detected_tables:
+            all_items.append({
+                "kind": "table",
+                "y": t["bbox"][1],
+                "content": _table_to_markdown(t["rows"]),
+            })
+
+        # El texto se divide por tablas: aproximación simple.
+        # Mejor caso: todas las tablas van al final o entre párrafos.
+        # Hacemos una aproximación: insertar tabla después del primer
+        # bloque cuyo y sea menor que table.y0.
+        if len(detected_tables) == 0:
+            output_parts = [ordered_text]
+        else:
+            # Simplificación: texto arriba, tablas abajo en orden de Y.
+            output_parts = [ordered_text]
+            for t in detected_tables:
+                output_parts.append(_table_to_markdown(t["rows"]))
+    else:
+        output_parts = [ordered_text]
+
+    return "\n\n".join(p for p in output_parts if p.strip())
 
 async def extract_markdown_column_aware(
     doc,
