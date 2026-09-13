@@ -60,6 +60,7 @@ from dotenv import load_dotenv
 
 from visual_layout_ai import (
     analyze_pdf_boundaries,
+    analyze_page_columns_with_vision,   # ← NUEVA
     collect_editorial_patterns,
     boundary_hints_by_page,
     audit_pages_with_vision,
@@ -137,7 +138,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v19"
+PIPELINE_VERSION = "2026-09-12-reader-master-v20"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1042,6 +1043,191 @@ def _is_deepseek_refusal(text: str) -> bool:
     ]
     return any(p in low for p in patterns)
 
+# ============================================================
+# EXTRACCIÓN POR COLUMNAS (Vision-guided)
+# ============================================================
+
+def _block_text_from_pymupdf(block: dict) -> str:
+    """Extrae el texto plano de un block de PyMuPDF preservando saltos internos."""
+    if block.get("type") != 0:
+        return ""
+    lines = []
+    for line in block.get("lines", []):
+        parts = []
+        for span in line.get("spans", []):
+            parts.append(span.get("text", ""))
+        line_text = "".join(parts).rstrip()
+        if line_text.strip():
+            lines.append(line_text)
+    return "\n".join(lines).strip()
+
+
+def _classify_block_kind(block: dict, page_height: float) -> str:
+    """Clasifica un block por su aspecto: heading, párrafo, caption, etc."""
+    text = _block_text_from_pymupdf(block)
+    if not text:
+        return "empty"
+
+    max_size = 0
+    for line in block.get("lines", []):
+        for span in line.get("spans", []):
+            s = span.get("size", 0)
+            if s > max_size:
+                max_size = s
+
+    bbox = block.get("bbox", [0, 0, 0, 0])
+    height = bbox[3] - bbox[1]
+
+    # Heurísticas simples
+    if max_size > 14 and len(text) < 100:
+        return "heading"
+    if re.match(r"^(Figure|Fig\.|Table|Tabla|Figura|TABLE)\s+\d", text, re.I):
+        return "caption"
+    if re.match(r"^(ABSTRACT|Keywords|References|RESUMEN|Palabras clave|Referencias)\s*$",
+                text, re.I):
+        return "heading"
+    if height < 15 and len(text) < 80:
+        return "short_line"
+    return "paragraph"
+
+
+def extract_page_column_aware(
+    page,
+    layout_hint: Optional[dict] = None,
+    header_height: float = 0.0,
+    footer_height: float = 0.0,
+) -> str:
+    """
+    Extrae el texto de una página respetando la estructura de columnas.
+
+    Si `layout_hint` viene de Vision, se usa su `column_split_x_pct` y
+    `reading_order`. Si no, se detecta geométricamente por mediana de x.
+    """
+    page_rect = page.rect
+    page_width = page_rect.width
+    page_height = page_rect.height
+
+    page_dict = page.get_text("dict")
+    blocks = []
+    for b in page_dict.get("blocks", []):
+        if b.get("type") != 0:
+            continue
+        bbox = b.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        x0, y0, x1, y1 = bbox
+        if y1 <= header_height or y0 >= page_height - footer_height:
+            continue
+        text = _block_text_from_pymupdf(b)
+        if not text:
+            continue
+        blocks.append({
+            "bbox": bbox,
+            "text": text,
+            "x0": x0, "x1": x1, "y0": y0, "y1": y1,
+            "x_center": (x0 + x1) / 2,
+            "kind": _classify_block_kind(b, page_height),
+        })
+
+    if not blocks:
+        return ""
+
+    # --- Decidir split vertical ---
+    if layout_hint and not layout_hint.get("error"):
+        n_cols = int(layout_hint.get("num_columns", 1) or 1)
+        split_pct = float(layout_hint.get("column_split_x_pct") or 0.5)
+        order = str(layout_hint.get("reading_order", "top_to_bottom"))
+        column_split_x = page_width * split_pct
+    else:
+        n_cols = 1
+        split_pct = 0.5
+        order = "top_to_bottom"
+        column_split_x = page_width * 0.5
+
+    # --- Si Vision dijo 1 columna, ordenar por y y listo ---
+    if n_cols == 1:
+        blocks.sort(key=lambda b: (b["y0"], b["x0"]))
+        return "\n\n".join(b["text"] for b in blocks)
+
+    # --- Si 2 columnas: clasificar bloques ---
+    left, right, full = [], [], []
+    for b in blocks:
+        # Full-width si cruza el split por mucho
+        if b["x0"] < column_split_x - page_width * 0.12 and \
+           b["x1"] > column_split_x + page_width * 0.12:
+            full.append(b)
+        elif b["x_center"] < column_split_x:
+            left.append(b)
+        else:
+            right.append(b)
+
+    # Ordenar cada grupo verticalmente
+    left.sort(key=lambda b: b["y0"])
+    right.sort(key=lambda b: b["y0"])
+    full.sort(key=lambda b: b["y0"])
+
+    # Bloques de ancho completo que van antes del inicio de columnas
+    # (título de página, abstract heading, etc.)
+    column_start_y = min(
+        [b["y0"] for b in (left + right)] or [page_height]
+    )
+    leading_full = [b for b in full if b["y0"] < column_start_y - 5]
+    middle_full = [b for b in full if b["y0"] >= column_start_y - 5]
+
+    # Armar orden final
+    if order == "left_then_right":
+        ordered = leading_full + left + right + middle_full
+    elif order == "mixed" and middle_full:
+        # Intercalar full-width en medio: aproximación por posición Y
+        ordered = leading_full + left + right
+        # Insertar middle_full donde corresponda por Y
+        for fb in middle_full:
+            # Insertar antes del primer bloque cuya y sea mayor
+            insert_idx = len(ordered)
+            for i, ob in enumerate(ordered):
+                if ob["y0"] > fb["y0"]:
+                    insert_idx = i
+                    break
+            ordered.insert(insert_idx, fb)
+    else:
+        # Fallback conservador
+        ordered = leading_full + left + right + middle_full
+
+    # --- Convertir a Markdown ---
+    md_parts = []
+    for b in ordered:
+        text = b["text"]
+        if b["kind"] == "heading":
+            md_parts.append(f"## {text.strip()}")
+        else:
+            md_parts.append(text)
+    return "\n\n".join(md_parts)
+
+async def extract_markdown_column_aware(
+    doc,
+    layout_hints: dict[int, dict],
+    header_height: float,
+    footer_height: float,
+) -> list[dict]:
+    """
+    Extrae Markdown página por página usando la info de layout de Vision.
+    Devuelve la misma estructura que `extract_markdown_and_images`.
+    """
+    pages = []
+    for page_number, page in enumerate(doc, start=1):
+        hint = layout_hints.get(page_number)
+        text = extract_page_column_aware(
+            page,
+            layout_hint=hint,
+            header_height=header_height,
+            footer_height=footer_height,
+        )
+        pages.append({
+            "text": text,
+            "metadata": {"page_number": page_number},
+            "_column_aware": True,
+        })
+    return pages
 
 def _native_markdown_fallback(doc) -> list[dict]:
     """Fallback duro: reconstruye desde texto nativo de PyMuPDF."""
@@ -3244,6 +3430,26 @@ def add_pdf_heading_links(markdown, document_id, page_offset=0):
         output.append(f"{heading.group(1)}[{title}]({url})")
     return "\n".join(output)
 
+def extract_page_column_aware_sync(
+    doc,
+    layout_hints,
+    header_height,
+    footer_height,
+) -> list[dict]:
+    """Wrapper sync para invocar desde asyncio.to_thread."""
+    return [
+        {
+            "text": extract_page_column_aware(
+                page,
+                layout_hint=layout_hints.get(page_number),
+                header_height=header_height,
+                footer_height=footer_height,
+            ),
+            "metadata": {"page_number": page_number},
+            "_column_aware": True,
+        }
+        for page_number, page in enumerate(doc, start=1)
+    ]
 
 # ============================================================
 # PIPELINE PRINCIPAL
@@ -3314,25 +3520,60 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         doc.save(str(visual_pdf_path), garbage=3, deflate=True)
 
         # ------------------------------------------------
-        # 3. EXTRACCIÓN
+        # 3. EXTRACCIÓN (column-aware + fallback a pymupdf4llm)
         # ------------------------------------------------
-        raw_markdown = extract_markdown_and_images(doc, image_dir)
-        raw_markdown = add_page_markers(raw_markdown)
+        print("[PIPELINE] 3/8 Extrayendo Markdown...")
 
-        # Tokenizar markers ANTES de limpiar y traducir, para que DeepSeek
-        # no los reescriba ni los funda con el texto.
-        raw_markdown = hide_page_markers_for_translation(raw_markdown)
+        # 3.1 Vision analiza layout de todas las páginas (una vez por PDF).
+        #     Cacheado dentro de visual_layout_ai.
+        page_layout_hints = {}
+        if os.getenv("ENABLE_VISION_COLUMN_LAYOUT", "1").strip().lower() \
+                not in {"0", "false", "no"}:
+            try:
+                all_pages = list(range(1, doc.page_count + 1))
+                page_layout_hints = await analyze_page_columns_with_vision(
+                    str(visual_pdf_path), all_pages
+                )
+                two_col_pages = sum(
+                    1 for h in page_layout_hints.values()
+                    if int(h.get("num_columns", 1) or 1) == 2
+                )
+                print(
+                    f"[VISION LAYOUT] {len(page_layout_hints)} páginas analizadas, "
+                    f"{two_col_pages} con 2 columnas."
+                )
+            except Exception as e:
+                print(f"[VISION LAYOUT] Error no fatal: {e}. "
+                      f"Se usa detección geométrica.")
+                page_layout_hints = {}
 
-        # Extraer notas de correspondencia antes de limpiar: si quedan en
-        # medio del cuerpo, parten párrafos científicos.
-        raw_markdown, correspondence_notes = extract_correspondence_notes(raw_markdown)
-        if correspondence_notes:
+        # 3.2 Extraer column-aware (usa hints de Vision si están)
+        raw_markdown = await asyncio.to_thread(
+            extract_page_column_aware_sync,
+            doc,
+            page_layout_hints,
+            layout_profile.header_height,
+            layout_profile.footer_height,
+        )
+
+        # 3.3 Fallback: si la extracción column-aware quedó muy pobre,
+        #     usar pymupdf4llm tradicional.
+        column_signal = _markdown_text_signal(
+            "\n".join(p["text"] for p in raw_markdown)
+        )
+        native_signal = sum(
+            len(p.get_text("text").strip()) for p in doc
+        )
+        if native_signal > 500 and column_signal < max(500, native_signal * 0.20):
             print(
-                f"[CORRESPONDENCE] {len(correspondence_notes)} notas detectadas; "
-                f"se moverán al final del documento."
+                f"[EXTRACT] Column-aware produjo {column_signal} chars "
+                f"vs {native_signal} nativos. Fallback a pymupdf4llm."
             )
+            raw_markdown = extract_markdown_and_images(doc, image_dir)
 
-        # Recomponer párrafos partidos por las notas extraídas.
+        raw_markdown = add_page_markers(raw_markdown)
+        raw_markdown = hide_page_markers_for_translation(raw_markdown)
+        raw_markdown, correspondence_notes = extract_correspondence_notes(raw_markdown)
         raw_markdown = merge_split_paragraphs(raw_markdown)
 
         # ------------------------------------------------

@@ -485,6 +485,131 @@ def _render_full_page(page: fitz.Page, max_px: int = 1500) -> str:
     img.save(out, format="JPEG", quality=82, optimize=True)
     return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
 
+# ---------------------------------------------------------------
+# Column analysis per page (full-page Vision)
+# ---------------------------------------------------------------
+
+COLUMN_ANALYSIS_PROMPT = r"""
+Eres un analista de layout de PDFs académicos.
+
+Recibes una imagen de UNA página completa. Tu única tarea es identificar
+la estructura de columnas y el orden de lectura correcto.
+
+Devuelve JSON con:
+{
+  "num_columns": 1 | 2,
+  "column_split_x_pct": number,
+  "reading_order": "left_then_right" | "top_to_bottom" | "mixed",
+  "full_width_zones": [
+    {"y_start_pct": number, "y_end_pct": number, "type": "heading|figure|table|caption"}
+  ],
+  "confidence": number,
+  "reason": string
+}
+
+Reglas:
+- num_columns = 1 si el texto ocupa todo el ancho, 2 si hay dos columnas
+  claramente separadas por un canal blanco vertical.
+- column_split_x_pct = posición del canal blanco como fracción del ancho
+  (0.0 = borde izquierdo, 1.0 = borde derecho). Solo aplica si num_columns=2.
+  Ejemplo: 0.5 si el canal está exactamente al medio.
+- reading_order = "left_then_right" para papers típicos de dos columnas
+  (toda la izquierda, después toda la derecha).
+  "top_to_bottom" para una sola columna.
+  "mixed" si hay zonas de ancho completo intercaladas (heading arriba,
+  luego columnas, luego figura de ancho completo, luego columnas).
+- full_width_zones = zonas donde el contenido ocupa todo el ancho
+  (títulos de sección, figuras, tablas, captions). Ayuda a reconstruir
+  el orden en layouts mixtos.
+- confidence = 0.0-1.0. Si dudás, bajá la confianza.
+
+Sé conservador. Si no ves dos columnas claramente separadas, devolvé 1.
+"""
+
+
+async def analyze_page_columns_with_vision(
+    pdf_path: str,
+    page_numbers: list[int],
+) -> dict[int, dict[str, Any]]:
+    """
+    Analiza el layout de columnas de páginas concretas con Vision.
+    Devuelve {page_number: layout_info}.
+    """
+    if not VISION_API_KEYS or not page_numbers:
+        return {}
+
+    results: dict[int, dict[str, Any]] = {}
+
+    queue: asyncio.Queue[Optional[int]] = asyncio.Queue()
+    for p in page_numbers:
+        await queue.put(p)
+
+    workers = min(VISION_CONCURRENCY, len(VISION_API_KEYS), len(page_numbers))
+
+    async def worker(wid: int, key: str) -> None:
+        worker_doc = fitz.open(pdf_path)
+        try:
+            while True:
+                page_no = await queue.get()
+                if page_no is None:
+                    queue.task_done()
+                    return
+                try:
+                    page = worker_doc[page_no - 1]
+                    payload = {
+                        "model": VISION_MODEL,
+                        "messages": [
+                            {"role": "system", "content": COLUMN_ANALYSIS_PROMPT},
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": f"Página {page_no}."},
+                                    {"type": "image_url",
+                                     "image_url": {"url": _render_full_page(page)}},
+                                ],
+                            },
+                        ],
+                        "temperature": 0,
+                        "thinking": {"type": "disabled"},
+                        "response_format": {"type": "json_object"},
+                        "max_tokens": 400,
+                        "stream": False,
+                    }
+                    started = time.perf_counter()
+                    response = await HTTP_CLIENT.post(
+                        VISION_BASE_URL,
+                        headers={"Authorization": f"Bearer {key}",
+                                 "Content-Type": "application/json"},
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    data = json.loads(
+                        response.json()["choices"][0]["message"]["content"]
+                    )
+                    data["page"] = page_no
+                    results[page_no] = data
+                    print(
+                        f"[VISION LAYOUT] Página {page_no}: "
+                        f"{data.get('num_columns')} col, "
+                        f"split={data.get('column_split_x_pct')}, "
+                        f"order={data.get('reading_order')} "
+                        f"({time.perf_counter() - started:.2f}s)"
+                    )
+                except Exception as exc:
+                    print(f"[VISION LAYOUT] Error pág {page_no}: {exc}")
+                    results[page_no] = {"page": page_no, "error": str(exc)}
+                finally:
+                    queue.task_done()
+        finally:
+            worker_doc.close()
+
+    tasks = [asyncio.create_task(worker(i + 1, VISION_API_KEYS[i]))
+             for i in range(workers)]
+    await queue.join()
+    for _ in tasks:
+        await queue.put(None)
+    await asyncio.gather(*tasks, return_exceptions=True)
+    return results
 
 async def audit_pages_with_vision(
     pdf_path: str, page_payloads: list[dict[str, Any]]
