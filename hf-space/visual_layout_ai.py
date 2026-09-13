@@ -72,10 +72,14 @@ ARRIBA = final de página N.
 ABAJO = comienzo de página N+1.
 
 Tu trabajo NO es traducir, resumir ni corregir texto. Determina únicamente
-relaciones estructurales que un extractor PDF puede haber interpretado mal.
+relaciones estructurales que un extractor PDF puede haber interpretado mal,
+y transcribe LITERALMENTE los fragmentos de texto visibles en cada borde.
 
 Devuelve JSON válido con exactamente estas claves:
 {
+  "left_tail": string,
+  "right_head": string,
+  "boundary_quality": "clean" | "suspicious" | "broken",
   "continues_paragraph": boolean,
   "continues_table": boolean,
   "continues_list": boolean,
@@ -88,19 +92,54 @@ Devuelve JSON válido con exactamente estas claves:
   "reason": string
 }
 
-Reglas:
-- Marca continues_paragraph solo si el final de N y el comienzo de N+1 son
-  claramente la continuación del mismo párrafo.
-- Marca continues_table/list solo con evidencia visual clara.
-- column_flow_risk = verdadero si la frontera sugiere que el orden de lectura
-  puede cruzar columnas, una caja de ancho completo o un bloque intercalado.
+REGLAS DE TRANSCRIPCIÓN (left_tail y right_head):
+- left_tail = las ÚLTIMAS 10-15 palabras visibles en la mitad superior de la
+  imagen (final de la página N). Transcríbelas LITERALMENTE, en el idioma
+  original, sin traducir. Si terminan en medio de una palabra, incluye el
+  fragmento tal cual (ej: "psico-", "investiga-").
+- right_head = las PRIMERAS 10-15 palabras visibles en la mitad inferior de
+  la imagen (comienzo de la página N+1). Transcríbelas LITERALMENTE.
+- Si no puedes leer el texto con claridad (borroso, cortado), devuelve
+  string vacío "".
+- NO inventes texto. NO traduzcas. NO reformatees. Solo transcribe lo que ves.
+
+REGLAS DE boundary_quality:
+- "clean": la página N termina en un cierre natural (fin de párrafo con
+  puntuación fuerte, fin de sección, fin de tabla) Y la página N+1 empieza
+  un párrafo/sección nuevo. Los dos lados NO son la misma unidad de texto.
+- "suspicious": parece que el texto continúa pero hay señales mixtas
+  (mayúscula donde no correspondería, puntuación que no cierra del todo,
+  o el texto parece cortado pero no estás seguro).
+- "broken": claramente la última palabra de N y la primera de N+1 pertenecen
+  a la misma oración/párrafo/tabla/lista. Esto incluye palabras cortadas
+  por guión, oraciones a mitad, filas de tabla que se continúan, items de
+  lista cortados.
+
+REGLAS DE LAS DEMÁS SEÑALES:
+- continues_paragraph = true SOLO si ambos lados son la continuación literal
+  de la misma oración o párrafo.
+- continues_table = true si la última fila visible de N y la primera de N+1
+  comparten la misma estructura de columnas.
+- continues_list = true si el último item de N y el primero de N+1 son
+  items de la misma lista.
+- citation_interrupted = true si una referencia entre paréntesis o corchetes
+  queda cortada entre N y N+1.
+- footnote_relation = true si una nota al pie visible en N+1 pertenece al
+  párrafo que terminó en N.
+- column_flow_risk = true si la frontera sugiere que el orden de lectura
+  puede cruzar columnas o una caja de ancho completo.
 - repeated_editorial_pattern solo para running headers/footers, nombre de
   revista, autores abreviados, volumen/número u otro texto editorial repetido.
-- No marques como editorial un heading, caption, tabla, cita bibliográfica o
-  texto académico normal.
-- editorial_text contiene solo el texto editorial claramente reconocible.
-- Si no hay evidencia suficiente, usa false y confidence baja.
-- No inventes contenido que no sea visible.
+- NO marques como editorial un heading, caption, tabla, cita bibliográfica
+  o texto académico normal.
+
+CONFIANZA:
+- confidence = 0.0-1.0. Usá >= 0.85 si transcribiste left_tail y right_head
+  con claridad y ambos forman una frase coherente al unirse.
+- Usá 0.50-0.70 si estás adivinando por contexto.
+- Usá < 0.50 si no podés decidir.
+
+Si no hay evidencia suficiente, usá false y confidence baja. No inventes.
 """
 
 
@@ -233,8 +272,10 @@ async def _analyze_boundary(
                         "type": "text",
                         "text": (
                             f"Frontera {page_index + 1} → {page_index + 2}.\n"
-                            f"OCR final N: {excerpt_a}\n"
-                            f"OCR inicio N+1: {excerpt_b}"
+                            f"Texto extraído del final de la página {page_index + 1}:\n"
+                            f"{excerpt_a}\n\n"
+                            f"Texto extraído del inicio de la página {page_index + 2}:\n"
+                            f"{excerpt_b}"
                         ),
                     },
                     {"type": "image_url", "image_url": {"url": image}},
@@ -244,7 +285,7 @@ async def _analyze_boundary(
         "temperature": 0,
         "thinking": {"type": "disabled"},
         "response_format": {"type": "json_object"},
-        "max_tokens": 450,
+        "max_tokens": 700,
         "stream": False,
     }
     started = time.perf_counter()
@@ -260,9 +301,6 @@ async def _analyze_boundary(
     result = json.loads(content)
     result["page"] = page_index + 1
     result["next_page"] = page_index + 2
-    # Exponer excerpts truncados para que app.py pueda tomar decisiones
-    # específicas (por ejemplo, para verificar si ambos lados de la
-    # frontera son filas de tabla Markdown).
     result["excerpt_a"] = excerpt_a[:800]
     result["excerpt_b"] = excerpt_b[:800]
     return result
@@ -281,13 +319,28 @@ async def analyze_pdf_boundaries(pdf_path: str) -> list[dict[str, Any]]:
         page_count = doc.page_count
         if page_count < 2:
             return []
+
         candidates = list(range(page_count - 1))
+
         if VISION_MODE == "selective":
             scored = [(_local_boundary_score(doc[i], doc[i + 1]), i) for i in candidates]
             candidates = [i for score, i in scored if score >= 0.30]
             if not candidates:
                 candidates = [i for _, i in sorted(scored, reverse=True)[: min(3, len(scored))]]
             print(f"[VISION] Modo selectivo: {len(candidates)}/{page_count - 1} fronteras")
+
+        elif VISION_MODE == "aggressive":
+            # En modo agresivo analizamos TODAS las fronteras, pero primero
+            # calculamos el score para priorizarlas y ver en logs cuáles
+            # son las más sospechosas.
+            scored = [(_local_boundary_score(doc[i], doc[i + 1]), i) for i in candidates]
+            scored.sort(reverse=True)
+            top_scores = [(i, round(s, 2)) for s, i in scored[:5]]
+            print(f"[VISION] Modo agresivo: analizando TODAS las {len(candidates)} fronteras. "
+                  f"Top sospechosas: {top_scores}")
+
+        else:  # "all" (compatibilidad hacia atrás)
+            print(f"[VISION] Modo all: {len(candidates)} fronteras")
 
     if not candidates:
         _save_cache(pdf_path, [])
@@ -359,18 +412,28 @@ def collect_editorial_patterns(diagnostics: list[dict[str, Any]]) -> list[str]:
 
 
 def boundary_hints_by_page(diagnostics: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
-    """Convierte diagnósticos en señales simples que app.py puede usar."""
+    """Convierte diagnósticos en señales que app.py puede aplicar directamente."""
     hints: dict[int, dict[str, Any]] = {}
     for item in diagnostics:
         if item.get("error"):
             continue
         confidence = float(item.get("confidence", 0) or 0)
-        if confidence < VISION_MIN_CONFIDENCE:
-            continue
         page = int(item.get("page", 0) or 0)
         if page <= 0:
             continue
+
+        # Umbral más bajo cuando boundary_quality == "broken": son casos
+        # en los que Vision tiene evidencia visual fuerte, aunque su
+        # confidence declarada sea media.
+        quality = str(item.get("boundary_quality", "")).lower()
+        min_conf = 0.85 if quality == "broken" else VISION_MIN_CONFIDENCE
+        if confidence < min_conf:
+            continue
+
         hints[page] = {
+            "boundary_quality": quality,
+            "left_tail": str(item.get("left_tail", "") or "")[:400],
+            "right_head": str(item.get("right_head", "") or "")[:400],
             "continues_paragraph": bool(item.get("continues_paragraph")),
             "continues_table": bool(item.get("continues_table")),
             "continues_list": bool(item.get("continues_list")),
@@ -379,7 +442,6 @@ def boundary_hints_by_page(diagnostics: list[dict[str, Any]]) -> dict[int, dict[
             "column_flow_risk": bool(item.get("column_flow_risk")),
             "confidence": confidence,
             "reason": str(item.get("reason", "")),
-            # NUEVO: excerpts para verificaciones específicas en app.py.
             "excerpt_a": str(item.get("excerpt_a", "")),
             "excerpt_b": str(item.get("excerpt_b", "")),
         }

@@ -38,7 +38,7 @@ import tempfile
 import base64
 import asyncio
 from pathlib import Path
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -72,6 +72,19 @@ from document_model import (
     audit_block_sequence,
 )
 
+from collections import deque
+
+LOG_BUFFER: deque = deque(maxlen=2000)
+LOG_BUFFER_LOCK = asyncio.Lock()
+
+
+def log(msg: str):
+    """Imprime en stdout Y guarda en buffer consultable vía HTTP."""
+    print(msg)
+    LOG_BUFFER.append({
+        "t": time.time(),
+        "msg": msg,
+    })
 
 # ============================================================
 # CONFIGURACIÓN
@@ -124,10 +137,26 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v18"
+PIPELINE_VERSION = "2026-09-12-reader-master-v19"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# BUFFER DE LOGS CONSULTABLE VÍA HTTP
+# ============================================================
+
+LOG_BUFFER: deque = deque(maxlen=2000)
+
+
+def log(msg: str):
+    """Imprime en stdout Y guarda en buffer consultable vía HTTP."""
+    print(msg, flush=True)
+    LOG_BUFFER.append({
+        "t": time.time(),
+        "msg": msg,
+    })
 
 
 # ============================================================
@@ -545,7 +574,7 @@ def clean_pdf_using_layout(doc, profile):
         for rect_to_remove, reason, text in redactions:
             page.add_redact_annot(rect_to_remove, fill=(1, 1, 1))
             removed += 1
-            print(f"[PDF CLEAN] Página {page_number}: {reason}: {text[:120]}")
+            log(f"[PDF CLEAN] Página {page_number}: {reason}: {text[:120]}")
 
         if redactions:
             page.apply_redactions()
@@ -560,13 +589,13 @@ def print_layout_profile(profile):
     print("=" * 70)
     print(f"Páginas: {profile.page_count}")
     print(f"Tamaño: {profile.page_width} × {profile.page_height} pt")
-    print(f"Columnas estimadas: {profile.likely_columns}")
+    log(f"Columnas estimadas: {profile.likely_columns}")
     print(f"Header zone: {profile.header_height} pt")
     print(f"Footer zone: {profile.footer_height} pt")
     print(f"Números de página: {'sí' if profile.page_numbers else 'no'}")
     print(f"Headers repetidos: {len(profile.repeated_headers)}")
     for header in profile.repeated_headers:
-        print(f"  HEADER: {header}")
+        log(f"  HEADER: {header}")
     print(f"Footers repetidos: {len(profile.repeated_footers)}")
     for footer in profile.repeated_footers:
         print(f"  FOOTER: {footer}")
@@ -1147,7 +1176,7 @@ def extract_markdown_and_images(doc, output_dir: Path):
         return native_fallback_pages
 
     if page_fallbacks:
-        print(f"[EXTRACT] {page_fallbacks} páginas reemplazadas por texto nativo.")
+        log(f"[EXTRACT] {page_fallbacks} páginas reemplazadas por texto nativo.")
 
     return corrected_pages
 
@@ -1165,6 +1194,54 @@ def add_page_markers(markdown_pages):
         output.append(text)
     return "\n\n".join(output)
 
+# ============================================================
+# TOKENIZACIÓN DE MARKERS PARA TRADUCCIÓN
+# ============================================================
+
+# Token que DeepSeek no tiene razón de traducir ni reformatear.
+_PAGE_TOKEN_PATTERN = re.compile(r"@@PAGE_(\d+)@@")
+_PAGE_MARKER_PATTERN = re.compile(
+    r"<!--\s*PAGE\s*:?\s*(\d+)\s*-->",
+    re.IGNORECASE,
+)
+
+
+def hide_page_markers_for_translation(markdown: str) -> str:
+    """
+    Reemplaza `<!-- PAGE:N -->` por `@@PAGE_N@@` antes de enviar a DeepSeek.
+    El token es opaco, DeepSeek no tiene razón de traducirlo ni reformatearlo.
+    """
+    if not markdown:
+        return markdown
+    return _PAGE_MARKER_PATTERN.sub(
+        lambda m: f"@@PAGE_{m.group(1)}@@",
+        markdown,
+    )
+
+
+def restore_page_markers_after_translation(markdown: str) -> str:
+    """
+    Revierte `@@PAGE_N@@` a `<!-- PAGE:N -->`.
+
+    Tolera variantes que DeepSeek pueda haber introducido:
+    - `@@ PAGE_N @@` (con espacios)
+    - `@@PAGE N@@` (sin guión bajo)
+    - `@@page_n@@` (minúsculas)
+    """
+    if not markdown:
+        return markdown
+
+    def _to_marker(match):
+        return f"\n\n<!-- PAGE:{match.group(1)} -->\n\n"
+
+    # Variantes toleradas.
+    markdown = re.sub(
+        r"[ \t]*@@\s*PAGE[_ ]?(\d+)\s*@@[ \t]*",
+        _to_marker,
+        markdown,
+        flags=re.IGNORECASE,
+    )
+    return markdown
 
 # ============================================================
 # LIMPIEZA DEL MARKDOWN
@@ -1775,7 +1852,7 @@ def merge_tables_across_pages(markdown: str, visual_hints: dict) -> str:
         continue
 
     if merged:
-        print(f"[VISION MERGE] Total tablas unidas: {merged}")
+        log(f"[VISION MERGE] Total tablas unidas: {merged}")
 
     return "\n".join(output)
 
@@ -1847,7 +1924,7 @@ def merge_lists_across_pages(markdown: str, visual_hints: dict) -> str:
         continue
 
     if merged:
-        print(f"[VISION MERGE] Total listas unidas: {merged}")
+        log(f"[VISION MERGE] Total listas unidas: {merged}")
 
     return "\n".join(output)
 
@@ -1945,9 +2022,249 @@ def merge_interrupted_citations(markdown: str, visual_hints: dict) -> str:
         continue
 
     if merged:
-        print(f"[VISION MERGE] Total citas unidas: {merged}")
+        log(f"[VISION MERGE] Total citas unidas: {merged}")
 
     return "\n".join(output)
+
+# ============================================================
+# MERGE GUIADO POR FRAGMENTOS DE VISION
+# ============================================================
+
+def _normalize_for_match(text: str) -> str:
+    """Normaliza texto para comparación fuzzy de fragmentos."""
+    if not text:
+        return ""
+    t = text.lower()
+    t = re.sub(r"[«»""''`´]", '"', t)
+    t = re.sub(r"[–—]", "-", t)
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"[^\w\s\-áéíóúñü.,;:!?()\[\]\"'-]", "", t)
+    return t.strip()
+
+
+def _find_fragment_position(
+    markdown: str,
+    fragment: str,
+    search_start: int = 0,
+    search_end: Optional[int] = None,
+) -> Optional[tuple[int, int]]:
+    """
+    Busca un fragmento en el markdown con tolerancia a espacios/saltos.
+
+    Devuelve (start, end) en el markdown original o None si no lo encuentra.
+    """
+    if not fragment or not markdown:
+        return None
+
+    norm_fragment = _normalize_for_match(fragment)
+    if len(norm_fragment) < 5:
+        return None
+
+    end_limit = search_end if search_end is not None else len(markdown)
+    region = markdown[search_start:end_limit]
+
+    # Estrategia 1: buscar las últimas N palabras del fragmento.
+    # Es más robusto que el fragmento completo porque la parte más cercana
+    # a la frontera es la que Vision ve mejor.
+    words = norm_fragment.split()
+    if len(words) >= 4:
+        for take in (6, 5, 4):
+            if len(words) < take:
+                continue
+            tail_words = words[-take:]
+            pattern = r"\s+".join(re.escape(w) for w in tail_words)
+            # Permitir cualquier whitespace o markdown entre palabras.
+            loose_pattern = pattern.replace(r"\ ", r"[\s\*_`]+")
+            try:
+                regex = re.compile(loose_pattern, re.IGNORECASE)
+            except re.error:
+                continue
+            match = regex.search(region)
+            if match:
+                # Convertir coordenadas relativas a absolutas.
+                local_start, local_end = match.span()
+                # Expandir para cubrir el fragmento completo desde el inicio
+                # de la última porción si es posible.
+                return (search_start + local_start, search_start + local_end)
+
+    return None
+
+
+def apply_vision_fragment_merges(markdown: str, visual_hints: dict) -> str:
+    """
+    Usa los fragmentos `left_tail` y `right_head` de Vision para unir
+    texto cortado entre páginas con altísima precisión.
+
+    Estrategia:
+    1. Para cada frontera con boundary_quality="broken" o "suspicious",
+       busca `left_tail` (últimas palabras del final de N) y `right_head`
+       (primeras palabras del inicio de N+1) en el markdown.
+    2. Si ambos se encuentran cerca de un `<!-- PAGE:N+1 -->`, une
+       exactamente entre el final del left_tail y el inicio del right_head.
+    """
+    if not markdown or not visual_hints:
+        return markdown
+
+    marker_re = re.compile(r"<!--\s*PAGE\s*:?\s*(\d+)\s*-->", re.IGNORECASE)
+    all_markers = list(marker_re.finditer(markdown))
+
+    if not all_markers:
+        return markdown
+
+    # Procesar de atrás hacia adelante para no invalidar posiciones.
+    applied = 0
+    for hint_page in sorted(visual_hints.keys(), reverse=True):
+        hint = visual_hints.get(hint_page)
+        if not hint:
+            continue
+
+        quality = hint.get("boundary_quality", "")
+        if quality not in {"broken", "suspicious"}:
+            continue
+
+        left_tail = hint.get("left_tail") or ""
+        right_head = hint.get("right_head") or ""
+
+        # Necesitamos al menos un lado con texto para localizar.
+        if not left_tail and not right_head:
+            continue
+
+        # Encontrar el marker de la página N+1 (= hint_page + 1).
+        target_page = hint_page + 1
+        marker_match = None
+        for m in all_markers:
+            if int(m.group(1)) == target_page:
+                marker_match = m
+                break
+
+        if marker_match is None:
+            continue
+
+        marker_start, marker_end = marker_match.span()
+
+        # Buscar left_tail ANTES del marker.
+        left_pos = _find_fragment_position(
+            markdown, left_tail, 0, marker_start
+        )
+
+        # Buscar right_head DESPUÉS del marker.
+        right_pos = _find_fragment_position(
+            markdown, right_head, marker_end, len(markdown)
+        )
+
+        if left_pos is None and right_pos is None:
+            continue
+
+        # Aplicar merge.
+        if left_pos and right_pos:
+            # Caso ideal: ambos lados localizados. Eliminamos TODO entre
+            # el final del left_tail y el inicio del right_head, y pegamos
+            # con un espacio (o nada si parece palabra cortada).
+            left_end = left_pos[1]
+            right_start = right_pos[0]
+
+            left_text = markdown[left_pos[0]:left_end]
+            right_text = markdown[right_start:right_pos[1]]
+
+            # Detectar si hay que unir sin espacio (palabra cortada).
+            joiner = " "
+            if left_text.rstrip().endswith("-") and re.match(
+                r"^[a-záéíóúñü]", right_text.lstrip(), re.I
+            ):
+                # Eliminar el guión.
+                left_text = left_text.rstrip()[:-1]
+                joiner = ""
+            elif re.match(r"^\d", right_text.lstrip()) and re.search(
+                r"\b(?:19|20)\d{0,3}$", left_text.rstrip()
+            ):
+                # Año cortado: sin espacio.
+                joiner = ""
+
+            merged = left_text.rstrip() + joiner + right_text.lstrip()
+            new_markdown = (
+                markdown[:left_pos[0]]
+                + merged
+                + markdown[right_pos[1]:]
+            )
+
+            print(
+                f"[VISION FRAGMENT] Pág {hint_page}→{target_page} "
+                f"({quality}, conf {hint.get('confidence', 0):.2f}): "
+                f"merge con fragmentos exactos "
+                f"({len(left_text)} + {len(right_text)} chars)"
+            )
+            markdown = new_markdown
+            applied += 1
+
+        elif left_pos:
+            # Solo left_tail localizado: eliminar el marker y pegar lo que
+            # sigue al final del left_tail. Es un merge "a ciegas" del lado
+            # derecho, pero con evidencia del izquierdo.
+            left_end = left_pos[1]
+            # Encontrar el siguiente bloque de texto no vacío tras el marker.
+            tail = markdown[marker_end:].lstrip()
+            if tail:
+                # Cortar hasta el primer cierre de párrafo.
+                next_break = re.search(r"\n\s*\n|<!--\s*PAGE", tail)
+                if next_break:
+                    tail_fragment = tail[:next_break.start()]
+                else:
+                    tail_fragment = tail[:400]
+
+                left_text = markdown[left_pos[0]:left_end]
+                joiner = " "
+                if left_text.rstrip().endswith("-"):
+                    left_text = left_text.rstrip()[:-1]
+                    joiner = ""
+
+                merged = left_text.rstrip() + joiner + tail_fragment.lstrip()
+                new_markdown = (
+                    markdown[:left_pos[0]]
+                    + merged
+                    + markdown[marker_end + len(tail_fragment):]
+                )
+                print(
+                    f"[VISION FRAGMENT] Pág {hint_page}→{target_page} "
+                    f"({quality}): merge solo con left_tail"
+                )
+                markdown = new_markdown
+                applied += 1
+
+        elif right_pos:
+            # Solo right_head localizado: eliminar el marker y pegar lo que
+            # precede al inicio del right_head. Más riesgoso, lo aplicamos
+            # solo cuando boundary_quality == "broken".
+            if quality != "broken":
+                continue
+
+            right_start = right_pos[0]
+            # Tomar las últimas 200 chars antes del marker.
+            before = markdown[:marker_start].rstrip()
+            fragment = before[-200:]
+            right_text = markdown[right_start:right_pos[1]]
+
+            joiner = " "
+            if fragment.rstrip().endswith("-"):
+                fragment = fragment.rstrip()[:-1]
+                joiner = ""
+
+            merged = fragment + joiner + right_text.lstrip()
+            new_markdown = (
+                markdown[:marker_start - len(fragment)]
+                + merged
+                + markdown[right_pos[1]:]
+            )
+            print(
+                f"[VISION FRAGMENT] Pág {hint_page}→{target_page} "
+                f"({quality}): merge solo con right_head"
+            )
+            markdown = new_markdown
+            applied += 1
+
+    if applied:
+        log(f"[VISION FRAGMENT] Total merges aplicados: {applied}")
+
+    return markdown
 
 # ============================================================
 # DETECCIÓN DE IDIOMA
@@ -1988,6 +2305,93 @@ def is_markdown_table_row(line: str) -> bool:
         and stripped.count("|") >= 2
     )
 
+def repair_broken_tables(markdown: str) -> str:
+    """
+    Corrige tablas Markdown que DeepSeek dejó mal formadas:
+    - `[Header|Col|...]` → `|Header|Col|...|`
+    - Filas sin pipe inicial/final
+    - Separadores con pocos guiones
+    """
+    if not markdown:
+        return markdown
+
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Caso 1: línea que empieza con '[' y contiene varios '|'
+        if (
+            stripped.startswith("[")
+            and stripped.count("|") >= 2
+            and not stripped.startswith("[^")
+            and not stripped.startswith("[!")
+        ):
+            # Quitar corchetes externos y reconstruir pipes
+            inner = stripped
+            if inner.startswith("["):
+                inner = inner[1:]
+            if inner.endswith("]"):
+                inner = inner[:-1]
+            # Si la primera "celda" no tiene pipe al inicio, agregarlo
+            if not inner.startswith("|"):
+                inner = "|" + inner
+            if not inner.endswith("|"):
+                inner = inner + "|"
+            output.append(inner)
+            i += 1
+            continue
+
+        # Caso 2: línea con muchos '|' pero sin empezar/terminar en '|'
+        if (
+            stripped.count("|") >= 3
+            and not stripped.startswith("|")
+            and not stripped.startswith("#")
+            and not stripped.startswith("<!--")
+            and not stripped.startswith("-")
+            and not stripped.startswith("*")
+            and "http" not in stripped
+        ):
+            rebuilt = stripped
+            if not rebuilt.startswith("|"):
+                rebuilt = "|" + rebuilt
+            if not rebuilt.endswith("|"):
+                rebuilt = rebuilt + "|"
+            output.append(rebuilt)
+            i += 1
+            continue
+
+        output.append(line)
+        i += 1
+
+    # Normalizar separadores: garantizar al menos 3 guiones por celda.
+    def _fix_separator(match):
+        cells = match.group(0).split("|")
+        fixed = []
+        for cell in cells:
+            c = cell.strip()
+            if c and set(c) <= {"-", ":", " "}:
+                # Forzar 3 guiones mínimos conservando ':' de alineación
+                left_colon = c.startswith(":")
+                right_colon = c.endswith(":")
+                core = "---"
+                new_c = (":" if left_colon else "") + core + (":" if right_colon else "")
+                fixed.append(new_c)
+            else:
+                fixed.append(c)
+        return "|" + "|".join(fixed[1:-1]) + "|" if len(fixed) >= 3 else match.group(0)
+
+    text = "\n".join(output)
+    text = re.sub(
+        r"^\|[\s\-:|]+\|$",
+        _fix_separator,
+        text,
+        flags=re.MULTILINE,
+    )
+    return text
 
 def isolate_tables(text: str):
     if not text:
@@ -2194,7 +2598,7 @@ def chunk_markdown(text: str, max_chars: int = MAX_CHARS_PER_CHUNK):
             )
 
     if dropped:
-        print(f"[CHUNK] {dropped} chunks vacíos descartados.")
+        log(f"[CHUNK] {dropped} chunks vacíos descartados.")
 
     return filtered
 
@@ -2338,7 +2742,7 @@ Incluye título, autores y afiliaciones cuando estén presentes.
                 DEEPSEEK_BASE_URL, headers=headers, json=payload,
             )
             elapsed = time.perf_counter() - started
-            print(f"[TRANSLATION] DeepSeek response: {elapsed:.2f}s")
+            log(f"[TRANSLATION] DeepSeek response: {elapsed:.2f}s")
 
             if response.status_code == 429 or response.status_code >= 500:
                 raise httpx.HTTPStatusError(
@@ -2359,7 +2763,7 @@ Incluye título, autores y afiliaciones cuando estén presentes.
             # que el chunk realmente no tenía texto traducible.
             # ------------------------------------------------
             if _is_deepseek_refusal(content):
-                print(
+                log(
                     f"[TRANSLATION] DeepSeek se negó a traducir. "
                     f"Preview chunk: {text[:200]!r}"
                 )
@@ -2389,7 +2793,7 @@ async def translate_chunk(
 ) -> str:
     key = api_key or DEEPSEEK_API_KEYS[index % len(DEEPSEEK_API_KEYS)]
 
-    print(
+    log(
         f"[TRANSLATION] DeepSeek chunk {index + 1}/{total} "
         f"(key {DEEPSEEK_API_KEYS.index(key) + 1})"
     )
@@ -2419,7 +2823,7 @@ async def _translation_worker(
 
         index, chunk = item
         try:
-            print(f"[TRANSLATION] Worker {worker_id} → chunk {index + 1}/{total}")
+            log(f"[TRANSLATION] Worker {worker_id} → chunk {index + 1}/{total}")
             results[index] = await translate_chunk(
                 chunk, index, total, api_key=api_key,
             )
@@ -2450,7 +2854,7 @@ async def translate_markdown(markdown: str, model: Optional[str] = None):
         len(chunks),
     )
 
-    print(f"[TRANSLATION] {len(chunks)} chunks | {worker_count} workers / API keys")
+    log(f"[TRANSLATION] {len(chunks)} chunks | {worker_count} workers / API keys")
 
     queue = asyncio.Queue()
     results: list = [None] * len(chunks)
@@ -2516,7 +2920,7 @@ def convert_local_images_to_base64(markdown: str, image_dir: Path):
             markdown = markdown.replace(str(image_path), data_uri)
             markdown = markdown.replace(image_path.name, data_uri)
         except Exception as e:
-            print(f"[IMAGE] Error: {image_path}: {e}")
+            log(f"[IMAGE] Error: {image_path}: {e}")
 
     return markdown
 
@@ -2636,26 +3040,50 @@ def _make_visible_page_markers(
     Convierte los marcadores estructurales en indicadores visibles.
 
     Reglas estrictas:
+    - Acepta todas las variantes de `<!-- PAGE:N -->` (case-insensitive).
     - El marker SIEMPRE queda en su propia línea.
-    - SIEMPRE queda una línea en blanco antes y después.
-    - Nunca queda dentro de un blockquote ni pegado a texto.
+    - Se fuerza línea en blanco antes y después.
+    - Si la línea previa era un blockquote, se cierra antes del marker.
+    - Se detecta también la variante ya "renderizada" `**Página N de M**`
+      inline y se separa.
     """
     if not markdown:
         return markdown
 
-    # Paso 1: aislar todos los markers a su propia línea.
+    # 1) Normalizar TODOS los markers a su propia línea aislada.
     markdown = re.sub(
-        r"[ \t]*(<!--\s*PAGE:\d+\s*-->)[ \t]*",
+        r"[ \t]*(<!--\s*PAGE\s*:?\s*\d+\s*-->)[ \t]*",
         r"\n\n\1\n\n",
         markdown,
+        flags=re.IGNORECASE,
     )
     markdown = re.sub(r"\n{4,}", "\n\n\n", markdown)
 
+    # 2) Si DeepSeek ya dejó `**Página N de M**` inline, separarlo.
+    #    Patrón laxo para capturar variantes.
+    markdown = re.sub(
+        r"[ \t]+(\*\*\s*Página\s+\d+\s+de\s+\d+\s*\*\*)[ \t]*",
+        r"\n\n\1\n\n",
+        markdown,
+        flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"(\*\*\s*Página\s+\d+\s+de\s+\d+\s*\*\*)[ \t]+",
+        r"\1\n\n",
+        markdown,
+        flags=re.IGNORECASE,
+    )
+
+    # 3) Convertir cada marker a su forma visible, siempre con doble
+    #    línea en blanco después, para evitar "lazy continuation".
     lines = markdown.splitlines()
     output = []
 
     for line in lines:
-        match = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+        match = re.match(
+            r"^\s*<!--\s*PAGE\s*:?\s*(\d+)\s*-->\s*$",
+            line, re.IGNORECASE,
+        )
         if not match:
             output.append(line)
             continue
@@ -2664,25 +3092,18 @@ def _make_visible_page_markers(
         source_page = page + page_offset
         total = source_page_count or page_count
 
-        # Eliminar TODAS las líneas vacías al final para colocar el marker
-        # en posición limpia.
+        # Cerrar cualquier blockquote abierto antes del marker.
         while output and not output[-1].strip():
             output.pop()
-
-        # Si la última línea de output es un blockquote, agregar una línea
-        # en blanco extra para forzar el cierre del blockquote antes del
-        # marker. Sin esto, el marker puede heredar el contexto de cita.
         if output and output[-1].lstrip().startswith(">"):
             output.append("")
-
         if output:
             output.append("")
 
         output.append(f"> **Página {source_page} de {total}**")
         output.append("")
-        output.append("")  # doble blank line: garantiza salida del blockquote
+        output.append("")  # segundo blank: garantiza cierre del blockquote
 
-    # Colapsar excesos al final.
     while output and not output[-1].strip():
         output.pop()
 
@@ -2837,7 +3258,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
 
     cached = load_cache(key)
     if cached is not None:
-        print("[CACHE] Resultado encontrado.")
+        log("[CACHE] Resultado encontrado.")
         return cached
 
     temp_dir = Path(tempfile.mkdtemp(prefix="psihub_"))
@@ -2862,7 +3283,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         # ------------------------------------------------
         # 1. LAYOUT
         # ------------------------------------------------
-        print("\n[PIPELINE] 1/8 Analizando estructura...")
+        log("\n[PIPELINE] 1/8 Analizando estructura...")
         layout_profile = analyze_document_layout(doc)
 
         document_model = build_document_model(doc)
@@ -2875,7 +3296,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         model_sequence_issues = audit_block_sequence(document_model)
 
         print_layout_profile(layout_profile)
-        print(
+        log(
             f"[DOC MODEL] {document_model.page_count} páginas | "
             f"{len(document_model.blocks)} bloques | "
             f"{len(visual_candidate_pages)} páginas de alta complejidad | "
@@ -2885,9 +3306,9 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         # ------------------------------------------------
         # 2. LIMPIEZA FÍSICA
         # ------------------------------------------------
-        print("[PIPELINE] 2/8 Limpiando elementos editoriales...")
+        log("[PIPELINE] 2/8 Limpiando elementos editoriales...")
         removed = clean_pdf_using_layout(doc, layout_profile)
-        print(f"[PDF CLEAN] Elementos eliminados: {removed}")
+        log(f"[PDF CLEAN] Elementos eliminados: {removed}")
 
         visual_pdf_path = temp_dir / "visual_source.pdf"
         doc.save(str(visual_pdf_path), garbage=3, deflate=True)
@@ -2895,9 +3316,12 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         # ------------------------------------------------
         # 3. EXTRACCIÓN
         # ------------------------------------------------
-        print("[PIPELINE] 3/8 Extrayendo Markdown...")
         raw_markdown = extract_markdown_and_images(doc, image_dir)
         raw_markdown = add_page_markers(raw_markdown)
+
+        # Tokenizar markers ANTES de limpiar y traducir, para que DeepSeek
+        # no los reescriba ni los funda con el texto.
+        raw_markdown = hide_page_markers_for_translation(raw_markdown)
 
         # Extraer notas de correspondencia antes de limpiar: si quedan en
         # medio del cuerpo, parten párrafos científicos.
@@ -2917,7 +3341,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         visual_diagnostics = []
         visual_hints = {}
         if os.getenv("ENABLE_VISUAL_LAYOUT_AI", "1").strip().lower() not in {"0", "false", "no"}:
-            print("[PIPELINE] 3.5/8 Analizando fronteras con visión...")
+            log("[PIPELINE] 3.5/8 Analizando fronteras con visión...")
             try:
                 visual_diagnostics = await analyze_pdf_boundaries(str(visual_pdf_path))
                 visual_hints = boundary_hints_by_page(visual_diagnostics)
@@ -2956,7 +3380,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
                         visual_hints.setdefault(pno, {})["reading_order_warning"] = True
                         visual_hints[pno]["visual_audit"] = audit
 
-                print(
+                log(
                     f"[VISION] {len(visual_diagnostics)} fronteras + "
                     f"{len(visual_page_audits)} auditorías de página"
                 )
@@ -2965,27 +3389,29 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
                     if pattern not in layout_profile.repeated_headers:
                         layout_profile.repeated_headers.append(pattern)
 
-                print(
+                log(
                     f"[VISION] {len(visual_patterns)} patrones editoriales confirmados"
                 )
             except Exception as ve:
-                print(f"[VISION] Error no fatal: {ve}. Continuando sin hints visuales.")
+                log(f"[VISION] Error no fatal: {ve}. Continuando sin hints visuales.")
                 visual_hints = {}
         else:
-            print("[VISION] Desactivado por ENABLE_VISUAL_LAYOUT_AI")
+            log("[VISION] Desactivado por ENABLE_VISUAL_LAYOUT_AI")
 
         # ------------------------------------------------
         # 4. LIMPIEZA MARKDOWN
         # ------------------------------------------------
-        print("[PIPELINE] 4/8 Limpiando Markdown...")
+        log("[PIPELINE] 4/8 Limpiando Markdown...")
         raw_markdown = preprocess_raw_markdown(raw_markdown)
         raw_markdown = remove_obvious_editorial_noise(raw_markdown)
         raw_markdown = remove_residual_editorial_lines(raw_markdown, layout_profile)
 
-        # Aplicar señales de Vision ANTES de unir párrafos: las tablas,
-        # listas y citas interrumpidas necesitan ver los markers de página
-        # intactos para identificar dónde ocurre la ruptura.
+        # Aplicar merges guiados por Vision en orden de especificidad:
+        # 1) Fragmentos exactos (mayor precisión, gracias a left_tail/right_head).
+        # 2) Tablas/listas/citas (por tipo de estructura).
+        # 3) Párrafos por heurística (fallback).
         if visual_hints:
+            raw_markdown = apply_vision_fragment_merges(raw_markdown, visual_hints)
             raw_markdown = merge_tables_across_pages(raw_markdown, visual_hints)
             raw_markdown = merge_lists_across_pages(raw_markdown, visual_hints)
             raw_markdown = merge_interrupted_citations(raw_markdown, visual_hints)
@@ -2996,27 +3422,31 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         raw_markdown = optimize_markdown_for_mobile(raw_markdown)
 
         raw_signal = _markdown_text_signal(raw_markdown)
-        print(f"[MARKDOWN] Señal de texto tras limpieza: {raw_signal} chars")
+        log(f"[MARKDOWN] Señal de texto tras limpieza: {raw_signal} chars")
 
         # ------------------------------------------------
         # 5. IDIOMA
         # ------------------------------------------------
-        print("[PIPELINE] 5/8 Detectando idioma...")
+        log("[PIPELINE] 5/8 Detectando idioma...")
         source_language = detect_language(raw_markdown)
-        print(f"[LANGUAGE] {source_language}")
+        log(f"[LANGUAGE] {source_language}")
 
         # ------------------------------------------------
         # 6. TABLAS + REFERENCIAS
         # ------------------------------------------------
-        print("[PIPELINE] 6/8 Preparando tablas y referencias...")
+        log("[PIPELINE] 6/8 Preparando tablas y referencias...")
         raw_markdown = number_references(raw_markdown)
+
+        # Reparar tablas mal formadas ANTES de aislarlas.
+        raw_markdown = repair_broken_tables(raw_markdown)
+
         markdown_for_translation, tables = isolate_tables(raw_markdown)
 
         # ------------------------------------------------
         # GUARD PRE-TRADUCCIÓN
         # ------------------------------------------------
         pre_signal = _markdown_text_signal(markdown_for_translation)
-        print(
+        log(
             f"[GUARD] raw_markdown={raw_signal} chars | "
             f"markdown_for_translation={pre_signal} chars | "
             f"tablas aisladas={len(tables)}"
@@ -3037,11 +3467,16 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
         # ------------------------------------------------
         # 7. TRADUCCIÓN PARALELA
         # ------------------------------------------------
-        print("[PIPELINE] 7/8 Traduciendo cuerpo + tablas en paralelo...")
         tables, translated_markdown = await asyncio.gather(
             translate_tables(tables, model),
             translate_markdown(markdown_for_translation, model),
         )
+
+        translated_markdown = restore_page_markers_after_translation(translated_markdown)
+        translated_markdown = repair_broken_tables(translated_markdown)
+
+        # Restaurar markers antes de todo el postprocesado.
+        translated_markdown = restore_page_markers_after_translation(translated_markdown)
 
         # ------------------------------------------------
         # RESTAURAR TABLAS
@@ -3051,7 +3486,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
                 # ------------------------------------------------
         # 8. POSTPROCESADO
         # ------------------------------------------------
-        print("[PIPELINE] 8/8 Optimizando lectura...")
+        log("[PIPELINE] 8/8 Optimizando lectura...")
         translated_markdown = postprocess_markdown(translated_markdown)
         translated_markdown = convert_local_images_to_base64(
             translated_markdown, image_dir
@@ -3159,7 +3594,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
 # ============================================================
 
 async def process_url(url: str, model: Optional[str] = None):
-    print(f"[DOWNLOAD] {url}")
+    log(f"[DOWNLOAD] {url}")
     pdf_bytes = await download_pdf(url)
     return await process_pdf(pdf_bytes, model)
 
@@ -3190,7 +3625,7 @@ async def api_translate(request: TranslateRequest):
     except httpx.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"Error descargando PDF: {e}")
     except Exception as e:
-        print(f"[ERROR] {type(e).__name__}: {e}")
+        log(f"[ERROR] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3208,7 +3643,7 @@ async def api_translate_file(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] {type(e).__name__}: {e}")
+        log(f"[ERROR] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3325,6 +3760,42 @@ sin eliminar contenido académico legítimo.
 
 app = gr.mount_gradio_app(app, demo, path="/")
 
+# ============================================================
+# ENDPOINTS DE DEBUG: LOGS EN VIVO
+# ============================================================
+
+@app.get("/api/logs")
+async def api_logs(since: float = 0.0, limit: int = 500):
+    """Devuelve las últimas entradas del buffer de logs."""
+    entries = [e for e in LOG_BUFFER if e["t"] >= since]
+    return JSONResponse(content={
+        "entries": entries[-limit:],
+        "count": len(entries),
+    })
+
+
+@app.get("/api/logs/stream")
+async def api_logs_stream():
+    """Server-Sent Events: stream de logs en vivo."""
+    from fastapi.responses import StreamingResponse
+    import json as _json
+
+    async def event_generator():
+        last_t = time.time()
+        while True:
+            await asyncio.sleep(0.5)
+            new_entries = [e for e in LOG_BUFFER if e["t"] > last_t]
+            if new_entries:
+                last_t = new_entries[-1]["t"]
+                for entry in new_entries:
+                    yield f"data: {_json.dumps(entry)}\n\n"
+            else:
+                yield ": keepalive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+    )
 
 # ============================================================
 # MAIN
