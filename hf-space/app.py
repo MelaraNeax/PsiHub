@@ -3676,7 +3676,42 @@ async def health():
         "translation_backend": "DeepSeek",
         "translation_concurrency": TRANSLATION_CONCURRENCY,
     }
+# ============================================================
+# ENDPOINTS DE DEBUG: LOGS EN VIVO
+# ============================================================
 
+@app.get("/api/logs")
+async def api_logs(since: float = 0.0, limit: int = 500):
+    """Devuelve las últimas entradas del buffer de logs."""
+    entries = [e for e in LOG_BUFFER if e["t"] >= since]
+    return JSONResponse(content={
+        "entries": entries[-limit:],
+        "count": len(entries),
+    })
+
+
+@app.get("/api/logs/stream")
+async def api_logs_stream():
+    """Server-Sent Events: stream de logs en vivo."""
+    from fastapi.responses import StreamingResponse
+    import json as _json
+
+    async def event_generator():
+        last_t = time.time()
+        while True:
+            await asyncio.sleep(0.5)
+            new_entries = [e for e in LOG_BUFFER if e["t"] > last_t]
+            if new_entries:
+                last_t = new_entries[-1]["t"]
+                for entry in new_entries:
+                    yield f"data: {_json.dumps(entry)}\n\n"
+            else:
+                yield ": keepalive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+    )
 
 # ============================================================
 # GRADIO
@@ -3759,43 +3794,6 @@ sin eliminar contenido académico legítimo.
 
 
 app = gr.mount_gradio_app(app, demo, path="/")
-
-# ============================================================
-# ENDPOINTS DE DEBUG: LOGS EN VIVO
-# ============================================================
-
-@app.get("/api/logs")
-async def api_logs(since: float = 0.0, limit: int = 500):
-    """Devuelve las últimas entradas del buffer de logs."""
-    entries = [e for e in LOG_BUFFER if e["t"] >= since]
-    return JSONResponse(content={
-        "entries": entries[-limit:],
-        "count": len(entries),
-    })
-
-
-@app.get("/api/logs/stream")
-async def api_logs_stream():
-    """Server-Sent Events: stream de logs en vivo."""
-    from fastapi.responses import StreamingResponse
-    import json as _json
-
-    async def event_generator():
-        last_t = time.time()
-        while True:
-            await asyncio.sleep(0.5)
-            new_entries = [e for e in LOG_BUFFER if e["t"] > last_t]
-            if new_entries:
-                last_t = new_entries[-1]["t"]
-                for entry in new_entries:
-                    yield f"data: {_json.dumps(entry)}\n\n"
-            else:
-                yield ": keepalive\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-    )
 
 # ============================================================
 # MAIN
