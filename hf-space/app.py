@@ -138,7 +138,7 @@ DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # IMPORTANTE: subir esta versión invalida todos los caches anteriores.
-PIPELINE_VERSION = "2026-09-12-reader-master-v20"
+PIPELINE_VERSION = "2026-09-12-reader-master-v21"
 
 PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
 PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1091,18 +1091,43 @@ def _classify_block_kind(block: dict, page_height: float) -> str:
     return "paragraph"
 
 
+def _looks_like_table_region(blocks: list[dict], page_width: float) -> bool:
+    """
+    Detecta si una página contiene una tabla grande que NO debe reordenarse
+    por columnas. Señales:
+    - Muchos bloques pequeños en la misma Y con X regularmente espaciados.
+    - Bloques con texto corto (celdas).
+    - Frecuencia alta de números y valores.
+    """
+    if len(blocks) < 6:
+        return False
+
+    # Agrupar bloques por y (misma fila aproximada)
+    rows: dict[int, list] = {}
+    for b in blocks:
+        key = int(b["y0"] // 10)
+        rows.setdefault(key, []).append(b)
+
+    # Contar filas con 3+ bloques pequeños (celdas típicas)
+    table_rows = 0
+    for row in rows.values():
+        if len(row) < 3:
+            continue
+        avg_len = sum(len(b["text"]) for b in row) / len(row)
+        avg_width = sum(b["x1"] - b["x0"] for b in row) / len(row)
+        # Celdas: texto corto, ancho pequeño
+        if avg_len < 80 and avg_width < page_width * 0.35:
+            table_rows += 1
+
+    return table_rows >= 3
+
+
 def extract_page_column_aware(
     page,
     layout_hint: Optional[dict] = None,
     header_height: float = 0.0,
     footer_height: float = 0.0,
 ) -> str:
-    """
-    Extrae el texto de una página respetando la estructura de columnas.
-
-    Si `layout_hint` viene de Vision, se usa su `column_split_x_pct` y
-    `reading_order`. Si no, se detecta geométricamente por mediana de x.
-    """
     page_rect = page.rect
     page_width = page_rect.width
     page_height = page_rect.height
@@ -1132,7 +1157,16 @@ def extract_page_column_aware(
     if not blocks:
         return ""
 
-    # --- Decidir split vertical ---
+    # ------------------------------------------------------------
+    # FIX CRÍTICO: si hay tabla, NO reordenar por columnas.
+    # Se usa el orden natural de PyMuPDF (ya respeta tablas).
+    # ------------------------------------------------------------
+    if _looks_like_table_region(blocks, page_width):
+        print(f"    [COLUMN-AWARE] Tabla detectada; usando orden natural.")
+        blocks.sort(key=lambda b: (b["y0"], b["x0"]))
+        return "\n\n".join(b["text"] for b in blocks)
+
+    # ... resto del código original sin cambios ...
     if layout_hint and not layout_hint.get("error"):
         n_cols = int(layout_hint.get("num_columns", 1) or 1)
         split_pct = float(layout_hint.get("column_split_x_pct") or 0.5)
@@ -1140,19 +1174,15 @@ def extract_page_column_aware(
         column_split_x = page_width * split_pct
     else:
         n_cols = 1
-        split_pct = 0.5
         order = "top_to_bottom"
         column_split_x = page_width * 0.5
 
-    # --- Si Vision dijo 1 columna, ordenar por y y listo ---
     if n_cols == 1:
         blocks.sort(key=lambda b: (b["y0"], b["x0"]))
         return "\n\n".join(b["text"] for b in blocks)
 
-    # --- Si 2 columnas: clasificar bloques ---
     left, right, full = [], [], []
     for b in blocks:
-        # Full-width si cruza el split por mucho
         if b["x0"] < column_split_x - page_width * 0.12 and \
            b["x1"] > column_split_x + page_width * 0.12:
             full.append(b)
@@ -1161,28 +1191,19 @@ def extract_page_column_aware(
         else:
             right.append(b)
 
-    # Ordenar cada grupo verticalmente
     left.sort(key=lambda b: b["y0"])
     right.sort(key=lambda b: b["y0"])
     full.sort(key=lambda b: b["y0"])
 
-    # Bloques de ancho completo que van antes del inicio de columnas
-    # (título de página, abstract heading, etc.)
-    column_start_y = min(
-        [b["y0"] for b in (left + right)] or [page_height]
-    )
+    column_start_y = min([b["y0"] for b in (left + right)] or [page_height])
     leading_full = [b for b in full if b["y0"] < column_start_y - 5]
     middle_full = [b for b in full if b["y0"] >= column_start_y - 5]
 
-    # Armar orden final
     if order == "left_then_right":
         ordered = leading_full + left + right + middle_full
     elif order == "mixed" and middle_full:
-        # Intercalar full-width en medio: aproximación por posición Y
         ordered = leading_full + left + right
-        # Insertar middle_full donde corresponda por Y
         for fb in middle_full:
-            # Insertar antes del primer bloque cuya y sea mayor
             insert_idx = len(ordered)
             for i, ob in enumerate(ordered):
                 if ob["y0"] > fb["y0"]:
@@ -1190,17 +1211,14 @@ def extract_page_column_aware(
                     break
             ordered.insert(insert_idx, fb)
     else:
-        # Fallback conservador
         ordered = leading_full + left + right + middle_full
 
-    # --- Convertir a Markdown ---
     md_parts = []
     for b in ordered:
-        text = b["text"]
         if b["kind"] == "heading":
-            md_parts.append(f"## {text.strip()}")
+            md_parts.append(f"## {b['text'].strip()}")
         else:
-            md_parts.append(text)
+            md_parts.append(b["text"])
     return "\n\n".join(md_parts)
 
 async def extract_markdown_column_aware(
@@ -1697,13 +1715,13 @@ def postprocess_markdown(text: str) -> str:
 
 def normalize_footnote_formatting(markdown: str) -> str:
     """
-    Fuerza un formato uniforme para notas al pie: blockquote con número
-    en negrita.
+    Fuerza un formato uniforme para notas al pie.
 
     NO toca:
-      - referencias bibliográficas (detectadas por heading o por tener año)
-      - líneas ya indexadas como referencias (**N.** texto)
-      - headings, tablas, listas, blockquotes, imágenes
+      - headings (# ...) 
+      - referencias (**N.** texto o con año)
+      - líneas que parecen headings de sección (N. Título con mayúscula)
+      - tablas, listas, blockquotes existentes
     """
     if not markdown:
         return markdown
@@ -1715,7 +1733,6 @@ def normalize_footnote_formatting(markdown: str) -> str:
     for line in lines:
         stripped = line.strip()
 
-        # Detección robusta de inicio de referencias
         if not in_references and _is_references_heading(stripped):
             in_references = True
             output.append(line)
@@ -1725,27 +1742,41 @@ def normalize_footnote_formatting(markdown: str) -> str:
             output.append(line)
             continue
 
-        # Línea ya formateada como referencia indexada → no tocar
         if re.match(r"^\*\*\d+\.\*\*", stripped):
             output.append(line)
             continue
 
-        # Línea con año de 4 dígitos → probablemente referencia, no tocar
         if _looks_like_reference_entry(stripped):
             output.append(line)
             continue
 
-        # Nota al pie: número + espacio + texto corto
+        # FIX: si el texto después del número empieza con mayúscula y
+        # contiene pocas palabras (tipo "3. Resultados"), es un heading,
+        # no una nota al pie.
         m = re.match(r"^(\d{1,3})[.)]?\s+(.+)$", stripped)
-        if (
-            m
-            and len(stripped) < 300
-            and not stripped.startswith(("|", "#", ">", "- ", "* ", "!["))
-        ):
-            number = m.group(1)
+        if m:
             body = m.group(2).strip()
-            output.append(f"> **{number}.** {body}")
-            continue
+            # Heurística: heading si es corto + empieza con mayúscula + 
+            # no termina en punto + pocas palabras
+            words = body.split()
+            looks_like_heading = (
+                len(words) <= 6
+                and not body.endswith((".", ";", ",", ":"))
+                and body[0].isupper()
+            )
+            if looks_like_heading:
+                # Preservar como heading
+                output.append(f"## {body}")
+                continue
+
+            # Es nota al pie legítima
+            if (
+                len(stripped) < 300
+                and not stripped.startswith(("|", "#", ">", "- ", "* ", "!["))
+            ):
+                number = m.group(1)
+                output.append(f"> **{number}.** {body}")
+                continue
 
         output.append(line)
 
@@ -3222,21 +3253,9 @@ def _make_visible_page_markers(
     page_offset: int = 0,
     source_page_count: Optional[int] = None,
 ) -> str:
-    """
-    Convierte los marcadores estructurales en indicadores visibles.
-
-    Reglas estrictas:
-    - Acepta todas las variantes de `<!-- PAGE:N -->` (case-insensitive).
-    - El marker SIEMPRE queda en su propia línea.
-    - Se fuerza línea en blanco antes y después.
-    - Si la línea previa era un blockquote, se cierra antes del marker.
-    - Se detecta también la variante ya "renderizada" `**Página N de M**`
-      inline y se separa.
-    """
     if not markdown:
         return markdown
 
-    # 1) Normalizar TODOS los markers a su propia línea aislada.
     markdown = re.sub(
         r"[ \t]*(<!--\s*PAGE\s*:?\s*\d+\s*-->)[ \t]*",
         r"\n\n\1\n\n",
@@ -3244,24 +3263,13 @@ def _make_visible_page_markers(
         flags=re.IGNORECASE,
     )
     markdown = re.sub(r"\n{4,}", "\n\n\n", markdown)
-
-    # 2) Si DeepSeek ya dejó `**Página N de M**` inline, separarlo.
-    #    Patrón laxo para capturar variantes.
     markdown = re.sub(
         r"[ \t]+(\*\*\s*Página\s+\d+\s+de\s+\d+\s*\*\*)[ \t]*",
         r"\n\n\1\n\n",
         markdown,
         flags=re.IGNORECASE,
     )
-    markdown = re.sub(
-        r"(\*\*\s*Página\s+\d+\s+de\s+\d+\s*\*\*)[ \t]+",
-        r"\1\n\n",
-        markdown,
-        flags=re.IGNORECASE,
-    )
 
-    # 3) Convertir cada marker a su forma visible, siempre con doble
-    #    línea en blanco después, para evitar "lazy continuation".
     lines = markdown.splitlines()
     output = []
 
@@ -3278,17 +3286,20 @@ def _make_visible_page_markers(
         source_page = page + page_offset
         total = source_page_count or page_count
 
-        # Cerrar cualquier blockquote abierto antes del marker.
+        # FIX: cerrar CUALQUIER blockquote abierto con doble línea en blanco.
         while output and not output[-1].strip():
             output.pop()
         if output and output[-1].lstrip().startswith(">"):
             output.append("")
+            output.append("")
+
         if output:
             output.append("")
 
         output.append(f"> **Página {source_page} de {total}**")
         output.append("")
-        output.append("")  # segundo blank: garantiza cierre del blockquote
+        output.append("")
+        output.append("")  # TRES blank lines: garantiza salida de blockquote
 
     while output and not output[-1].strip():
         output.pop()
