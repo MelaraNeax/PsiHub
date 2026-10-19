@@ -1,0 +1,3787 @@
+# ============================================================
+# PsiHub Reader — v8 con fixes de tablas partidas y autores
+# ============================================================
+
+import os
+import re
+import time
+import json
+import hashlib
+import tempfile
+import base64
+import asyncio
+import shutil
+from pathlib import Path
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass, asdict
+from typing import Optional, Any
+
+import httpx
+import fitz
+import pymupdf4llm
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+
+from pydantic import BaseModel
+
+import gradio as gr
+import uvicorn
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+DEEPSEEK_API_KEYS = [
+    os.getenv(f"DEEPSEEK_API_KEY_{i}", "").strip()
+    for i in range(1, 7)
+]
+_legacy_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+if not any(DEEPSEEK_API_KEYS) and _legacy_key:
+    DEEPSEEK_API_KEYS = [_legacy_key]
+DEEPSEEK_API_KEYS = [k for k in DEEPSEEK_API_KEYS if k]
+
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_BASE_URL = os.getenv(
+    "DEEPSEEK_BASE_URL",
+    "https://api.deepseek.com/chat/completions",
+)
+
+TRANSLATION_CONCURRENCY = max(
+    1,
+    min(
+        int(os.getenv("TRANSLATION_CONCURRENCY", "6")),
+        len(DEEPSEEK_API_KEYS) if DEEPSEEK_API_KEYS else 1,
+    ),
+)
+
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
+MISTRAL_OCR_MODEL = os.getenv("MISTRAL_OCR_MODEL", "mistral-ocr-latest")
+MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr"
+MISTRAL_TIMEOUT = int(os.getenv("MISTRAL_TIMEOUT", "180"))
+MISTRAL_MAX_RETRIES = 3
+MISTRAL_COST_PER_PAGE = float(os.getenv("MISTRAL_COST_PER_PAGE", "0.004"))
+
+ENABLE_FIGURE_TRANSLATION = os.getenv(
+    "ENABLE_FIGURE_TRANSLATION", "0"
+).strip().lower() in {"1", "true", "yes"}
+
+CACHE_DIR = Path(os.getenv("CACHE_DIR", "./cache")).resolve()
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+PDF_STORE_DIR = CACHE_DIR / "source_pdfs"
+PDF_STORE_DIR.mkdir(parents=True, exist_ok=True)
+
+READER_PDF_DIR = CACHE_DIR / "reader_pdfs"
+READER_PDF_DIR.mkdir(parents=True, exist_ok=True)
+
+IMAGES_STORE_DIR = CACHE_DIR / "images"
+IMAGES_STORE_DIR.mkdir(parents=True, exist_ok=True)
+
+MD_STORE_DIR = CACHE_DIR / "translated_md"
+MD_STORE_DIR.mkdir(parents=True, exist_ok=True)
+
+PIPELINE_VERSION = "2026-09-15-reader-phase4-fix6"
+
+MAX_CHARS_PER_CHUNK = int(os.getenv("MAX_CHARS_PER_CHUNK", "18000"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "180"))
+
+DEEPSEEK_HTTP_CLIENT = httpx.AsyncClient(
+    timeout=httpx.Timeout(REQUEST_TIMEOUT),
+    limits=httpx.Limits(
+        max_connections=max(20, TRANSLATION_CONCURRENCY * 3),
+        max_keepalive_connections=max(10, TRANSLATION_CONCURRENCY * 2),
+    ),
+)
+
+MISTRAL_HTTP_CLIENT = httpx.AsyncClient(
+    timeout=httpx.Timeout(MISTRAL_TIMEOUT, connect=15.0),
+    limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+)
+
+
+# ============================================================
+# LOGS
+# ============================================================
+
+LOG_BUFFER: deque = deque(maxlen=3000)
+
+
+def log(msg: str):
+    print(msg, flush=True)
+    LOG_BUFFER.append({"t": time.time(), "msg": msg})
+
+
+def log_section(title: str):
+    log("")
+    log("=" * 70)
+    log(f"  {title}")
+    log("=" * 70)
+
+
+# ============================================================
+# FASTAPI
+# ============================================================
+
+app = FastAPI(title="PsiHub Reader", version="8.0")
+
+
+class TranslateRequest(BaseModel):
+    url: str
+    model: Optional[str] = None
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip())
+
+
+def normalize_editorial_text(text: str) -> str:
+    text = normalize_whitespace(text)
+    text = re.sub(r"\b\d+\b", "#", text)
+    text = re.sub(r"\s*[-–—|]\s*", " - ", text)
+    return text.lower().strip()
+
+
+def _normalize_header_footer(text: str) -> str:
+    if not text:
+        return ""
+    t = re.sub(r"\s+", " ", text.strip().lower())
+    t = re.sub(r"\b\d+\b", "#", t)
+    return t.strip()
+
+
+def is_page_number(text: str) -> bool:
+    s = normalize_whitespace(text)
+    patterns = [
+        r"^\d+$", r"^[-–—]?\s*\d+\s*[-–—]?$", r"^page\s+\d+$",
+        r"^p\.?\s*\d+$", r"^\d+\s+(?:of|de)\s+\d+$",
+        r"^page\s+\d+\s+(?:of|de)\s+\d+$", r"^\d+\s*/\s*\d+$",
+    ]
+    return any(re.fullmatch(p, s, re.IGNORECASE) for p in patterns)
+
+
+def is_copyright_line(text: str) -> bool:
+    return bool(re.search(
+        r"(?:copyright|©|\(c\))\s*(?:19|20)\d{2}", text, re.IGNORECASE,
+    ))
+
+
+def is_editorial_artifact_line(text: str) -> bool:
+    s = normalize_whitespace(text)
+    if re.search(r"pages_[^\s]+\.qxd", s, re.IGNORECASE):
+        return True
+    if re.search(
+        r"^dialogues\s+clin\s+neurosci\.\s*\d{4};\d+:\d+[-–]\d+\.?$",
+        s, re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _markdown_text_signal(markdown: str) -> int:
+    if not markdown:
+        return 0
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", markdown)
+    text = re.sub(r"<img\b[^>]*>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    text = re.sub(r"^>\s*\*?Página\s+\d+[^\n]*$", " ", text,
+                  flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"^@@TABLE_\d+@@\s*$", " ", text, flags=re.MULTILINE)
+    text = re.sub(r"@@PAGE_\d+@@", " ", text)
+    return len(re.sub(r"\s+", " ", text).strip())
+
+
+def _is_deepseek_refusal(text: str) -> bool:
+    if not text:
+        return True
+    low = text.lower()[:800]
+    patterns = [
+        "no hay contenido textual", "no hay texto para traducir",
+        "no contiene texto extraíble", "no puedo traducir",
+        "no se puede traducir", "las páginas proporcionadas contienen",
+        "no hay nada que traducir", "el contenido está vacío",
+    ]
+    return any(p in low for p in patterns)
+
+
+# ============================================================
+# LAYOUT
+# ============================================================
+
+@dataclass
+class LayoutElement:
+    text: str
+    normalized: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    page: int
+    width: float
+    height: float
+    region: str
+    type: str = "text"
+    column: int = 0
+    is_full_width: bool = False
+    table_data: Optional[list] = None
+    confidence: float = 1.0
+    font_size: float = 0.0
+    is_bold: bool = False
+    heading_level: int = 0
+
+@dataclass
+class MistralPageBlock(LayoutElement):
+    raw_markdown: str = ""
+
+@dataclass
+class TextBlock(LayoutElement):
+    pass
+
+@dataclass
+class TableBlock(LayoutElement):
+    pass
+
+@dataclass
+class PageQualityReport:
+    page: int
+    score: float
+    text_coverage: float
+    reading_order: float
+    column_confidence: float
+    table_confidence: float
+    footnote_confidence: float
+    header_footer_confidence: float
+    fragmentation: float
+    suspicious_blocks: int
+    issues: list[str]
+    needs_mistral: bool
+    needs_review: bool
+
+@dataclass
+class DocumentQualityReport:
+    average_score: float
+    bad_pages: list[int]
+    review_pages: list[int]
+    pages: dict[int, PageQualityReport]
+
+@dataclass
+class TranslationQualityReport:
+    is_valid: bool
+    missing_blocks: int
+    missing_numbers: int
+    missing_citations: int
+    warnings: list[str]
+
+
+@dataclass
+class DocumentLayoutProfile:
+    page_count: int
+    page_width: float
+    page_height: float
+    header_height: float
+    footer_height: float
+    repeated_headers: list
+    repeated_footers: list
+    page_numbers: bool
+    likely_columns: int
+    body_top: float
+    body_bottom: float
+    first_page_special: bool
+    elements_removed_estimate: int = 0
+
+
+def classify_region(block_rect, page_rect, header_height, footer_height) -> str:
+    if block_rect.y1 <= header_height:
+        return "header"
+    if block_rect.y0 >= page_rect.height - footer_height:
+        return "footer"
+    return "body"
+
+
+def collect_page_elements(doc, header_fraction=0.12, footer_fraction=0.12):
+    elements = []
+    for page_index, page in enumerate(doc):
+        rect = page.rect
+        hh = rect.height * header_fraction
+        fh = rect.height * footer_fraction
+        for block in page.get_text("blocks"):
+            if len(block) < 5:
+                continue
+            x0, y0, x1, y1, text = block[:5]
+            text = text.strip()
+            if not text:
+                continue
+            br = fitz.Rect(x0, y0, x1, y1)
+            elements.append(LayoutElement(
+                text=text, normalized=normalize_editorial_text(text),
+                x0=x0, y0=y0, x1=x1, y1=y1, page=page_index + 1,
+                width=x1 - x0, height=y1 - y0,
+                region=classify_region(br, rect, hh, fh),
+            ))
+    return elements
+
+
+def detect_repeated_elements(elements, page_count, region):
+    pages_by_text = defaultdict(set)
+    for e in elements:
+        if e.region != region or not e.normalized:
+            continue
+        pages_by_text[e.normalized].add(e.page)
+    min_pages = 2 if page_count <= 2 else max(2, int(page_count * 0.30))
+    return {t for t, p in pages_by_text.items() if len(p) >= min_pages}
+
+
+def detect_page_numbers(elements):
+    return {e.page for e in elements
+            if e.region == "footer" and is_page_number(e.text)}
+
+
+def _cluster_1d(values: list[float], min_gap: float, max_clusters: int = 3) -> list[list[float]]:
+    """Cluster x-centers using the largest meaningful gaps, not overlapping x-ranges."""
+    if not values:
+        return []
+    vals = sorted(values)
+    groups = [[vals[0]]]
+    for value in vals[1:]:
+        if value - groups[-1][-1] >= min_gap and len(groups) < max_clusters:
+            groups.append([value])
+        else:
+            groups[-1].append(value)
+    return groups
+
+
+def _infer_column_boundaries(elements: list[LayoutElement], profile: DocumentLayoutProfile) -> list[tuple[float, float]]:
+    """Infer per-page column centers from body text, excluding centered title/header material."""
+    usable = []
+    for e in elements:
+        if e.type == "table" or e.region != "body":
+            continue
+        if len(e.text.strip()) < 15:
+            continue
+        center = (e.x0 + e.x1) / 2
+        # Centered blocks near the top are title/author material, not columns.
+        if e.y0 < min(profile.page_height * 0.24, 190) and abs(center - profile.page_width / 2) < profile.page_width * 0.16:
+            continue
+        # Very wide blocks are full-width content and must not determine columns.
+        if e.width >= profile.page_width * 0.70:
+            continue
+        usable.append(center)
+
+    if not usable or profile.likely_columns <= 1:
+        return [(0.0, profile.page_width)]
+
+    # Find the largest gaps between x-centers. This is much more robust than
+    # merging x-intervals, because a centered title can overlap both columns.
+    vals = sorted(usable)
+    desired = min(max(1, profile.likely_columns), 3)
+    gaps = [(vals[i + 1] - vals[i], i) for i in range(len(vals) - 1)]
+    gaps.sort(reverse=True)
+    cut_indices = sorted(i for gap, i in gaps[:desired - 1] if gap >= profile.page_width * 0.18)
+
+    if len(cut_indices) < desired - 1:
+        # If the document profile says two columns but the sample is sparse,
+        # use equal halves as a safe fallback.
+        if desired == 2:
+            mid = profile.page_width / 2
+            return [(0.0, mid), (mid, profile.page_width)]
+        return [(0.0, profile.page_width)]
+
+    groups = []
+    start_idx = 0
+    for cut in cut_indices:
+        groups.append(vals[start_idx:cut + 1])
+        start_idx = cut + 1
+    groups.append(vals[start_idx:])
+
+    centers = [sum(g) / len(g) for g in groups if g]
+    if len(centers) != desired:
+        return [(0.0, profile.page_width)]
+
+    boundaries = [0.0]
+    for a, b in zip(centers, centers[1:]):
+        boundaries.append((a + b) / 2)
+    boundaries.append(profile.page_width)
+    return [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
+
+
+def detect_columns(doc):
+    if doc.page_count == 0:
+        return 1
+    max_cols = 1
+    sample_pages = min(doc.page_count, 5)
+    for i in range(sample_pages):
+        page = doc[i]
+        rect = page.rect
+        centers = []
+        for block in page.get_text("blocks"):
+            if len(block) < 5:
+                continue
+            x0, y0, x1, y1, text = block[:5]
+            text = text.strip()
+            if not text or y0 < rect.height * 0.12 or y1 > rect.height * 0.88:
+                continue
+            width = x1 - x0
+            center = (x0 + x1) / 2
+            if width >= rect.width * 0.70:
+                continue
+            if y0 < min(rect.height * 0.24, 190) and abs(center - rect.width / 2) < rect.width * 0.16:
+                continue
+            if len(text) >= 15:
+                centers.append(center)
+
+        if len(centers) < 4:
+            continue
+        centers.sort()
+        gaps = sorted((centers[j + 1] - centers[j] for j in range(len(centers) - 1)), reverse=True)
+        if gaps and gaps[0] >= rect.width * 0.18:
+            candidate = 2
+            if len(gaps) > 1 and gaps[1] >= rect.width * 0.18:
+                candidate = 3
+            max_cols = max(max_cols, candidate)
+    return min(max_cols, 3)
+
+
+def _is_top_centered_block(e: LayoutElement, profile: DocumentLayoutProfile) -> bool:
+    center = (e.x0 + e.x1) / 2
+    return (
+        e.region == "body"
+        and e.y0 < min(profile.page_height * 0.24, 190)
+        and abs(center - profile.page_width / 2) <= profile.page_width * 0.16
+    )
+
+
+def assign_columns_and_types(elements: list[LayoutElement], profile: DocumentLayoutProfile):
+    columns = _infer_column_boundaries(elements, profile)
+    for e in elements:
+        e.is_full_width = False
+        e.column = 0
+
+        # Top-centered title/author blocks are structural full-width elements.
+        if _is_top_centered_block(e, profile):
+            e.is_full_width = True
+            e.column = 0
+        elif e.width >= profile.page_width * 0.72:
+            e.is_full_width = True
+            e.column = 0
+        else:
+            center = (e.x0 + e.x1) / 2
+            distances = [abs(center - (lo + hi) / 2) for lo, hi in columns]
+            e.column = min(range(len(distances)), key=lambda i: distances[i]) if distances else 0
+
+        # Footnotes are classified after column assignment so they can be
+        # rendered after the main body, independently of the column.
+        if e.region == "body" and e.y0 > profile.page_height * 0.70:
+            low_text = normalize_whitespace(e.text).lower()
+            if re.match(r"^(?:table|figure|fig\.?|tabla|figura)\s+\d+\s*[:.\-]", low_text):
+                continue
+            score = 0.0
+            if e.height > 40 or e.width > profile.page_width * 0.8:
+                score -= 0.5
+            if e.y0 > profile.page_height * 0.85:
+                score += 0.3
+            elif e.y0 > profile.page_height * 0.80:
+                score += 0.2
+            if re.match(r'^[*†‡§¶\d+]\s', e.text) or re.match(r'^\[\d+\]\s', e.text):
+                score += 0.4
+            if e.height < 12:
+                score += 0.2
+            if e.width < profile.page_width * 0.5:
+                score += 0.1
+            if score >= 0.5:
+                e.type = "footnote"
+                e.confidence = min(1.0, score)
+
+def analyze_document_layout(doc) -> DocumentLayoutProfile:
+    if doc.page_count == 0:
+        raise ValueError("El PDF no contiene páginas.")
+    first = doc[0]
+    elements = collect_page_elements(doc, 0.12, 0.12)
+    rh = detect_repeated_elements(elements, doc.page_count, "header")
+    rf = detect_repeated_elements(elements, doc.page_count, "footer")
+    return DocumentLayoutProfile(
+        page_count=doc.page_count,
+        page_width=round(first.rect.width, 2),
+        page_height=round(first.rect.height, 2),
+        header_height=round(first.rect.height * 0.12, 2),
+        footer_height=round(first.rect.height * 0.12, 2),
+        repeated_headers=sorted(list(rh)),
+        repeated_footers=sorted(list(rf)),
+        page_numbers=bool(detect_page_numbers(elements)),
+        likely_columns=detect_columns(doc),
+        body_top=0, body_bottom=0,
+        first_page_special=True,
+    )
+
+
+def should_remove_element(element, profile):
+    text = element.text.strip()
+    if not text:
+        return False, ""
+    # Editorial/copyright material in the bottom band must never enter the IR.
+    # Footnotes are handled separately because they are legitimate document content.
+    if is_copyright_line(text):
+        return True, "copyright/editorial footer"
+    if is_editorial_artifact_line(text):
+        return True, "editorial artifact"
+    if element.region == "footer" and is_page_number(text):
+        return True, "page number"
+    if element.region == "header":
+        if element.page == 1:
+            return True, "header"
+        if element.normalized in profile.repeated_headers:
+            return True, "repeated header"
+        return False, ""
+    if (element.region == "footer"
+            and element.normalized in profile.repeated_footers):
+        return True, "repeated footer"
+    return False, ""
+
+
+def _reading_order_score(elements: list[LayoutElement]) -> tuple[float, list[str]]:
+    """Detect obvious interleaving/inversion patterns after geometric ordering."""
+    body = [e for e in elements if e.type != "footnote" and not e.is_full_width]
+    if len(body) < 4:
+        return 1.0, []
+    issues = []
+    inversions = 0
+    comparisons = 0
+    # In a multi-column page, a column should not repeatedly jump back to an
+    # earlier column. The final IR is expected to be column-major.
+    last_col = body[0].column
+    switches = 0
+    for e in body[1:]:
+        comparisons += 1
+        if e.column != last_col:
+            switches += 1
+            if switches > max(2, len(body) // 3):
+                inversions += 1
+        last_col = e.column
+    score = max(0.0, 1.0 - min(1.0, inversions / max(1, comparisons)))
+    if inversions:
+        issues.append("unstable_reading_order")
+    return score, issues
+
+
+def _table_quality(elem: TableBlock) -> float:
+    rows = elem.table_data or []
+    if not rows:
+        return 0.0
+    widths = [len(r) for r in rows]
+    mode_width = Counter(widths).most_common(1)[0][0] if widths else 0
+    if mode_width < 2:
+        return 0.15
+
+    cells = [c for r in rows for c in r]
+    nonempty_cells = [str(c).strip() for c in cells if c is not None and str(c).strip()]
+    if not nonempty_cells:
+        return 0.0
+
+    ragged = sum(1 for w in widths if w != mode_width) / max(1, len(widths))
+    row_fill = [sum(1 for c in r if c is not None and str(c).strip()) / max(1, mode_width) for r in rows]
+    low_fill = sum(v < 0.50 for v in row_fill) / max(1, len(row_fill))
+    max_lines = max(len(c.splitlines()) for c in nonempty_cells)
+    total_lines = sum(len(c.splitlines()) for c in nonempty_cells)
+    dominant = max(len(c.splitlines()) for c in nonempty_cells) / max(1, total_lines)
+
+    score = 1.0
+    score -= 0.30 * ragged
+    score -= 0.40 * low_fill
+    score -= 0.20 * dominant
+
+    # Borderless academic tables are a known PyMuPDF failure mode: multiple
+    # logical rows get packed into one multiline cell. Detect that explicitly.
+    if max_lines > max(4, len(rows) * 2 + 1):
+        score = min(score, 0.25)
+    if low_fill >= 0.40:
+        score = min(score, 0.30)
+    if mode_width == 2 and len(rows) == 1:
+        score = min(score, 0.25)
+
+    return max(0.0, min(1.0, score))
+
+
+def evaluate_page_quality_v2(page_num: int, elements: list[LayoutElement]) -> PageQualityReport:
+    if not elements:
+        return PageQualityReport(
+            page=page_num, score=0.0, text_coverage=0.0, reading_order=0.0,
+            column_confidence=0.0, table_confidence=0.0, footnote_confidence=0.0,
+            header_footer_confidence=0.0, fragmentation=0.0, suspicious_blocks=0,
+            issues=["empty_page"], needs_mistral=True, needs_review=False,
+        )
+
+    text_elems = [e for e in elements if e.type != "table" and e.type != "footnote"]
+    text_length = sum(len(e.text) for e in text_elems)
+    page = elements[0].page
+    suspicious_blocks = sum(
+        1 for e in text_elems
+        if len(re.sub(r"\s+", "", e.text)) < 8
+    )
+
+    # Text coverage is deliberately capped and has diminishing returns. A
+    # badly ordered page with lots of text must not score as perfect.
+    text_coverage = min(1.0, text_length / 1800.0)
+    frag = min(1.0, suspicious_blocks / max(8.0, len(text_elems) * 0.35))
+    fragmentation = frag
+
+    reading_order, order_issues = _reading_order_score(elements)
+
+    non_full = [e for e in elements if not e.is_full_width and e.type != "footnote"]
+    cols = sorted(set(e.column for e in non_full))
+    column_confidence = 1.0
+    if len(cols) > 1:
+        # A valid column-major order has at most one transition from column 0
+        # to column 1 (and one to column 2). More transitions indicate mixing.
+        sequence = [e.column for e in non_full]
+        transitions = sum(a != b for a, b in zip(sequence, sequence[1:]))
+        expected = len(cols) - 1
+        excess = max(0, transitions - expected)
+        column_confidence = max(0.0, 1.0 - excess / max(2, len(sequence) - 1))
+
+    tables = [e for e in elements if isinstance(e, TableBlock) or e.type == "table"]
+    table_scores = [_table_quality(e) for e in tables if isinstance(e, TableBlock)]
+    table_confidence = min(table_scores) if table_scores else 1.0
+
+    footnotes = [e for e in elements if e.type == "footnote"]
+    footnote_confidence = (
+        sum(e.confidence for e in footnotes) / len(footnotes)
+        if footnotes else 1.0
+    )
+
+    issues = list(order_issues)
+    if text_coverage < 0.25 and text_length > 0:
+        issues.append("low_text_coverage")
+    if fragmentation > 0.45:
+        issues.append("high_fragmentation")
+    if column_confidence < 0.75:
+        issues.append("column_order_uncertain")
+    if table_confidence < 0.65:
+        issues.append("table_extraction_uncertain")
+    if footnotes and footnote_confidence < 0.65:
+        issues.append("footnote_detection_uncertain")
+
+    # Structural score: table failures and ordering failures have real weight.
+    score = (
+        0.30 * text_coverage
+        + 0.28 * reading_order
+        + 0.18 * column_confidence
+        + 0.14 * table_confidence
+        + 0.10 * footnote_confidence
+        - 0.18 * fragmentation
+    )
+    score = max(0.0, min(1.0, score))
+
+    needs_mistral = (
+        score < 0.48
+        or reading_order < 0.55
+        or column_confidence < 0.55
+        or table_confidence < 0.70
+    )
+    needs_review = not needs_mistral and (
+        score < 0.72
+        or reading_order < 0.78
+        or table_confidence < 0.70
+        or column_confidence < 0.78
+    )
+
+    return PageQualityReport(
+        page=page_num,
+        score=score,
+        text_coverage=text_coverage,
+        reading_order=reading_order,
+        column_confidence=column_confidence,
+        table_confidence=table_confidence,
+        footnote_confidence=footnote_confidence,
+        header_footer_confidence=1.0,
+        fragmentation=fragmentation,
+        suspicious_blocks=suspicious_blocks,
+        issues=sorted(set(issues)),
+        needs_mistral=needs_mistral,
+        needs_review=needs_review,
+    )
+
+def _block_style_info(page, block_no: int) -> tuple[float, bool, list[dict]]:
+    """Return max font size, bold flag and line metadata for a PDF text block."""
+    try:
+        data = page.get_text("dict")
+        for b in data.get("blocks", []):
+            if b.get("type") == 0 and b.get("number") == block_no:
+                spans = [s for ln in b.get("lines", []) for s in ln.get("spans", [])
+                         if (s.get("text") or "").strip()]
+                if not spans:
+                    return 0.0, False, []
+                size = max(float(s.get("size", 0) or 0) for s in spans)
+                bold = any("bold" in str(s.get("font", "")).lower() for s in spans)
+                lines = []
+                for ln in b.get("lines", []):
+                    ls = [s for s in ln.get("spans", []) if (s.get("text") or "").strip()]
+                    if ls:
+                        lines.append({
+                            "text": "".join(s.get("text", "") for s in ls).strip(),
+                            "all_bold": all("bold" in str(s.get("font", "")).lower() for s in ls),
+                            "max_size": max(float(s.get("size", 0) or 0) for s in ls),
+                            "spans": ls,
+                        })
+                return size, bold, lines
+    except Exception:
+        pass
+    return 0.0, False, []
+
+
+def _heading_level_for(text: str, font_size: float, is_bold: bool, page_num: int) -> int:
+    s = normalize_whitespace(text)
+    low = s.lower().rstrip(":")
+    if not s:
+        return 0
+    if page_num == 1 and font_size >= 14.0 and len(s) < 180:
+        return 1
+    if low in {"abstract", "resumen", "keywords", "palabras clave", "references", "referencias",
+               "bibliography", "bibliografía", "discussion", "discusión"}:
+        return 2
+    if low in {"implications", "implicaciones", "privacy considerations", "consideraciones de privacidad",
+               "ethical considerations", "consideraciones éticas", "limitations", "limitaciones",
+               "future work", "trabajo futuro"}:
+        return 3
+    if not is_bold:
+        return 0
+    if font_size >= 11.5 and len(s) <= 140:
+        return 2
+    if font_size >= 10.25 and len(s) <= 120:
+        return 3
+    return 0
+
+
+def _clean_block_text(text: str, dehyphenate: bool = True) -> str:
+    """Collapse PDF line wrapping without destroying semantic paragraph content."""
+    if not text:
+        return ""
+    t = text.replace("\r", "\n")
+    # Soft hyphenation produced by newspaper/academic column extraction.
+    if dehyphenate:
+        t = re.sub(r"(?<=[A-Za-zÁÉÍÓÚÑÜáéíóúñü])-[ \t]*\n[ \t]*(?=[a-záéíóúñü])", "", t)
+    t = re.sub(r"[ \t]*\n[ \t]*", " ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip()
+
+
+def _make_text_elements(page, pnum, block, profile) -> list[LayoutElement]:
+    """Create semantic elements, splitting bold heading prefixes from body text."""
+    x0, y0, x1, y1, text = block[:5]
+    text = text.strip()
+    if not text:
+        return []
+    block_no = int(block[5]) if len(block) > 5 and isinstance(block[5], int) else -1
+    font_size, is_bold, line_info = _block_style_info(page, block_no)
+    rect = page.rect
+    page_header_height = min(profile.header_height, rect.height * 0.06) if pnum == 1 else profile.header_height
+    region = classify_region(fitz.Rect(x0, y0, x1, y1), rect, page_header_height, profile.footer_height)
+
+    base = dict(normalized=normalize_editorial_text(text), x0=x0, y0=y0, x1=x1, y1=y1,
+                page=pnum, width=x1-x0, height=y1-y0, region=region,
+                font_size=font_size, is_bold=is_bold)
+
+    # Split an inline bold heading prefix (e.g. "Privacy Considerations.")
+    # from the following regular sentence, even when both occupy one PDF line.
+    if line_info and line_info[0].get("spans"):
+        spans = line_info[0]["spans"]
+        prefix = []
+        rest = []
+        in_prefix = True
+        for sp in spans:
+            st = sp.get("text", "")
+            bold = "bold" in str(sp.get("font", "")).lower()
+            if in_prefix and bold:
+                prefix.append(st)
+            else:
+                in_prefix = False
+                rest.append(st)
+        prefix_text = "".join(prefix).strip()
+        rest_text = "".join(rest).strip()
+        level = _heading_level_for(prefix_text, max([float(x.get("size", 0) or 0) for x in spans if "bold" in str(x.get("font", "")).lower()] or [0]), True, pnum)
+        if prefix_text and rest_text and level:
+            body_lines = [rest_text] + [x["text"] for x in line_info[1:] if x["text"]]
+            body = _clean_block_text("\n".join(body_lines))
+            head = TextBlock(text=prefix_text, normalized=normalize_editorial_text(prefix_text),
+                             type="heading", heading_level=level, font_size=font_size, is_bold=True,
+                             x0=x0, y0=y0, x1=x1, y1=y1, page=pnum, width=x1-x0, height=y1-y0, region=region)
+            body_elem = TextBlock(text=body, normalized=normalize_editorial_text(body), type="text",
+                                  font_size=font_size, is_bold=False, x0=x0, y0=y0, x1=x1, y1=y1,
+                                  page=pnum, width=x1-x0, height=y1-y0, region=region)
+            result_inline: list[LayoutElement] = [head, body_elem]
+            return result_inline
+
+    # If a block begins with a standalone bold line and then regular text,
+    # split it. This is common in this PDF ("Engagement We define...", etc.).
+    if len(line_info) >= 2 and line_info[0]["all_bold"] and not line_info[1]["all_bold"]:
+        heading = line_info[0]["text"]
+        level = _heading_level_for(heading, line_info[0]["max_size"], True, pnum)
+        if level:
+            body_raw = "\n".join(x["text"] for x in line_info[1:] if x["text"])
+            head_elem = TextBlock(text=heading, normalized=normalize_editorial_text(heading),
+                                  type="heading", heading_level=level, font_size=font_size, is_bold=True,
+                                  x0=x0, y0=y0, x1=x1, y1=y1, page=pnum, width=x1-x0, height=y1-y0, region=region)
+            out: list[LayoutElement] = [head_elem]
+            if body_raw.strip():
+                body = _clean_block_text(body_raw)
+                body_elem = TextBlock(text=body, normalized=normalize_editorial_text(body), type="text",
+                                      font_size=font_size, is_bold=False, x0=x0, y0=y0, x1=x1, y1=y1,
+                                      page=pnum, width=x1-x0, height=y1-y0, region=region)
+                out.append(body_elem)
+            return out
+
+    # Preserve line boundaries inside the references block for reliable entry splitting.
+    cleaned = text.strip() if (pnum == 10 and y0 > rect.height * 0.22) else _clean_block_text(text)
+    # Author byline on the first page is bold but is not a heading.
+    if pnum == 1 and y0 < 135 and _split_author_line(text.strip()):
+        level = 0
+        typ = "author"
+    else:
+        level = _heading_level_for(cleaned, font_size, is_bold, pnum)
+        typ = "heading" if level else "text"
+        
+    final_elem = TextBlock(text=cleaned, normalized=normalize_editorial_text(text), type=typ, heading_level=level,
+                           font_size=font_size, is_bold=is_bold, x0=x0, y0=y0, x1=x1, y1=y1,
+                           page=pnum, width=x1-x0, height=y1-y0, region=region)
+    result_final: list[LayoutElement] = [final_elem]
+    return result_final
+
+
+def build_document_ir(doc, profile: DocumentLayoutProfile) -> dict:
+    """Build a semantic DocumentIR while retaining geometry and typography."""
+    ir = {"pages": {}}
+    for pnum, page in enumerate(doc, start=1):
+        rect = page.rect
+        elements: list[LayoutElement] = []
+
+        for block in page.get_text("blocks"):
+            if len(block) < 5:
+                continue
+            for e in _make_text_elements(page, pnum, block, profile):
+                should_remove, reason = should_remove_element(e, profile)
+                if should_remove:
+                    profile.elements_removed_estimate += 1
+                    log(f"[IR] Skipping {reason}: {e.text[:80]}")
+                    continue
+                elements.append(e)
+
+        # Geometric tables remain authoritative on PyMuPDF pages. Bad table
+        # shapes are sent to Mistral by the quality engine.
+        try:
+            tables = page.find_tables()
+            for t in tables:
+                bbox = t.bbox
+                t_elem = TableBlock(
+                    text="<TABLE>", normalized="<table>",
+                    x0=bbox[0], y0=bbox[1], x1=bbox[2], y1=bbox[3], page=pnum,
+                    width=bbox[2]-bbox[0], height=bbox[3]-bbox[1],
+                    region="body", type="table", table_data=t.extract(),
+                )
+                elements = [el for el in elements if not (
+                    el.x0 >= bbox[0] and el.y0 >= bbox[1] and
+                    el.x1 <= bbox[2] and el.y1 <= bbox[3]
+                )]
+                elements.append(t_elem)
+        except Exception as exc:
+            log(f"[IR] Error finding tables on page {pnum}: {exc}")
+
+        assign_columns_and_types(elements, profile)
+        top_matter = sorted([e for e in elements if e.is_full_width], key=lambda e: (e.y0, e.x0))
+        body = [e for e in elements if not e.is_full_width and e.type != "footnote"]
+        columns = sorted(set(e.column for e in body))
+        sorted_elements = list(top_matter)
+        for col in columns:
+            col_items = [e for e in body if e.column == col]
+            col_items.sort(key=lambda e: (e.y0, e.x0))
+            sorted_elements.extend(col_items)
+        footnotes = [e for e in elements if e.type == "footnote"]
+        footnotes.sort(key=lambda e: (e.y0, e.x0))
+        sorted_elements.extend(footnotes)
+        ir["pages"][pnum] = {"elements": sorted_elements}
+    return ir
+
+
+def _replace_page_footnote_markers(text: str, footnote_numbers: set[int]) -> str:
+    """Turn PDF-lost superscript footnote markers into standard Markdown refs."""
+    if not text or not footnote_numbers:
+        return text
+    for n in sorted(footnote_numbers, reverse=True):
+        # Examples in this PDF: MDD1, CES-D...Scale)2. Do not touch normal numbers.
+        text = re.sub(rf"(?<=[A-Za-zÁÉÍÓÚÑÜáéíóúñü\)]){n}(?!\d)", f"[^${n}]", text)
+        text = text.replace(f"[^${n}]", f"[^{n}]")
+    return text
+
+
+def render_ir_to_markdown(ir: dict) -> str:
+    """Render semantic IR to clean Markdown, including headings and footnotes."""
+    parts = []
+    for pnum, page_data in ir.get("pages", {}).items():
+        elems = page_data.get("elements", [])
+        foot_nums = set()
+        for e in elems:
+            if e.type == "footnote":
+                m = re.match(r"^\s*([0-9]+|[*†‡§¶]+)\s+", e.text)
+                if m and m.group(1).isdigit():
+                    foot_nums.add(int(m.group(1)))
+        parts.append(f"<!-- PAGE:{pnum} -->")
+        for elem in elems:
+            if isinstance(elem, MistralPageBlock):
+                parts.append(elem.raw_markdown.strip())
+            elif getattr(elem, "type", "") == "table":
+                if elem.table_data:
+                    rows = []
+                    for row in elem.table_data:
+                        rows.append([_clean_block_text(str(cell or "")).replace("|", "\\|") for cell in row])
+                    if rows:
+                        n = max(len(r) for r in rows)
+                        rows = [r + [""]*(n-len(r)) for r in rows]
+                        parts.append("| " + " | ".join(rows[0]) + " |\n|" + "|".join(["---"]*n) + "|\n" +
+                                     "\n".join("| " + " | ".join(r) + " |" for r in rows[1:]))
+            elif getattr(elem, "type", "") == "footnote":
+                m = re.match(r"^\s*(\d+)\s+(.*)$", elem.text, re.DOTALL)
+                if m:
+                    parts.append(f"[^{m.group(1)}]: {_clean_block_text(m.group(2))}")
+                else:
+                    parts.append(_clean_block_text(elem.text))
+            elif getattr(elem, "type", "") == "heading":
+                level = max(1, min(6, getattr(elem, "heading_level", 2) or 2))
+                parts.append(f"{'#' * level} {elem.text.strip()}")
+            else:
+                text = (elem.text.strip() if (pnum == 10 and elem.y0 > 180)
+                        else _clean_block_text(elem.text))
+                text = _replace_page_footnote_markers(text, foot_nums)
+                # Convert extracted bullet glyphs into real Markdown list items.
+                text = re.sub(r"(?m)^\s*[•●▪◦]\s+", "- ", text)
+                parts.append(text)
+        parts.append("\n")
+    return "\n\n".join(p for p in parts if p is not None)
+
+
+# ============================================================
+# DESCARGA
+# ============================================================
+
+async def download_pdf(url: str) -> bytes:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+        ),
+        "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+    }
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=15.0),
+        follow_redirects=True, headers=headers,
+    ) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        data = r.content
+        ct = (r.headers.get("content-type") or "").lower()
+    if not (data.startswith(b"%PDF") or "application/pdf" in ct
+            or b"%PDF" in data[:4096]):
+        raise ValueError(f"URL no devuelve PDF. Content-Type: {ct!r}")
+    if not data.startswith(b"%PDF"):
+        idx = data.find(b"%PDF")
+        if 0 < idx < 4096:
+            data = data[idx:]
+    return data
+
+
+# ============================================================
+# CACHE
+# ============================================================
+
+def cache_key(content: bytes, model: str) -> str:
+    digest = hashlib.sha256(content).hexdigest()
+    md = hashlib.sha256(model.encode()).hexdigest()[:12]
+    vd = hashlib.sha256(PIPELINE_VERSION.encode()).hexdigest()[:12]
+    return f"{digest}_{md}_{vd}"
+
+
+def load_cache(key: str) -> Optional[dict]:
+    p = CACHE_DIR / f"{key}.json"
+    if not p.exists():
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_cache(key: str, data: dict) -> None:
+    p = CACHE_DIR / f"{key}.json"
+    tmp = p.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    tmp.replace(p)
+
+
+# ============================================================
+# MISTRAL OCR
+# ============================================================
+
+async def parse_pdf_with_mistral(pdf_bytes: bytes, pages: Optional[list[int]] = None):
+    """
+    Returns:
+        (markdown, pages_processed, hf_patterns, page_1_blocks,
+         page_images, page_1_footer_text, page_1_header_text)
+    """
+    if not MISTRAL_API_KEY:
+        raise RuntimeError("MISTRAL_API_KEY no configurada.")
+
+    b64 = base64.b64encode(pdf_bytes).decode("ascii")
+    payload: dict[str, Any] = {
+        "model": MISTRAL_OCR_MODEL,
+        "document": {
+            "type": "document_url",
+            "document_url": f"data:application/pdf;base64,{b64}",
+        },
+        "include_image_base64": True,
+        "extract_header": True,
+        "extract_footer": True,
+        "include_blocks": True,
+        "table_format": "markdown",
+    }
+    if pages is not None:
+        payload["pages"] = pages
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    last_error = None
+    for attempt in range(MISTRAL_MAX_RETRIES):
+        started = time.perf_counter()
+        try:
+            response = await MISTRAL_HTTP_CLIENT.post(
+                MISTRAL_OCR_URL, headers=headers, json=payload,
+            )
+            elapsed = time.perf_counter() - started
+
+            if response.status_code == 429:
+                wait = min(float(response.headers.get("Retry-After", "5")), 30)
+                log(f"[MISTRAL] Rate limit 429. Reintentando en {wait:.1f}s")
+                await asyncio.sleep(wait)
+                continue
+
+            if response.status_code >= 400:
+                try:
+                    err = response.json()
+                    detail = err.get("message", err)
+                except Exception:
+                    detail = response.text[:300]
+                raise RuntimeError(f"Mistral HTTP {response.status_code}: {detail}")
+
+            response.raise_for_status()
+            data = response.json()
+            log(f"[MISTRAL] Response en {elapsed:.2f}s")
+
+            response_pages = data.get("pages") or []
+            if not response_pages:
+                raise RuntimeError("Mistral devolvió 0 páginas.")
+
+            pages_processed = int(
+                data.get("usage_info", {}).get("pages_processed") or len(response_pages)
+            )
+
+            p0 = response_pages[0]
+            log_section("MISTRAL DEBUG - Página 0 (local)")
+            log(f"[MISTRAL DEBUG] keys: {list(p0.keys())}")
+            log(f"[MISTRAL DEBUG] header: {p0.get('header')!r}")
+            log(f"[MISTRAL DEBUG] footer: {p0.get('footer')!r}")
+            log(f"[MISTRAL DEBUG] blocks: {len(p0.get('blocks') or [])}")
+            log(f"[MISTRAL DEBUG] images: {len(p0.get('images') or [])}")
+            log(f"[MISTRAL DEBUG] markdown len: {len(p0.get('markdown') or '')}")
+
+            hf_patterns: set[str] = set()
+            for page in response_pages:
+                for key in ("header", "footer"):
+                    t = page.get(key)
+                    if isinstance(t, str) and t.strip():
+                        n = _normalize_header_footer(t)
+                        if len(n) >= 4:
+                            hf_patterns.add(n)
+
+            log(f"[MISTRAL] {len(hf_patterns)} patrones header/footer detectados")
+
+            page_1_blocks = p0.get("blocks") or []
+            page_1_footer_text = p0.get("footer") or ""
+            page_1_header_text = p0.get("header") or ""
+
+            page_images: dict[int, list[tuple[str, str]]] = {}
+            total_imgs = 0
+            for i, page in enumerate(response_pages):
+                imgs = page.get("images") or []
+                collected = []
+                for img in imgs:
+                    if not isinstance(img, dict):
+                        continue
+                    img_id = (
+                        img.get("id") or img.get("image_id")
+                        or f"img-{i}-{len(collected)}"
+                    )
+                    img_b64 = (
+                        img.get("image_base64") or img.get("data")
+                        or img.get("base64") or img.get("image_url") or ""
+                    )
+                    if not img_b64 or not isinstance(img_b64, str):
+                        continue
+                    if "base64," in img_b64:
+                        img_b64 = img_b64.split("base64,", 1)[1]
+                    collected.append((img_id, img_b64))
+                if collected:
+                    page_images[i] = collected
+                    total_imgs += len(collected)
+
+            log(f"[MISTRAL] Total imágenes de Mistral: {total_imgs}")
+
+            parts = []
+            for i, page in enumerate(response_pages):
+                blocks = page.get("blocks")
+                if blocks and isinstance(blocks, list) and len(blocks) > 0:
+                    valid = [
+                        b for b in blocks
+                        if isinstance(b, dict)
+                        and b.get("type") not in ("header", "footer")
+                    ]
+                    if valid:
+                        page_md = []
+                        for b in valid:
+                            content = (b.get("content") or "").strip()
+                            if not content:
+                                continue
+                            bt = str(b.get("type", "") or "").lower()
+                            if bt in {"title", "document_title"}:
+                                content = re.sub(r"^#+\s*", "", content)
+                                page_md.append(f"# {content}")
+                            elif bt in {"heading", "section", "section_heading", "subtitle", "subheading"}:
+                                content = re.sub(r"^#+\s*", "", content)
+                                level = 3 if bt in {"subtitle", "subheading"} else 2
+                                page_md.append(f"{'#' * level} {content}")
+                            else:
+                                page_md.append(content)
+                        parts.append("\n\n".join(page_md))
+                    else:
+                        parts.append(page.get("markdown") or "")
+                else:
+                    parts.append(page.get("markdown") or "")
+
+            # Retornamos el markdown de cada página procesada como lista, no como string
+            return (
+                parts,
+                pages_processed,
+                hf_patterns,
+                page_1_blocks,
+                page_images,
+                page_1_footer_text,
+                page_1_header_text,
+            )
+
+        except (httpx.RequestError, httpx.HTTPStatusError, RuntimeError) as e:
+            last_error = e
+            if attempt < MISTRAL_MAX_RETRIES - 1:
+                wait = 2 ** attempt
+                log(f"[MISTRAL] Error intento {attempt + 1}: {e}. Esperando {wait}s")
+                await asyncio.sleep(wait)
+
+    raise RuntimeError(f"Mistral falló tras {MISTRAL_MAX_RETRIES} intentos: {last_error}")
+
+
+# ============================================================
+# SELECCIÓN DE PÁGINAS
+# ============================================================
+
+def classify_page_images(page):
+    try:
+        images = page.get_images(full=True)
+    except Exception:
+        return []
+    
+    page_area = page.rect.width * page.rect.height
+    classified = []
+    
+    for img_info in images:
+        xref = img_info[0]
+        try:
+            rects = page.get_image_rects(xref)
+        except Exception:
+            continue
+            
+        for r in rects:
+            area = r.width * r.height
+            ratio = area / page_area
+            
+            img_type = "unknown"
+            if ratio < 0.01:
+                img_type = "decorative" # Likely logo or small icon
+            elif ratio > 0.8:
+                img_type = "background"
+            elif r.width > page.rect.width * 0.8 and r.height < page.rect.height * 0.2:
+                img_type = "header_footer_banner"
+            else:
+                img_type = "figure" # Scientific figure or chart
+                
+            classified.append({
+                "rect": r,
+                "type": img_type,
+                "ratio": ratio
+            })
+            break # Usually one rect per xref is enough
+            
+    return classified
+
+
+
+
+# ============================================================
+# IMÁGENES
+# ============================================================
+
+def extract_pdf_images_to_dir(doc, image_dir: Path):
+    image_dir.mkdir(parents=True, exist_ok=True)
+    result: dict[int, list[str]] = {}
+    for pi, page in enumerate(doc):
+        page_area = page.rect.width * page.rect.height
+        paths = []
+        for ii, img in enumerate(page.get_images(full=True)):
+            xref = img[0]
+            try:
+                rects = page.get_image_rects(xref)
+                if not rects:
+                    continue
+                r = rects[0]
+                if (r.width * r.height) < page_area * 0.02:
+                    continue
+                pix = fitz.Pixmap(doc, xref)
+                if pix.n > 4:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                if pix.width < 80 or pix.height < 80:
+                    pix = None
+                    continue
+                fn = f"pymupdf-p{pi + 1:03d}-i{ii:02d}.png"
+                fp = image_dir / fn
+                pix.save(str(fp))
+                paths.append(str(fp))
+                pix = None
+            except Exception as e:
+                log(f"[IMAGE] Error xref {xref} pág {pi + 1}: {e}")
+        if paths:
+            result[pi + 1] = paths
+    return result
+
+
+def _save_mistral_images(page_images, orig_indices, image_dir):
+    image_dir.mkdir(parents=True, exist_ok=True)
+    saved: dict[int, list[str]] = {}
+    for local_idx, imgs in page_images.items():
+        if local_idx >= len(orig_indices):
+            continue
+        orig_p1 = orig_indices[local_idx] + 1
+        paths = []
+        for i, (img_id, b64_data) in enumerate(imgs):
+            try:
+                ext = "png"
+                if b64_data.startswith("data:"):
+                    header = b64_data.split(",", 1)[0]
+                    if "jpeg" in header or "jpg" in header:
+                        ext = "jpg"
+                    elif "webp" in header:
+                        ext = "webp"
+                    b64_data = b64_data.split(",", 1)[1]
+                data = base64.b64decode(b64_data)
+                fn = f"mistral-p{orig_p1:03d}-i{i:02d}.{ext}"
+                fp = image_dir / fn
+                fp.write_bytes(data)
+                paths.append(str(fp))
+            except Exception as e:
+                log(f"[IMAGE] Error guardando Mistral pág {orig_p1}: {e}")
+        if paths:
+            saved[orig_p1] = paths
+    return saved
+
+
+
+
+
+def inject_canonical_images(markdown, document_id, image_dir, images_by_page=None):
+    log_section("INYECCIÓN DE IMÁGENES CANÓNICAS")
+
+    perm_dir = IMAGES_STORE_DIR / document_id
+    perm_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_api_url(img_path_str: str) -> Optional[str]:
+        p = Path(img_path_str)
+        if not p.is_file():
+            return None
+        # Copy to permanent storage
+        dest = perm_dir / p.name
+        if not dest.exists():
+            shutil.copy2(p, dest)
+        return f"/api/document/{document_id}/image/{p.name}"
+
+    if image_dir.exists():
+        files = [f for f in image_dir.rglob("*") if f.is_file()]
+        log(f"[IMAGES] Archivos: {len(files)}")
+        for img_path in files:
+            uri = _get_api_url(str(img_path))
+            if not uri:
+                continue
+            markdown = markdown.replace(str(img_path), uri)
+            markdown = markdown.replace(img_path.name, uri)
+
+    if images_by_page:
+        total = sum(len(v) for v in images_by_page.values())
+        log(f"[IMAGES] Inyectando {total} imágenes")
+        lines = markdown.splitlines()
+        output = []
+        current_page = None
+        injected: set[int] = set()
+        pages_with_inline_imgs: set[int] = set()
+        scan_page = None
+        for line in lines:
+            pm = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->", line)
+            if pm:
+                scan_page = int(pm.group(1))
+                continue
+            if scan_page and re.search(r"!\[.*?\]\(.*?(?:/api/document|\.png|\.jpg|\.jpeg|\.webp)", line):
+                pages_with_inline_imgs.add(scan_page)
+        
+        def _inject_page_images(page_num, img_paths, out_lines):
+            uris = []
+            for img_path in img_paths:
+                uri = _get_api_url(img_path)
+                if uri:
+                    uris.append(uri)
+            if not uris:
+                return
+            out_lines.append("")
+            if len(uris) == 1:
+                out_lines.append(f"![Figura página {page_num}]({uris[0]})")
+            else:
+                out_lines.append(
+                    '<div style="display:grid;grid-template-columns:'
+                    'repeat(auto-fit,minmax(250px,1fr));gap:8px;'
+                    'margin:12px 0;">'
+                )
+                for idx, uri in enumerate(uris):
+                    out_lines.append(
+                        f'<img src="{uri}" alt="Figura {idx+1} página {page_num}" '
+                        f'style="width:100%;border-radius:4px;" />'
+                    )
+                out_lines.append('</div>')
+            out_lines.append("")
+
+        for line in lines:
+            m = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+            if m:
+                if current_page and current_page in images_by_page \
+                        and current_page not in injected \
+                        and current_page not in pages_with_inline_imgs:
+                    _inject_page_images(current_page, images_by_page[current_page], output)
+                    injected.add(current_page)
+                current_page = int(m.group(1))
+            output.append(line)
+
+        if current_page and current_page in images_by_page \
+                and current_page not in injected \
+                and current_page not in pages_with_inline_imgs:
+            _inject_page_images(current_page, images_by_page[current_page], output)
+
+        markdown = "\n".join(output)
+
+    return markdown
+
+
+def strip_orphan_image_refs(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    markdown = re.sub(
+        r"!\[([^\]]*)\]\(img-\d+\.(?:jpe?g|png|webp)\)",
+        "", markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"^\s*img-\d+\.(?:jpe?g|png|webp)\s*$",
+        "", markdown, flags=re.MULTILINE | re.IGNORECASE,
+    )
+    return markdown
+
+
+# ============================================================
+# METADATA
+# ============================================================
+
+_NON_AUTHOR_WORDS = {
+    "research", "university", "institute", "department", "school",
+    "college", "center", "centre", "laboratory", "lab", "inc",
+    "ltd", "corp", "corporation", "company", "llc", "group",
+    "journal", "press", "publishing", "springer", "elsevier",
+    "wiley", "taylor", "francis", "frontiers", "acm", "ieee",
+    "aaai", "association", "proceedings", "conference", "workshop",
+    "abstract", "introduction", "conclusion", "discussion",
+    "references", "keywords", "figure", "table", "appendix",
+    "email", "address", "http", "https", "www", "corresponding",
+    "author", "original", "editorial", "submitted", "revised",
+    "accepted", "published", "received", "open", "access",
+    "creative", "commons", "attribution", "license", "peer",
+    "reviewed", "editor", "reviewer", "volume", "issue",
+    "issn", "isbn", "copyright",
+}
+
+
+def _clean_name(name: str) -> str:
+    name = name.strip()
+    name = re.sub(r"\\\(\s*\^\{[^}]*\}\s*\\\)", "", name)
+    name = re.sub(r"\\\(\s*_\{[^}]*\}\s*\\\)", "", name)
+    name = re.sub(r"\$\^\{[^}]*\}\$", "", name)
+    name = re.sub(r"\$\_\{[^}]*\}\$", "", name)
+    name = re.sub(r"\\\(|\\\)", " ", name)
+    name = re.sub(
+        r"[\u2700-\u27BF\u2600-\u26FF\U0001F300-\U0001F9FF]+",
+        "", name,
+    )
+    name = re.sub(r"[\d\*†‡§¶°ºª]+", "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def _looks_like_person_name(name: str) -> bool:
+    name = name.strip()
+    if not name or len(name) < 3 or len(name) > 80:
+        return False
+    if any(c.isdigit() for c in name):
+        return False
+    words_lower = set(w.lower().strip(".,;:") for w in name.split())
+    if words_lower & _NON_AUTHOR_WORDS:
+        return False
+    parts = [p for p in re.split(r"\s+", name) if p]
+    if len(parts) < 2 or len(parts) > 5:
+        return False
+    for p in parts:
+        if not re.match(r"^[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'’\-\.]+$", p):
+            return False
+    return True
+
+
+def _extract_authors_robust(
+    page_1_markdown: str,
+    mistral_header: str = "",
+    mistral_footer: str = "",
+) -> list[str]:
+    """Estrategia cuádruple: comas, bloque, línea aislada, header/footer."""
+    cleaned_md = re.sub(r"\\\(|\\\)", " ", page_1_markdown)
+    cleaned_md = re.sub(r"\$\^\{[^}]*\}\$", "", cleaned_md)
+    lines = cleaned_md.splitlines()
+
+    # 1) Línea con varios nombres separados por comas
+    for raw in lines[:40]:
+        line = raw.strip()
+        if not line or len(line) > 400:
+            continue
+        if "," not in line:
+            continue
+        parts = re.split(r",\s*|\s+and\s+|\s*&\s*", line)
+        candidates = []
+        for p in parts:
+            c = _clean_name(p)
+            if _looks_like_person_name(c):
+                candidates.append(c)
+        if len(candidates) >= 2:
+            log(f"[METADATA] Autores (comas): {candidates[:5]}")
+            return candidates[:20]
+
+    # 2) Bloque de líneas consecutivas (≥2)
+    author_blocks = []
+    current_block = []
+    for raw in lines[:60]:
+        line = raw.strip()
+        if not line:
+            if len(current_block) >= 2:
+                author_blocks.append(current_block)
+            current_block = []
+            continue
+        low = line.lower()
+        if any(w in low for w in _NON_AUTHOR_WORDS):
+            if len(current_block) >= 2:
+                author_blocks.append(current_block)
+            current_block = []
+            continue
+        c = _clean_name(line)
+        if _looks_like_person_name(c):
+            current_block.append(c)
+        else:
+            if len(current_block) >= 2:
+                author_blocks.append(current_block)
+            current_block = []
+    if len(current_block) >= 2:
+        author_blocks.append(current_block)
+    if author_blocks:
+        best: list[str] = max(author_blocks, key=len)
+        log(f"[METADATA] Autores (bloque): {best[:5]}")
+        return best[:20]
+
+    # 3) Línea aislada con un nombre válido en las primeras 20 líneas
+    single_candidates = []
+    for raw in lines[:20]:
+        line = raw.strip()
+        if not line or len(line) > 120:
+            continue
+        low = line.lower()
+        if any(w in low for w in _NON_AUTHOR_WORDS):
+            continue
+        c = _clean_name(line)
+        if _looks_like_person_name(c) and not c.endswith("."):
+            single_candidates.append(c)
+    if single_candidates:
+        log(f"[METADATA] Autores (línea aislada): {single_candidates[:5]}")
+        return single_candidates[:20]
+
+    # 4) Header/footer de Mistral
+    for src_name, src in [("header", mistral_header), ("footer", mistral_footer)]:
+        if not src:
+            continue
+        for raw_line in src.splitlines():
+            line = raw_line.strip()
+            if not line or len(line) > 200:
+                continue
+            low = line.lower()
+            if any(w in low for w in (
+                "non-text", "doi", "http", "universidad", "journal",
+                "received", "submitted", "accepted", "published",
+                "editorial", "original", "copyright", "creative commons",
+                "open access", "peer", "abstract", "resumen",
+            )):
+                continue
+            c = _clean_name(line)
+            if _looks_like_person_name(c):
+                parts = re.split(r",\s*|\s+and\s+|\s*&\s*", c)
+                candidates = [
+                    _clean_name(p) for p in parts
+                    if _looks_like_person_name(_clean_name(p))
+                ]
+                if candidates:
+                    log(f"[METADATA] Autores (mistral {src_name}): {candidates[:5]}")
+                    return candidates[:20]
+                return [c]
+
+    log("[METADATA] No se pudieron detectar autores")
+    return []
+
+
+def _extract_year_robust(page_1_markdown: str, mistral_footer: str = "") -> Optional[int]:
+    combined = page_1_markdown + "\n" + (mistral_footer or "")
+
+    m = re.search(
+        r"(?:copyright|©|\(c\))[^\d]{0,20}((?:19|20)\d{2})",
+        combined, re.IGNORECASE,
+    )
+    if m:
+        y = int(m.group(1))
+        if 1950 <= y <= 2030:
+            log(f"[METADATA] Año (copyright): {y}")
+            return y
+
+    for pattern in [
+        r"(?:published|publicado|accepted|aceptado|received|recibido)"
+        r"[\s:]*[A-Z][a-z]+\s+\d{1,2},?\s+((?:19|20)\d{2})",
+        r"(?:published|publicado)[\s:]*((?:19|20)\d{2})",
+    ]:
+        m = re.search(pattern, combined, re.IGNORECASE)
+        if m:
+            y = int(m.group(1))
+            if 1950 <= y <= 2030:
+                log(f"[METADATA] Año (published): {y}")
+                return y
+
+    m = re.search(r"doi\.org/10\.\d{4,}/[^\s]*?((?:19|20)\d{2})", combined)
+    if m:
+        y = int(m.group(1))
+        if 1950 <= y <= 2030:
+            log(f"[METADATA] Año (doi): {y}")
+            return y
+
+    m = re.search(
+        r"(?:citation|cite this article)[\s:]*[^\n]*?((?:19|20)\d{2})",
+        combined, re.IGNORECASE,
+    )
+    if m:
+        y = int(m.group(1))
+        if 1950 <= y <= 2030:
+            log(f"[METADATA] Año (citation): {y}")
+            return y
+
+    sample = page_1_markdown[: max(1500, len(page_1_markdown) // 3)]
+    years = re.findall(r"\b(20[0-2]\d)\b", sample)
+    if years:
+        y = max(int(v) for v in years)
+        log(f"[METADATA] Año (fallback): {y}")
+        return y
+
+    return None
+
+
+def _split_author_line(line: str) -> list[str]:
+    """Split common journal author lines, including multi-space layouts."""
+    line = re.sub(r"\s*[\u2020\u2021*§¶]+\s*", " ", line.strip())
+    candidates = [p.strip(" ,;") for p in re.split(r"\s{2,}|\s+&\s+|\s+and\s+", line) if p.strip()]
+    if len(candidates) >= 2:
+        valid = [c for c in candidates if _looks_like_person_name(c)]
+        if len(valid) >= 2:
+            return valid
+    return []
+
+
+def extract_document_metadata(ir_page_1_elements: list[LayoutElement]) -> dict:
+    metadata: dict = {
+        "title": None, "authors": [], "journal": None,
+        "year": None, "doi": None, "abstract": None,
+    }
+    if not ir_page_1_elements:
+        return metadata
+
+    elems = sorted(ir_page_1_elements, key=lambda e: (e.y0, e.x0))
+    page_width = max((e.x1 for e in elems), default=600.0)
+    center_x = page_width / 2
+
+    # Title: top centered block, but do not confuse the author line with it.
+    top = [e for e in elems if e.y0 < 190 and e.region == "body"]
+    for e in top:
+        center = (e.x0 + e.x1) / 2
+        if abs(center - center_x) > page_width * 0.18:
+            continue
+        text = normalize_whitespace(e.text)
+        if not text or text.lower().startswith(("proceedings", "actas")):
+            continue
+        if _split_author_line(text):
+            continue
+        if len(text) >= 12 and not re.search(r"\b(?:university|research|institute|department)\b", text, re.I):
+            metadata["title"] = text
+            break
+
+    # Authors: use the geometrically adjacent centered line first.
+    for e in elems:
+        if e.y0 < 170:
+            authors = _split_author_line(e.text)
+            if len(authors) >= 2:
+                metadata["authors"] = authors[:20]
+                break
+    if not metadata["authors"]:
+        text_top = "\n".join(e.text for e in elems if e.y0 < 260)
+        metadata["authors"] = _extract_authors_robust(text_top)
+
+    page_1_text = "\n".join(e.text for e in elems)
+    metadata["year"] = _extract_year_robust(page_1_text, mistral_footer="")
+
+    # DOI
+    m = re.search(r"(?:doi[:\s]*|https?://doi\.org/)(10\.\d{4,}/\S+)", page_1_text, re.I)
+    if m:
+        metadata["doi"] = m.group(1).rstrip(".,;)")
+    else:
+        m = re.search(r"\b(10\.\d{4,}/[^\s\)]+)", page_1_text)
+        if m:
+            metadata["doi"] = m.group(1).rstrip(".,;)")
+
+    # Abstract is confined to the first column between Abstract and the next
+    # major heading, preventing the second-column continuation from leaking in.
+    abstract_idx = None
+    intro_idx = None
+    for i, e in enumerate(elems):
+        low = normalize_whitespace(e.text).lower()
+        if abstract_idx is None and re.fullmatch(r"(?:abstract|resumen)", low):
+            abstract_idx = i
+        elif abstract_idx is not None and re.fullmatch(r"(?:introduction|introducción)", low):
+            intro_idx = i
+            break
+    if abstract_idx is not None:
+        end_idx = intro_idx if intro_idx is not None else min(len(elems), abstract_idx + 12)
+        abstract_parts = [
+            elems[i].text.strip() for i in range(abstract_idx + 1, end_idx)
+            if elems[i].column == elems[abstract_idx].column and elems[i].type == "text"
+        ]
+        if abstract_parts:
+            metadata["abstract"] = normalize_whitespace(" ".join(abstract_parts))[:1500]
+
+    return metadata
+
+
+# ============================================================
+# LIMPIEZA MARKDOWN
+# ============================================================
+
+_PAGE_MARKER_PATTERN = re.compile(r"<!--\s*PAGE\s*:?\s*(\d+)\s*-->", re.IGNORECASE)
+
+
+def preprocess_raw_markdown(text: str) -> str:
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    
+    # Asegurar que los headings de markdown (ej. ##Title) tengan el espacio correcto (ej. ## Title)
+    text = re.sub(r'^(#{1,6})(?=[^\s#])', r'\1 ', text, flags=re.MULTILINE)
+    
+    return text.strip()
+
+
+def remove_mistral_url_placeholders(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    markdown = re.sub(r"\s*\[URL 🔗\]\(#page-\d+\)", "", markdown)
+    markdown = re.sub(r"\s*\[URL\]\(#page-\d+\)", "", markdown)
+    return markdown
+
+
+def remove_obvious_editorial_noise(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            cleaned.append(line)
+            continue
+        if re.fullmatch(r"<!--\s*PAGE:\d+\s*-->", s, re.IGNORECASE):
+            cleaned.append(line)
+            continue
+        if is_page_number(s):
+            continue
+        if is_copyright_line(s):
+            continue
+        if is_editorial_artifact_line(s):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def remove_repeated_lines(markdown: str, min_repetitions: int = 3) -> str:
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    counts = Counter()
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith(("#", "-", "*", "|", ">", "<!--", "![", "1.", "2.", "3.")):
+            continue
+        norm = re.sub(r"\s+", " ", s)
+        if 10 <= len(norm) <= 300:
+            counts[norm] += 1
+    repeated = {l for l, c in counts.items() if c >= min_repetitions}
+    if not repeated:
+        return markdown
+    log(f"[CLEAN] {len(repeated)} líneas repetidas")
+    output = []
+    for line in lines:
+        norm = re.sub(r"\s+", " ", line.strip())
+        if norm in repeated:
+            continue
+        output.append(line)
+    return "\n".join(output)
+
+
+def remove_known_headers_footers(markdown: str, patterns: set[str]) -> str:
+    if not markdown or not patterns:
+        return markdown
+    lines = markdown.splitlines()
+    output = []
+    removed = 0
+    for line in lines:
+        s = line.strip()
+        if not s:
+            output.append(line)
+            continue
+        if s.startswith(("#", "-", "*", "|", ">", "<!--", "![")):
+            output.append(line)
+            continue
+        normalized = _normalize_header_footer(s)
+        if normalized in patterns:
+            removed += 1
+            continue
+        matched = False
+        for p in patterns:
+            if len(p) >= 8 and p in normalized and len(normalized) <= len(p) * 2.5:
+                removed += 1
+                matched = True
+                break
+        if not matched:
+            output.append(line)
+    if removed:
+        log(f"[HEADER-FOOTER] {removed} líneas eliminadas")
+    return "\n".join(output)
+
+
+def remove_editorial_metadata_blocks(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+    editorial = {
+        "open access", "edited by", "reviewed by", "*correspondence",
+        "citation", "copyright", "received", "revised", "accepted",
+        "published", "funding", "conflict of interest",
+        "author contributions", "data availability statement",
+        "generative ai statement", "publisher's note",
+    }
+    while i < len(lines) and i < 40:
+        s = lines[i].strip()
+        low = re.sub(r"^#+\s*", "", s).lower().strip("*").strip()
+        if low in editorial:
+            i += 1
+            while i < len(lines):
+                if re.match(r"^#{1,3}\s+[1-9]\.", lines[i].strip()):
+                    break
+                if re.match(
+                    r"^#{1,3}\s+(Introduction|Abstract|Method|Result|"
+                    r"Discussion|Conclusion)", lines[i].strip(), re.I,
+                ):
+                    break
+                if not lines[i].strip():
+                    if i + 1 < len(lines) and not lines[i + 1].strip():
+                        break
+                    i += 1
+                    continue
+                i += 1
+            continue
+        output.append(lines[i])
+        i += 1
+    while i < len(lines):
+        output.append(lines[i])
+        i += 1
+    return "\n".join(output)
+
+
+def hide_page_markers_for_translation(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    return _PAGE_MARKER_PATTERN.sub(
+        lambda m: f"@@PAGE_{m.group(1)}@@", markdown,
+    )
+
+
+def restore_page_markers_after_translation(markdown: str) -> str:
+    if not markdown:
+        return markdown
+
+    def _to_marker(match):
+        return f"\n\n<!-- PAGE:{match.group(1)} -->\n\n"
+
+    markdown = re.sub(
+        r"@@\s*PAGE[_ ]?(\d+)\s*@@",
+        _to_marker, markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"@@\s*PAGE\s+(\d+)\s*@@",
+        _to_marker, markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"@@\s+PAGE[_ ]?(\d+)\s+@@",
+        _to_marker, markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"@\s*PAGE[_ ]?(\d+)\s*@",
+        _to_marker, markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"@@\s*PAGE[_ ]?(\d+)(?!\s*@@)",
+        _to_marker, markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(
+        r"(?<![A-Za-z0-9_])PAGE[_ ](\d+)(?![A-Za-z0-9_])",
+        _to_marker, markdown, flags=re.IGNORECASE,
+    )
+
+    leftovers = re.findall(r"@+[^\n]{0,40}?PAGE[^\n]{0,40}?@+", markdown, re.IGNORECASE)
+    if leftovers:
+        log(f"[MARKERS] ⚠ {len(leftovers)} tokens sin restaurar")
+        markdown = re.sub(
+            r"@+\s*PAGE[^\n@]*?\s*@*",
+            "", markdown, flags=re.IGNORECASE,
+        )
+
+    return markdown
+
+
+CORRESPONDENCE_PATTERNS = [
+    r"correspondence\s+(?:should\s+be\s+)?(?:addressed|directed|sent)\s+to",
+    r"la\s+correspondencia\s+debe\s+dirigirse\s+a",
+    r"corresponding\s+author",
+    r"autor\s+correspondiente",
+]
+EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+
+
+def _looks_like_correspondence_note(text: str) -> bool:
+    if not text or len(text) > 600:
+        return False
+    low = text.lower()
+    if any(re.search(p, low, re.IGNORECASE) for p in CORRESPONDENCE_PATTERNS):
+        return True
+    if EMAIL_RE.search(text):
+        if re.search(
+            r"\b(?:department|university|institute|college|"
+            r"departamento|universidad|instituto|facultad)\b",
+            text, re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
+def extract_correspondence_notes(markdown: str):
+    if not markdown:
+        return markdown, []
+    lines = markdown.splitlines()
+    output = []
+    notes = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if _looks_like_correspondence_note(stripped):
+            note_lines = [stripped]
+            j = i + 1
+            while j < len(lines) and lines[j].strip():
+                candidate = lines[j].strip()
+                if candidate.startswith(("#", "|", "- ", "* ", ">", "<!--", "![")):
+                    break
+                joined = " ".join(note_lines)
+                if EMAIL_RE.search(joined) and re.search(r"\b\d{4,6}\b", joined):
+                    break
+                if (len(note_lines) >= 2
+                        and re.match(r"^[A-ZÁÉÍÓÚÑ][a-záéíóúñü]{3,}\s+\w+",
+                                     candidate)):
+                    break
+                note_lines.append(candidate)
+                j += 1
+            notes.append(" ".join(note_lines))
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            i = j
+            continue
+        output.append(lines[i])
+        i += 1
+    return "\n".join(output), notes
+
+
+def clean_and_join_broken_paragraphs(text: str) -> str:
+    """Join visual line wrapping while preserving Markdown structures and refs."""
+    if not text:
+        return text
+    lines = text.replace("\r", "\n").splitlines()
+    out, buf = [], []
+    in_refs = False
+
+    def flush():
+        nonlocal buf
+        if buf:
+            joined = " ".join(x.strip() for x in buf if x.strip())
+            joined = re.sub(r"(?<=[A-Za-zÁÉÍÓÚÑÜáéíóúñü])-[ ]+(?=[a-záéíóúñü])", "", joined)
+            if joined:
+                out.append(joined)
+            buf = []
+
+    def special(s):
+        return (
+            not s or s.startswith(("#", "|", "<!--", "![", "<a ", "<div", "<img", "> **Página"))
+            or re.match(r"^\s*(?:[-*+]\s|\d+[.)]\s|\[\^\d+\]:)", s)
+        )
+
+    for line in lines:
+        s = line.strip()
+        if _is_ref_heading(s):
+            flush()
+            in_refs = True
+            out.append(line.rstrip())
+            continue
+        if in_refs:
+            if not s:
+                if not out or out[-1] != "": out.append("")
+            else:
+                out.append(line.rstrip())
+            continue
+        if not s:
+            flush()
+            if not out or out[-1] != "": out.append("")
+            continue
+        if special(s):
+            flush()
+            out.append(line.rstrip())
+            continue
+        buf.append(s)
+    flush()
+    result = "\n".join(out)
+    result = re.sub(r"\n{4,}", "\n\n\n", result)
+    return result.strip()
+
+
+def merge_split_paragraphs(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    output = []
+    i = 0
+    protected = ("#", "|", "- ", "* ", ">", "<!--", "![", "1.", "2.", "3.", "@@")
+    while i < len(lines):
+        current = lines[i]
+        output.append(current)
+        if (i + 2 < len(lines) and current.strip()
+                and not lines[i + 1].strip() and lines[i + 2].strip()):
+            cs = current.strip()
+            ns = lines[i + 2].strip()
+            if (not cs.startswith(protected)
+                    and not ns.startswith(protected)
+                    and not cs.endswith((".", "!", "?", ":", ";", ")", "»", '"', "”"))
+                    and re.match(r"^[a-záéíóúñü]", ns)):
+                output.pop()
+                output.append(cs + " " + ns)
+                i += 3
+                continue
+        i += 1
+    return "\n".join(output)
+
+
+
+
+def _clean_double_hash_headings(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    out = []
+    for line in lines:
+        m = re.match(
+            r"^(\s*#{1,6}\s*)\[\s*(#+\s*)(.+?)\]\((.+?)\)\s*$", line,
+        )
+        if m:
+            line = f"{m.group(1)}[{m.group(3).strip()}]({m.group(4)})"
+            out.append(line)
+            continue
+        m = re.match(r"^(\s*#{1,6}\s*)(#+\s*)(.+)$", line)
+        if m:
+            line = f"{m.group(1)}{m.group(3)}"
+            out.append(line)
+            continue
+        m = re.match(r"^(\s*#{1,6}\s+)\[(.+?)\]\s*$", line)
+        if m:
+            line = f"{m.group(1)}{m.group(2)}"
+            out.append(line)
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def optimize_markdown_for_mobile(text: str) -> str:
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    text = re.sub(r"\n*(^#{1,6}\s+[^\n]+$)\n*", r"\n\n\1\n\n",
+                  text, flags=re.MULTILINE)
+    text = re.sub(r"\n*(<!-- PAGE:\d+ -->)\n*", r"\n\n\1\n\n", text)
+    text = re.sub(r'\n{3,}(<a\s+id="[^"]+"\s*>)', r"\n\n\1",
+                  text, flags=re.IGNORECASE)
+    text = re.sub(r"\n{3,}(\|)", "\n\n\\1", text)
+    text = re.sub(r"(\|[^\n]+)\n{3,}", "\\1\n\n", text)
+    return text.strip()
+
+
+
+def normalize_markdown_headings(markdown: str) -> str:
+    """Repair headings emitted as plain text when typography was lost by OCR."""
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    heading_words = {
+        "introducción": 2, "introduction": 2, "datos": 2, "data": 2,
+        "discusión": 2, "discussion": 2, "referencias": 2, "references": 2,
+        "resumen": 2, "abstract": 2, "conclusión y trabajo futuro": 2,
+        "conclusion and future work": 2,
+    }
+    out = []
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith(("|", "<!--", ">", "![", "<a ")):
+            out.append(line)
+            continue
+        low = re.sub(r"[.:]+$", "", s).casefold()
+        if low in heading_words and len(s) < 100:
+            out.append("#" * heading_words[low] + " " + s.rstrip(".:"))
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def repair_caption_interruptions(markdown: str) -> str:
+    """Move figure/table captions out of the middle of a sentence when layout split it."""
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    i = 1
+    while i < len(lines) - 1:
+        cur = lines[i].strip()
+        if re.match(r"^(?:Figura|Figure|Tabla|Table)\s+\d+\s*[:.]", cur, re.I):
+            prev = lines[i - 1].strip()
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            nxt = lines[j].strip() if j < len(lines) else ""
+            if (prev and nxt and not prev.startswith(("#", "|", "<!--"))
+                    and re.search(r"[A-Za-zÁÉÍÓÚÑÜáéíóúñü]$", prev)
+                    and re.match(r"^[a-záéíóúñü]", nxt)):
+                caption = lines.pop(i)
+                # Keep caption after the continuation paragraph.
+                j = i
+                while j < len(lines) and lines[j].strip():
+                    j += 1
+                lines.insert(j, "")
+                lines.insert(j + 1, caption)
+                i = j + 2
+                continue
+        i += 1
+    return "\n".join(lines)
+
+def postprocess_markdown(text: str) -> str:
+    text = optimize_markdown_for_mobile(text)
+    text = _clean_double_hash_headings(text)
+    text = normalize_markdown_headings(text)
+    # Fix headings sin espacio que DeepSeek puede generar (ej. ##Título -> ## Título)
+    text = re.sub(r'^(#{1,6})(?=[^\s#])', r'\1 ', text, flags=re.MULTILINE)
+    # Convertir notación LaTeX de superíndices a HTML (ej. ^{1\dagger} -> <sup>1†</sup>)
+    text = _convert_latex_superscripts(text)
+    return text
+
+
+def _convert_latex_superscripts(text: str) -> str:
+    """Convierte notación LaTeX de superíndices a HTML legible."""
+    if not text:
+        return text
+    # ^{contenido} -> <sup>contenido</sup>
+    def _sup_repl(m):
+        inner = m.group(1)
+        # Reemplazar comandos LaTeX comunes
+        inner = inner.replace(r'\dagger', '†')
+        inner = inner.replace(r'\ddagger', '‡')
+        inner = inner.replace(r'\S', '§')
+        inner = inner.replace(r'\P', '¶')
+        inner = inner.replace(r'\ast', '*')
+        inner = inner.replace(r'\star', '★')
+        return f'<sup>{inner}</sup>'
+    text = re.sub(r'\^\{([^}]+)\}', _sup_repl, text)
+    # ^N simple (un solo carácter/número) -> <sup>N</sup>
+    text = re.sub(r'\^([\d*†‡§¶])', r'<sup>\1</sup>', text)
+    return text
+
+
+# ============================================================
+# IDIOMA
+# ============================================================
+
+def detect_language(text: str) -> str:
+    sample = text[:8000].lower()
+    sp_m = [" el ", " la ", " los ", " las ", " de ", " que ",
+            " para ", " una ", " un ", " y "]
+    en_m = [" the ", " of ", " and ", " that ", " for ",
+            " with ", " this ", " are ", " is "]
+    sp = sum(sample.count(x) for x in sp_m)
+    en = sum(sample.count(x) for x in en_m)
+    return "Spanish" if sp > en * 1.2 else "English"
+
+
+# ============================================================
+# TABLAS
+# ============================================================
+
+TABLE_BLOCK_PATTERN = re.compile(
+    r"(?ms)"
+    r"(^\|.*?\n"
+    r"\|(?:\s*:?-+:?\s*\|)+.*?"
+    r"(?:\n\|.*?)+)"
+)
+
+
+
+
+
+
+def _find_references_line_index(lines: list[str]) -> Optional[int]:
+    for i, line in enumerate(lines):
+        if _is_ref_heading(line.strip()):
+            return i
+    return None
+
+
+
+
+
+
+
+
+
+
+def _rows_to_markdown(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    n_cols = max(len(r) for r in rows)
+    norm = []
+    for r in rows:
+        row = list(r) + [""] * (n_cols - len(r))
+        row = [c.replace("|", "\\|") for c in row[:n_cols]]
+        norm.append(row)
+
+    header = norm[0]
+    sep = ["---"] * n_cols
+    body = norm[1:]
+
+    lines = ["| " + " | ".join(header) + " |"]
+    lines.append("|" + "|".join(sep) + "|")
+    for row in body:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+
+
+
+
+
+
+# ============================================================
+# CHUNKING
+# ============================================================
+
+def _chunk_has_real_text(chunk: str, min_signal: int = 80) -> bool:
+    return _markdown_text_signal(chunk) >= min_signal
+
+
+def chunk_markdown(text: str, max_chars: int = MAX_CHARS_PER_CHUNK) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text] if _chunk_has_real_text(text) else []
+
+    sections = re.split(r"(\n\s*\n)", text)
+    chunks = []
+    current = ""
+    for section in sections:
+        if len(current) + len(section) <= max_chars:
+            current += section
+            continue
+        if current.strip():
+            chunks.append(current.strip())
+        if len(section) > max_chars:
+            start = 0
+            while start < len(section):
+                end = start + max_chars
+                chunks.append(section[start:end])
+                start = end
+            current = ""
+        else:
+            current = section
+    if current.strip():
+        chunks.append(current.strip())
+
+    filtered = []
+    dropped = 0
+    for chunk in chunks:
+        if _chunk_has_real_text(chunk):
+            filtered.append(chunk)
+        else:
+            dropped += 1
+    if dropped:
+        log(f"[CHUNK] {dropped} chunks vacíos descartados")
+    return filtered
+
+
+# ============================================================
+# PROMPT
+# ============================================================
+
+TRANSLATION_SYSTEM_PROMPT = r"""
+Eres el traductor académico principal de PsiHub Reader.
+
+REGLA FUNDAMENTAL:
+TRADUCE TODO EL CONTENIDO. NO RESUMAS. NO OMITAS. NO SIMPLIFIQUES.
+
+Debes preservar:
+- título, subtítulos, autores, afiliaciones
+- abstract/resumen, palabras clave
+- cuerpo del artículo, citas, referencias, notas
+- tablas, captions, DOI, URLs
+- nombres propios, instituciones, fórmulas, símbolos
+- números, estadísticas, terminología científica
+
+SÍMBOLOS DE AFILIACIÓN:
+Los caracteres *, †, ‡, §, ¶, **, ††, ‡‡ que aparecen junto a nombres
+de autores o afiliaciones deben preservarse EXACTAMENTE como están.
+
+PRINCIPIOS:
+1. Fidelidad semántica máxima.
+2. Español académico natural.
+3. No introducir información ausente.
+4. No interpretar ni explicar por cuenta propia.
+5. No resumir ni eliminar repeticiones legítimas.
+6. Terminología consistente.
+
+MARKDOWN:
+Conservar headings, listas, tablas, links, imágenes, HTML, markers.
+
+Los marcadores `@@PAGE_N@@` son tokens internos. NO los traduzcas,
+NO los reformatees, NO los elimines. Devuélvelos tal cual, solos en su línea.
+
+Los tokens `@@TABLE_N@@` son marcadores internos. NO los traduzcas.
+
+REFERENCIAS: conserva cada una como unidad independiente.
+
+CITAS: conserva (Smith, 2020), [12], etc.
+
+DOI Y URL: nunca inventes, modifiques ni traduzcas.
+
+TABLAS: no conviertas una tabla en prosa.
+
+RESULTADO: devuelve únicamente la traducción.
+"""
+
+
+# ============================================================
+# DEEPSEEK
+# ============================================================
+
+async def translate_with_deepseek(
+    text: str, api_key: str, first_chunk: bool = False, max_retries: int = 3,
+) -> str:
+    if not api_key:
+        raise RuntimeError("No hay API key de DeepSeek.")
+    if not _chunk_has_real_text(text, min_signal=40):
+        raise RuntimeError("Chunk sin texto real.")
+
+    user_prompt = ""
+    if first_chunk:
+        user_prompt += (
+            "ESTE ES EL COMIENZO DEL DOCUMENTO.\n"
+            "Comenzá desde la primera palabra.\n\n"
+        )
+    user_prompt += "TRADUCE EL SIGUIENTE CONTENIDO:\n\n" + text
+
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.1,
+        "stream": False,
+        "thinking": {"type": "disabled"},
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = await DEEPSEEK_HTTP_CLIENT.post(
+                DEEPSEEK_BASE_URL, headers=headers, json=payload,
+            )
+
+            if response.status_code == 429 or response.status_code >= 500:
+                raise httpx.HTTPStatusError(
+                    f"DeepSeek HTTP {response.status_code}",
+                    request=response.request, response=response,
+                )
+            response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+
+            if not content or not content.strip():
+                raise RuntimeError("DeepSeek devolvió vacío.")
+            if _is_deepseek_refusal(content):
+                raise RuntimeError("DeepSeek se negó a traducir.")
+
+            return content
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+
+    raise RuntimeError(f"DeepSeek falló: {last_error}")
+
+
+async def _worker(worker_id, queue, results, total, api_key):
+    while True:
+        item = await queue.get()
+        if item is None:
+            queue.task_done()
+            return
+        idx, chunk = item
+        try:
+            log(f"[TRANSLATION] Worker {worker_id} -> chunk {idx + 1}/{total}")
+            results[idx] = await translate_with_deepseek(
+                chunk, api_key=api_key, first_chunk=(idx == 0),
+            )
+        except BaseException as exc:
+            results[idx] = exc
+        finally:
+            queue.task_done()
+
+
+async def translate_markdown(markdown: str, model: Optional[str] = None) -> str:
+    chunks = chunk_markdown(markdown)
+    if not chunks:
+        log("[TRANSLATION] Sin chunks")
+        return markdown
+    if not DEEPSEEK_API_KEYS:
+        raise RuntimeError("No hay DEEPSEEK_API_KEY configuradas.")
+
+    wc = min(TRANSLATION_CONCURRENCY, len(DEEPSEEK_API_KEYS), len(chunks))
+    log(f"[TRANSLATION] {len(chunks)} chunks | {wc} workers")
+
+    queue = asyncio.Queue()
+    results = [None] * len(chunks)
+    for i, c in enumerate(chunks):
+        await queue.put((i, c))
+
+    workers = [
+        asyncio.create_task(_worker(i + 1, queue, results, len(chunks),
+                                    DEEPSEEK_API_KEYS[i]))
+        for i in range(wc)
+    ]
+    await queue.join()
+    for _ in workers:
+        await queue.put(None)
+    await asyncio.gather(*workers, return_exceptions=True)
+
+    errors = [r for r in results if isinstance(r, BaseException)]
+    if errors:
+        raise errors[0]
+    translated = [r for r in results if isinstance(r, str)]
+    if len(translated) != len(chunks):
+        raise RuntimeError("Traducción incompleta")
+    return "\n\n".join(translated)
+
+
+def validate_translation(original_ir: dict, translated_ir: dict) -> TranslationQualityReport:
+    warnings = []
+    orig_blocks = sum(len(p.get("elements", [])) for p in original_ir.get("pages", {}).values())
+    trans_blocks = sum(len(p.get("elements", [])) for p in translated_ir.get("pages", {}).values())
+    
+    missing_blocks = orig_blocks - trans_blocks
+    if missing_blocks != 0:
+        warnings.append(f"Block count mismatch: {orig_blocks} vs {trans_blocks}")
+        
+    # Very basic numbers check
+    orig_text = " ".join(e.text for p in original_ir.get("pages", {}).values() for e in p.get("elements", []))
+    trans_text = " ".join(e.text for p in translated_ir.get("pages", {}).values() for e in p.get("elements", []))
+    
+    orig_numbers = len(re.findall(r'\b\d+\b', orig_text))
+    trans_numbers = len(re.findall(r'\b\d+\b', trans_text))
+    missing_numbers = max(0, orig_numbers - trans_numbers)
+    if missing_numbers > orig_numbers * 0.1 and orig_numbers > 10:
+        warnings.append(f"Significant number loss: {orig_numbers} -> {trans_numbers}")
+        
+    return TranslationQualityReport(
+        is_valid=len(warnings) == 0,
+        missing_blocks=abs(missing_blocks),
+        missing_numbers=missing_numbers,
+        missing_citations=0,
+        warnings=warnings
+    )
+
+
+_MD_TABLE_BLOCK_RE = re.compile(
+    r"(?ms)(^\s*\|[^\n]+\|\s*\n^\s*\|(?:\s*:?-+:?\s*\|)+\s*\n(?:^\s*\|[^\n]+\|\s*(?:\n|$))+)")
+
+
+def _parse_md_table_rows(table_md: str) -> list[list[str]]:
+    rows = []
+    for line in table_md.splitlines():
+        s = line.strip()
+        if not s.startswith("|") or not s.endswith("|"):
+            continue
+        cells = [c.strip() for c in s[1:-1].split("|")]
+        if cells and all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+async def _translate_one_mistral_table(table_md: str) -> str:
+    rows = _parse_md_table_rows(table_md)
+    if not rows:
+        return table_md
+    cells = []
+    positions = []
+    for ri, row in enumerate(rows):
+        for ci, cell in enumerate(row):
+            if cell.strip():
+                positions.append((ri, ci))
+                cells.append(cell.strip())
+    if not cells:
+        return table_md
+    xml = "\n".join(f'<b id="{i}">{c}</b>' for i, c in enumerate(cells))
+    prompt = (
+        "TRADUCE AL ESPAÑOL SOLO EL TEXTO INTERNO DE ESTAS CELDAS DE UNA TABLA ACADÉMICA.\n"
+        "MANTÉN EXACTAMENTE las etiquetas <b id=\"N\">...</b>.\n"
+        "No cambies números, símbolos estadísticos, siglas (PA, NA, RBF, etc.), nombres propios, URLs, DOI ni identificadores de variables cuando claramente sean identificadores.\n"
+        "Sí traduce etiquetas descriptivas como engagement, emotion, ego-network, mean, variance, accuracy, recall, etc.\n"
+        "No agregues explicaciones.\n\n" + xml
+    )
+    result = await translate_with_deepseek(prompt, api_key=DEEPSEEK_API_KEYS[0], first_chunk=False)
+    translations = {}
+    for m in re.finditer(r'<b\s+id=["\']?(\d+)["\']?>(.*?)</b>', result, flags=re.DOTALL | re.IGNORECASE):
+        translations[int(m.group(1))] = m.group(2).strip()
+    if len(translations) < max(1, len(cells) * 0.70):
+        log(f"[MISTRAL TABLE] Traducción rechazada: {len(translations)}/{len(cells)} celdas")
+        return table_md
+    translated_rows = [list(r) for r in rows]
+    for i, (ri, ci) in enumerate(positions):
+        if i in translations and translations[i]:
+            translated_rows[ri][ci] = translations[i]
+    return _rows_to_markdown(translated_rows)
+
+
+async def translate_mistral_tables(markdown: str) -> str:
+    """Second-pass translation for tables embedded in Mistral page Markdown."""
+    if not markdown or not DEEPSEEK_API_KEYS:
+        return markdown
+    matches = list(_MD_TABLE_BLOCK_RE.finditer(markdown))
+    if not matches:
+        return markdown
+    log(f"[MISTRAL TABLE] Detectadas {len(matches)} tablas para traducción estructurada")
+    replacements = []
+    for m in matches:
+        original = m.group(1)
+        try:
+            translated = await _translate_one_mistral_table(original)
+        except Exception as exc:
+            log(f"[MISTRAL TABLE] Error: {exc}")
+            translated = original
+        replacements.append((m.start(1), m.end(1), translated))
+    for a, b, rep in reversed(replacements):
+        markdown = markdown[:a] + rep + markdown[b:]
+    return markdown
+
+async def translate_document_ir(ir: dict, model: Optional[str] = None) -> dict:
+    if not DEEPSEEK_API_KEYS:
+        raise RuntimeError("No hay DEEPSEEK_API_KEY configuradas.")
+        
+    xml_chunks = []
+    chunk_mapping = {} # block_id -> (pnum, elem_idx, r_idx, c_idx)
+    
+    current_chunk = ""
+    block_id = 0
+    
+    def add_to_chunk(text, ref_tuple):
+        nonlocal current_chunk, block_id
+        # Ignoramos si está vacío o si es un número muy corto
+        if not text.strip() or (len(text.strip()) < 3 and text.strip().isdigit()):
+            return
+        tag = f'<b id="{block_id}">{text}</b>\n'
+        if len(current_chunk) + len(tag) > 3000:
+            xml_chunks.append(current_chunk)
+            current_chunk = ""
+        current_chunk += tag
+        chunk_mapping[block_id] = ref_tuple
+        block_id += 1
+        
+    for pnum, pdata in ir.get("pages", {}).items():
+        for e_idx, elem in enumerate(pdata.get("elements", [])):
+            if isinstance(elem, MistralPageBlock):
+                continue
+            if isinstance(elem, TableBlock) and elem.table_data is not None:
+                for r_idx, row in enumerate(elem.table_data):
+                    for c_idx, cell in enumerate(row):
+                        if cell:
+                            add_to_chunk(cell, (pnum, e_idx, r_idx, c_idx))
+            elif isinstance(elem, TextBlock) or type(elem) == LayoutElement:
+                add_to_chunk(elem.text, (pnum, e_idx, None, None))
+                
+    if current_chunk:
+        xml_chunks.append(current_chunk)
+        
+    if not xml_chunks:
+        log("[AST TRANSLATION] Sin bloques para traducir")
+        return ir
+        
+    wc = min(TRANSLATION_CONCURRENCY, len(DEEPSEEK_API_KEYS), len(xml_chunks))
+    log(f"[AST TRANSLATION] {len(xml_chunks)} chunks XML | {wc} workers")
+    
+    queue = asyncio.Queue()
+    results = [None] * len(xml_chunks)
+    for i, c in enumerate(xml_chunks):
+        prompt = (
+            "TRADUCE LOS SIGUIENTES BLOQUES XML AL ESPAÑOL.\n"
+            "MANTÉN LAS ETIQUETAS XML <b id=\"...\">...</b> EXACTAMENTE IGUAL, "
+            "TRADUCIENDO SOLO EL TEXTO INTERNO.\n\n"
+            f"{c}"
+        )
+        await queue.put((i, prompt))
+        
+    workers = [
+        asyncio.create_task(_worker(i + 1, queue, results, len(xml_chunks), DEEPSEEK_API_KEYS[i]))
+        for i in range(wc)
+    ]
+    await queue.join()
+    for _ in workers:
+        await queue.put(None)
+    await asyncio.gather(*workers, return_exceptions=True)
+    
+    errors = [r for r in results if isinstance(r, BaseException)]
+    if errors:
+        raise errors[0]
+        
+    for translated_chunk in results:
+        if not isinstance(translated_chunk, str):
+            continue
+        for m in re.finditer(r'<b\s+id=["\']?(\d+)["\']?>(.*?)</b>', translated_chunk, flags=re.DOTALL):
+            bid = int(m.group(1))
+            translated_text = m.group(2).strip()
+            
+            if bid in chunk_mapping:
+                pnum, e_idx, r_idx, c_idx = chunk_mapping[bid]
+                elem = ir["pages"][pnum]["elements"][e_idx]
+                if r_idx is not None and c_idx is not None:
+                    elem.table_data[r_idx][c_idx] = translated_text
+                else:
+                    elem.text = translated_text
+                    
+    return ir
+
+
+# ============================================================
+# FIGURAS VECTORIALES
+# ============================================================
+
+FIGURE_LABEL_HINTS = {
+    "time", "day", "days", "week", "month", "year", "years",
+    "volume", "value", "score", "level", "count", "total",
+    "mean", "median", "sum", "index", "ratio", "rate",
+}
+
+
+def _is_figure_label(text: str) -> bool:
+    if not text or len(text) > 40:
+        return False
+    if any(c in text for c in ".!?;:"):
+        return False
+    if text.strip().lower() in FIGURE_LABEL_HINTS:
+        return True
+    if len(text) < 15 and (text.isupper() or text.islower()):
+        return True
+    return False
+
+
+def collect_figure_labels(doc, max_per_page=30):
+    collected = []
+    for pi, page in enumerate(doc):
+        pd = page.get_text("dict")
+        for b in pd.get("blocks", []):
+            if b.get("type") != 0:
+                continue
+            for line in b.get("lines", []):
+                for span in line.get("spans", []):
+                    t = (span.get("text") or "").strip()
+                    if _is_figure_label(t):
+                        collected.append({
+                            "page": pi, "text": t,
+                            "bbox": tuple(span["bbox"]),
+                            "size": span.get("size", 11),
+                        })
+    return collected
+
+
+async def translate_figure_labels(labels: list[dict]) -> dict[str, str]:
+    unique = list({l["text"] for l in labels})
+    if not unique or not DEEPSEEK_API_KEYS:
+        return {}
+    prompt = (
+        "Traducí al español las etiquetas sueltas de figuras académicas. "
+        "Devolvé SOLO JSON {original: traducción}.\n\nEtiquetas:\n"
+        + "\n".join(f"- {t}" for t in unique)
+    )
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": "Devolvés siempre JSON válido."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0, "stream": False,
+        "thinking": {"type": "disabled"},
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        r = await DEEPSEEK_HTTP_CLIENT.post(
+            DEEPSEEK_BASE_URL,
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEYS[0]}",
+                     "Content-Type": "application/json"},
+            json=payload,
+        )
+        r.raise_for_status()
+        d = json.loads(r.json()["choices"][0]["message"]["content"])
+        return {k: v for k, v in d.items() if isinstance(v, str)}
+    except Exception as e:
+        log(f"[FIGURES] Error: {e}")
+        return {}
+
+
+def apply_figure_label_translations(doc, labels, translations):
+    if not translations:
+        return 0
+    n = 0
+    for lb in labels:
+        orig = lb["text"]
+        if orig not in translations:
+            continue
+        tr = translations[orig]
+        if tr.strip() == orig.strip():
+            continue
+        try:
+            page = doc[lb["page"]]
+            x0, y0, x1, y1 = lb["bbox"]
+            w, h = x1 - x0, y1 - y0
+            if w <= 0 or h <= 0:
+                continue
+            page.add_redact_annot(fitz.Rect(x0, y0, x1, y1), fill=(1, 1, 1))
+            page.apply_redactions()
+            fs = min(h * 0.85, lb["size"])
+            tw = fitz.get_text_length(tr, fontname="helv", fontsize=fs)
+            if tw > w and tw > 0:
+                fs *= (w / tw)
+            fs = max(fs, 4)
+            page.insert_text((x0, y1 - 1), tr, fontname="helv",
+                             fontsize=fs, color=(0, 0, 0))
+            n += 1
+        except Exception as e:
+            log(f"[FIGURES] Error: {e}")
+    return n
+
+
+# ============================================================
+# REFERENCIAS
+# ============================================================
+
+def _is_ref_heading(text: str) -> bool:
+    if not text:
+        return False
+    # Limpiar marcadores markdown, links, y formato
+    clean = re.sub(r'^\s*[#*_>\s]+', '', text)
+    clean = re.sub(r'[#*_\s:]+$', '', clean).strip()
+    # Extraer texto de links tipo [Referencias](/api/...)
+    link_m = re.match(r'^\[([^\]]+)\]\(.*\)$', clean)
+    if link_m:
+        clean = link_m.group(1).strip()
+    clean = clean.lower()
+    return clean in {
+        "references", "referencias", "bibliography", "bibliografía",
+        "bibliografia", "reference list", "literature cited",
+        "works cited", "obras citadas", "lista de referencias",
+    }
+
+
+def _looks_like_ref(text: str) -> bool:
+    if not text or len(text) > 800:
+        return False
+    return bool(re.search(r"\b(?:19|20)\d{2}\b", text.strip().lstrip("> ")))
+
+
+def find_refs_start(lines):
+    for i, l in enumerate(lines):
+        if _is_ref_heading(l):
+            return i
+    return None
+
+
+def looks_like_ref_start(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return False
+    if re.match(r"^(?:\[\d+\]|\d+[.)])\s+", s):
+        return True
+    # Standard bibliographic starts: Author(s). 2004. / Author(s) 2004.
+    if re.match(r"^[A-ZÁÉÍÓÚÑÜ][A-Za-zÁÉÍÓÚÑÜáéíóúñü'’\-]+(?:[ ,;.&A-Za-zÁÉÍÓÚÑÜáéíóúñü'’\-]+){0,80}\s+(?:19|20)\d{2}[a-z]?\.", s):
+        return True
+    if re.match(r"^[A-ZÁÉÍÓÚÑÜ][A-Za-zÁÉÍÓÚÑÜáéíóúñü'’\-]+.*\b(?:19|20)\d{2}[a-z]?\s*[:.)]", s):
+        return True
+    return False
+
+
+def split_refs(lines):
+    entries, cur = [], []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            if cur:
+                entries.append(" ".join(cur).strip())
+                cur = []
+            continue
+        if cur and looks_like_ref_start(s):
+            entries.append(" ".join(cur).strip())
+            cur = [s]
+        else:
+            cur.append(s)
+    if cur:
+        entries.append(" ".join(cur).strip())
+    return [e for e in entries if e.strip()]
+
+
+
+def normalize_reference_entries(markdown: str) -> str:
+    """Canonicalize bibliography entries before numbering/linking."""
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    rs = find_refs_start(lines)
+    if rs is None:
+        return markdown
+    refs = split_refs(lines[rs + 1:])
+    if not refs:
+        return markdown
+    out = lines[:rs + 1] + [""]
+    out.extend(refs)
+    return "\n".join(out)
+
+def number_references(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    start = find_refs_start(lines)
+    if start is None:
+        return markdown
+    refs = split_refs(lines[start + 1:])
+    if not refs:
+        return markdown
+    numbered = []
+    for i, r in enumerate(refs, start=1):
+        r = re.sub(r"^\s*(?:\[\d+\]|\d+[.)])\s+", "", r)
+        numbered.append(f"[{i}] {r}")
+    out = list(lines[:start + 1])
+    out.append("")
+    out.extend(numbered)
+    return "\n".join(out)
+
+
+def strip_markers_from_refs(markdown: str) -> str:
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    rs = None
+    for i, l in enumerate(lines):
+        if _is_ref_heading(l):
+            rs = i
+            break
+    if rs is None:
+        return markdown
+    mr = re.compile(r"^\s*<!--\s*PAGE:\d+\s*-->\s*$")
+    before = lines[:rs]
+    after = [l for l in lines[rs:] if not mr.match(l)]
+    return "\n".join(before + after)
+
+
+def normalize_footnotes(markdown: str) -> str:
+    # Footnotes are normalized structurally during IR rendering.
+    return markdown
+
+
+def _pdf_url(doc_id: str, page: Optional[int] = None) -> str:
+    url = f"/api/source-pdf/{doc_id}"
+    if page is not None and page >= 1:
+        url += f"#page={page}"
+    return url
+
+
+def _page_from_marker(line: str, cur: int) -> int:
+    m = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+    return int(m.group(1)) if m else cur
+
+
+def _make_visible_markers(markdown, page_count, page_offset=0,
+                          source_page_count=None) -> str:
+    if not markdown:
+        return markdown
+    markdown = re.sub(
+        r"[ \t]*(<!--\s*PAGE\s*:?\s*\d+\s*-->)[ \t]*",
+        r"\n\n\1\n\n", markdown, flags=re.IGNORECASE,
+    )
+    markdown = re.sub(r"\n{4,}", "\n\n\n", markdown)
+    lines = markdown.splitlines()
+    out = []
+    for line in lines:
+        m = re.match(r"^\s*<!--\s*PAGE\s*:?\s*(\d+)\s*-->\s*$",
+                     line, re.IGNORECASE)
+        if not m:
+            out.append(line)
+            continue
+        page = int(m.group(1))
+        sp = page + page_offset
+        total = source_page_count or page_count
+        while out and not out[-1].strip():
+            out.pop()
+        if out and out[-1].lstrip().startswith(">"):
+            out.append("")
+        if out:
+            out.append("")
+        out.append(f"> **Página {sp} de {total}**")
+        out.append("")
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out)
+
+
+def index_references(markdown, document_id=None, page_count=None,
+                     page_offset=0) -> str:
+    if not markdown:
+        return markdown
+    if '<a id="top"></a>' not in markdown:
+        markdown = '<a id="top"></a>\n\n' + markdown
+    lines = markdown.splitlines()
+    start = find_refs_start(lines)
+    if start is None:
+        return markdown
+    before = lines[:start]
+    refs = split_refs(lines[start + 1:])
+    if not refs:
+        return markdown
+    normalized = []
+    for r in refs:
+        r = re.sub(r"^\s*\[(\d+)\]\s+", "", r)
+        r = re.sub(r"^\s*\d+[.)]\s+", "", r)
+        normalized.append(r)
+
+    body = "\n".join(before)
+    first_anchor = {}
+    counts = Counter()
+
+    def repl(m):
+        nums = [int(n) for n in re.findall(r"\d+", m.group(1))]
+        links = []
+        for n in nums:
+            if not 1 <= n <= len(normalized):
+                links.append(f"[{n}]")
+                continue
+            counts[n] += 1
+            occ = counts[n]
+            anc = f"cite-{n}-{occ}"
+            first_anchor.setdefault(n, anc)
+            links.append(
+                f'<a id="{anc}"></a><a href="#ref-{n}">[{n}]</a>'
+            )
+        return ", ".join(links)
+
+    body = re.sub(r"\[((?:\d+\s*,?\s*)+)\]", repl, body)
+    out = body.splitlines()
+    out.append("")
+    out.append(lines[start])
+    out.append("")
+
+    cur_page = 1
+    for l in lines[:start]:
+        cur_page = _page_from_marker(l, cur_page)
+    ref_page = cur_page
+
+    for i, r in enumerate(normalized, start=1):
+        out.append(f'<a id="ref-{i}"></a>')
+        out.append(f"**{i}.** {r}")
+        tgt = first_anchor.get(i)
+        if tgt:
+            out.append(f'<a href="#{tgt}">↩ Volver al texto</a>')
+        else:
+            pass
+        out.append("")
+
+    result = "\n".join(out)
+    if document_id and ref_page:
+        url = _pdf_url(document_id, ref_page + page_offset)
+        pat = re.compile(
+            r"^(\s*#{1,6}\s*)(references|referencias|bibliography|"
+            r"bibliografía|reference list|literature cited)\s*$",
+            re.IGNORECASE,
+        )
+        lines = result.splitlines()
+        for i, l in enumerate(lines):
+            m = pat.match(l)
+            if m:
+                lines[i] = f"{m.group(1)}[{m.group(2)}]({url})"
+                break
+        result = "\n".join(lines)
+    return result
+
+
+
+def link_author_year_citations(markdown: str) -> str:
+    """Link author-year citations to their normalized reference anchors."""
+    if not markdown:
+        return markdown
+    lines = markdown.splitlines()
+    rs = next((i for i, l in enumerate(lines) if _is_ref_heading(l)), None)
+    if rs is None:
+        return markdown
+    ref_map = {}
+    for i, line in enumerate(lines[rs + 1:], start=1):
+        m = re.match(r"^\s*(?:\*\*)?(\d+)(?:\*\*)?[.)]?\s+(.+)$", line)
+        if not m:
+            continue
+        ref = m.group(2)
+        ym = re.search(r"\b((?:19|20)\d{2})\b", ref)
+        am = re.match(r"([A-ZÁÉÍÓÚÑÜ][A-Za-zÁÉÍÓÚÑÜáéíóúñü'’\-]+)", ref)
+        if ym and am:
+            ref_map[(am.group(1).casefold(), ym.group(1))] = int(m.group(1))
+    if not ref_map:
+        return markdown
+    def repl_paren(m):
+        inner = m.group(1)
+        def repl_one(cm):
+            surname, year = cm.group(1), cm.group(2)
+            n = ref_map.get((surname.casefold(), year))
+            if not n:
+                return cm.group(0)
+            return f'<a href="#ref-{n}">{cm.group(0)}</a>'
+        return "(" + re.sub(r"\b([A-ZÁÉÍÓÚÑÜ][A-Za-zÁÉÍÓÚÑÜáéíóúñü'’\-]+)(?:\s+et\s+al\.)?,\s*(\d{4})\b", repl_one, inner) + ")"
+    body = "\n".join(lines[:rs])
+    body = re.sub(r"\(([^()\n]{3,180})\)", repl_paren, body)
+    return body + "\n" + "\n".join(lines[rs:])
+
+def add_heading_links(markdown, document_id, page_offset=0) -> str:
+    if not markdown or not document_id:
+        return markdown
+    lines = markdown.splitlines()
+    cur = 1
+    out = []
+    seen = set()
+    for line in lines:
+        pm = re.match(r"^\s*<!--\s*PAGE:(\d+)\s*-->\s*$", line)
+        if pm:
+            cur = int(pm.group(1))
+            out.append(line)
+            continue
+        h = re.match(r"^(\s*#{1,6}\s+)(.+?)\s*$", line)
+        if not h:
+            out.append(line)
+            continue
+        title = h.group(2).strip()
+        if title.startswith("[") and title.endswith(")"):
+            out.append(line)
+            continue
+        key = (title.casefold(), cur)
+        if key in seen:
+            out.append(line)
+            continue
+        seen.add(key)
+        url = _pdf_url(document_id, cur + page_offset)
+        out.append(f"{h.group(1)}[{title}]({url})")
+    return "\n".join(out)
+
+
+# ============================================================
+# PIPELINE PRINCIPAL
+# ============================================================
+
+async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None):
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise ValueError("No es un PDF.")
+
+    effective_model = model or DEEPSEEK_MODEL
+    key = cache_key(pdf_bytes, effective_model)
+
+    cached = load_cache(key)
+    if cached is not None:
+        log("[CACHE] Resultado encontrado.")
+        return cached
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="psihub_"))
+    image_dir = temp_dir / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    original_path = PDF_STORE_DIR / f"{key}.pdf"
+    if not original_path.exists():
+        original_path.write_bytes(pdf_bytes)
+
+    log_section("1/7 ANÁLISIS DE LAYOUT Y EXTRACCIÓN (DocumentIR)")
+    t0 = time.perf_counter()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    original_page_count = doc.page_count
+    try:
+        profile = analyze_document_layout(doc)
+        log(f"[LAYOUT] {profile.page_count} páginas | "
+            f"{profile.likely_columns} columnas")
+            
+        ir = build_document_ir(doc, profile)
+        log(f"[IR] IR construido con {len(ir['pages'])} páginas")
+        
+        log("[PIPELINE] 2.5/7 Extrayendo imágenes con PyMuPDF...")
+        pymupdf_images = extract_pdf_images_to_dir(doc, image_dir)
+        log(f"[IMAGES] PyMuPDF: {sum(len(v) for v in pymupdf_images.values())}")
+        cleaned_bytes = doc.tobytes()
+    finally:
+        doc.close()
+
+    images_by_page: dict[int, list[str]] = defaultdict(list)
+    for pn, paths in pymupdf_images.items():
+        images_by_page[pn].extend(paths)
+
+    total_imgs = sum(len(v) for v in images_by_page.values())
+    log(f"[IMAGES] Total: {total_imgs}")
+
+    # Check overall document structural quality and identify bad pages
+    bad_pages = []
+    review_pages = []
+    total_q_score = 0.0
+    page_reports = {}
+    
+    for pnum, pdata in ir.get("pages", {}).items():
+        report = evaluate_page_quality_v2(pnum, pdata.get("elements", []))
+        page_reports[pnum] = report
+        total_q_score += report.score
+        
+        if report.needs_mistral:
+            bad_pages.append(pnum)
+        elif report.needs_review:
+            review_pages.append(pnum)
+            
+    avg_quality = total_q_score / max(1, len(ir.get("pages", {})))
+    
+    doc_report = DocumentQualityReport(
+        average_score=avg_quality,
+        bad_pages=bad_pages,
+        review_pages=review_pages,
+        pages=page_reports
+    )
+    
+    log(f"[QUALITY] Average Document IR Quality: {doc_report.average_score:.2f}")
+
+    if doc_report.average_score < 0.20:
+        raise RuntimeError(f"Extracción con calidad estructural insuficiente ({doc_report.average_score:.2f}).")
+
+    mistral_used = 0
+    mistral_cost = 0.0
+    total_pages = original_page_count
+    
+    if bad_pages and MISTRAL_API_KEY:
+        log(f"[HYBRID] Fallback a Mistral para {len(bad_pages)} páginas: {bad_pages}")
+        mistral_pages_0_idx = [p - 1 for p in bad_pages]
+        
+        try:
+            (
+                mistral_parts, _, _, _, mistral_images, _, _
+            ) = await parse_pdf_with_mistral(pdf_bytes, pages=mistral_pages_0_idx)
+            
+            # Page-level fallback: once a page is judged structurally bad,
+            # use Mistral as the authoritative body representation. Do not
+            # retain PyMuPDF footnotes here, because Mistral may already emit
+            # them and keeping both creates duplicates.
+            successful = 0
+            for pnum, m_md in zip(bad_pages, mistral_parts):
+                if not isinstance(m_md, str) or not m_md.strip():
+                    continue
+                ir["pages"][pnum]["elements"] = [
+                    MistralPageBlock(
+                        text="", normalized="",
+                        x0=0, y0=0, x1=0, y1=0, page=pnum, width=0, height=0,
+                        region="body", type="mistral", raw_markdown=m_md
+                    )
+                ]
+                successful += 1
+            mistral_used = successful
+            mistral_cost = successful * MISTRAL_COST_PER_PAGE
+            # Save and update images dictionary
+            saved_mistral_images = _save_mistral_images(
+                mistral_images, mistral_pages_0_idx, image_dir
+            )
+            for pnum_1_idx, paths in saved_mistral_images.items():
+                images_by_page[pnum_1_idx].extend(paths)
+        except Exception as e:
+            log(f"[MISTRAL] Fallback falló: {e}")
+
+    if bad_pages and not MISTRAL_API_KEY:
+        log(f"[HYBRID] {len(bad_pages)} páginas requieren Mistral, pero MISTRAL_API_KEY no está configurada.")
+    log(f"[HYBRID] {mistral_used}/{total_pages} páginas vía Mistral (~${mistral_cost:.4f})")
+    log(f"[PARSING] {time.perf_counter() - t0:.2f}s")
+    
+    # Generate Markdown from Document IR
+    raw_md = render_ir_to_markdown(ir)
+
+
+    p1_elems = ir["pages"].get(1, {}).get("elements", [])
+    metadata = extract_document_metadata(p1_elems)
+    log(f"[METADATA] Título: {metadata.get('title')}")
+    log(f"[METADATA] Autores: {metadata.get('authors')}")
+    log(f"[METADATA] Año: {metadata.get('year')}")
+
+    log_section("3/7 PREPARACIÓN")
+    source_lang = detect_language(raw_md)
+    log(f"[LANGUAGE] {source_lang}")
+
+    reader_bytes = cleaned_bytes
+    fig_repls = 0
+    if ENABLE_FIGURE_TRANSLATION:
+        log_section("4/7 FIGURAS")
+        try:
+            fd = fitz.open(stream=cleaned_bytes, filetype="pdf")
+            labels = collect_figure_labels(fd)
+            if labels:
+                tr = await translate_figure_labels(labels)
+                if tr:
+                    fig_repls = apply_figure_label_translations(fd, labels, tr)
+                    reader_bytes = fd.tobytes()
+            fd.close()
+        except Exception as e:
+            log(f"[FIGURES] Error: {e}")
+
+    reader_path = READER_PDF_DIR / f"{key}.pdf"
+    reader_path.write_bytes(reader_bytes)
+
+    log_section("5/7 TRADUCCIÓN PARALELA (AST)")
+    t1 = time.perf_counter()
+
+    # 1. Translate Mistral Pages separately
+    for pnum, pdata in ir.get("pages", {}).items():
+        for elem in pdata.get("elements", []):
+            if isinstance(elem, MistralPageBlock) and elem.raw_markdown:
+                elem.raw_markdown = await translate_markdown(elem.raw_markdown, model)
+                elem.raw_markdown = await translate_mistral_tables(elem.raw_markdown)
+
+    # Save a copy to validate later
+    import copy
+    original_ir_for_validation = copy.deepcopy(ir)
+
+    # 2. Translate Structural AST
+    ir = await translate_document_ir(ir, model)
+
+    validation = validate_translation(original_ir_for_validation, ir)
+    if not validation.is_valid:
+        log(f"[WARNING] Traducción con posibles pérdidas estructurales: {validation.warnings}")
+
+    log(f"[TRANSLATION] {time.perf_counter() - t1:.2f}s")
+
+    log_section("6/7 POSTPROCESADO + IMÁGENES")
+    # Render AST to Markdown
+    translated_md = render_ir_to_markdown(ir)
+
+    # Apply regex-based markdown repairs on final string
+    translated_md = preprocess_raw_markdown(translated_md)
+    translated_md = remove_mistral_url_placeholders(translated_md)
+    translated_md = remove_obvious_editorial_noise(translated_md)
+    translated_md = remove_editorial_metadata_blocks(translated_md)
+    translated_md = remove_repeated_lines(translated_md, min_repetitions=3)
+    
+    translated_md, corr_notes = extract_correspondence_notes(translated_md)
+    translated_md = clean_and_join_broken_paragraphs(translated_md)
+    translated_md = optimize_markdown_for_mobile(translated_md)
+    translated_md = normalize_reference_entries(translated_md)
+    translated_md = number_references(translated_md)
+    
+    translated_md = postprocess_markdown(translated_md)
+    translated_md = repair_caption_interruptions(translated_md)
+
+    translated_md = inject_canonical_images(
+        translated_md, key, image_dir, images_by_page=dict(images_by_page),
+    )
+    translated_md = strip_orphan_image_refs(translated_md)
+
+    translated_md = strip_markers_from_refs(translated_md)
+    translated_md = index_references(
+        translated_md, document_id=key,
+        page_count=original_page_count, page_offset=0,
+    )
+    translated_md = add_heading_links(
+        translated_md, document_id=key, page_offset=0,
+    )
+    translated_md = link_author_year_citations(translated_md)
+
+    if corr_notes:
+        block = "\n\n## Notas de correspondencia\n\n"
+        for i, n in enumerate(corr_notes, 1):
+            block += f"> **Nota {i}.** {n}\n\n"
+        rm = re.search(
+            r"\n#{1,6}\s*(?:References|Referencias|Bibliography|Bibliografía)\b",
+            translated_md, re.IGNORECASE,
+        )
+        if rm:
+            translated_md = (translated_md[:rm.start()] + block
+                             + translated_md[rm.start():])
+        else:
+            translated_md += block
+
+    translated_md = normalize_footnotes(translated_md)
+    translated_md = _make_visible_markers(
+        translated_md, page_count=original_page_count,
+        page_offset=0, source_page_count=original_page_count,
+    )
+
+    # Repair words split exactly at a page boundary. Move the visible page
+    # marker after the completed word/paragraph so it does not interrupt it.
+    translated_md = re.sub(
+        r"(?ms)^([^\n]+?)-\s*\n\n(> \*\*Página \d+ de \d+\*\*)\n\n([a-záéíóúñü][^\n]*)",
+        lambda m: f"{m.group(1)}{m.group(3)}\n\n{m.group(2)}",
+        translated_md, flags=re.IGNORECASE,
+    )
+    translated_md = re.sub(
+        r"@@\s*PAGE[_ ]?\d+\s*@@", "", translated_md, flags=re.IGNORECASE,
+    )
+
+    final_sig = _markdown_text_signal(translated_md)
+    # Final quality is structural, not a ratio of text characters to Markdown
+    # length. Combine extraction quality with translation integrity and hard
+    # artifact checks.
+    artifact_penalty = 0.0
+    if "@@PAGE_" in translated_md or "@@TABLE_" in translated_md:
+        artifact_penalty += 0.10
+    if re.search(r"data:image/[^;]+;base64,", translated_md, re.I):
+        artifact_penalty += 0.10
+    translation_factor = 1.0 if validation.is_valid else 0.85
+    quality_score = round(max(0.0, min(100.0,
+        doc_report.average_score * 100.0 * translation_factor
+        - artifact_penalty * 100.0
+    )))
+    log(f"[FINAL] Señal: {final_sig} | Calidad estructural: {quality_score}/100")
+
+    md_path = MD_STORE_DIR / f"{key}.md"
+    md_path.write_text(translated_md, encoding="utf-8")
+    orig_md_path = MD_STORE_DIR / f"{key}.original.md"
+    orig_md_path.write_text(raw_md, encoding="utf-8")
+    log(f"[SAVE] {md_path} ({len(translated_md)} chars)")
+
+    # Construct detailed OCR and Quality stats
+    reasons_map = {pnum: report.issues for pnum, report in doc_report.pages.items() if report.issues}
+    ocr_stats = {
+        "pages_total": total_pages,
+        "pages_pymupdf": total_pages - mistral_used,
+        "pages_mistral": mistral_used,
+        "regions_mistral": mistral_used,
+        "estimated_cost_usd": round(mistral_cost, 4),
+        "reasons": reasons_map
+    }
+
+    result = {
+        "success": True,
+        "source_language": source_lang,
+        "model": effective_model,
+        "parser": "hybrid-pymupdf-mistral",
+        "markdown": translated_md,
+        "original_markdown": raw_md,
+        "document_metadata": metadata,
+        "layout_profile": asdict(profile),
+        "page_count": original_page_count,
+        "ocr_stats": ocr_stats,
+        "quality_report": asdict(doc_report),
+        "figure_replacements": fig_repls,
+        "images_extracted": total_imgs,
+        "document_id": key,
+        "source_pdf_url": _pdf_url(key),
+        "quality_score": quality_score,
+    }
+
+    save_cache(key, result)
+    log("[DONE] Pipeline completo.")
+    return result
+
+
+async def process_url(url: str, model: Optional[str] = None):
+    log(f"[DOWNLOAD] {url}")
+    pdf_bytes = await download_pdf(url)
+    return await process_pdf(pdf_bytes, model)
+
+
+# ============================================================
+# ENDPOINTS
+# ============================================================
+
+@app.get("/api/document/{document_id}/image/{image_filename}")
+async def api_get_image(document_id: str, image_filename: str):
+    img_path = IMAGES_STORE_DIR / document_id / image_filename
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Imagen no encontrada.")
+    
+    ext_map = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".gif": "image/gif",
+    }
+    mime = ext_map.get(img_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path=str(img_path), media_type=mime)
+
+
+@app.get("/api/download-md/{document_id}")
+async def api_download_md(document_id: str):
+    md_path = MD_STORE_DIR / f"{document_id}.md"
+    if not md_path.exists():
+        cached = load_cache(document_id)
+        if cached and cached.get("markdown"):
+            md_path.write_text(cached["markdown"], encoding="utf-8")
+        else:
+            raise HTTPException(status_code=404, detail="Markdown no encontrado.")
+    return FileResponse(
+        path=str(md_path),
+        media_type="text/markdown; charset=utf-8",
+        filename=f"psihub-{document_id[:8]}.md",
+    )
+
+
+@app.get("/api/download-md-original/{document_id}")
+async def api_download_md_original(document_id: str):
+    md_path = MD_STORE_DIR / f"{document_id}.original.md"
+    if not md_path.exists():
+        cached = load_cache(document_id)
+        if cached and cached.get("original_markdown"):
+            md_path.write_text(cached["original_markdown"], encoding="utf-8")
+        else:
+            raise HTTPException(status_code=404, detail="Original no encontrado.")
+    return FileResponse(
+        path=str(md_path),
+        media_type="text/markdown; charset=utf-8",
+        filename=f"psihub-{document_id[:8]}-original.md",
+    )
+
+
+@app.get("/api/source-pdf/{document_id}")
+async def api_source_pdf(document_id: str):
+    rp = READER_PDF_DIR / f"{document_id}.pdf"
+    if rp.exists():
+        return FileResponse(path=str(rp), media_type="application/pdf")
+    op = PDF_STORE_DIR / f"{document_id}.pdf"
+    if op.exists():
+        return FileResponse(path=str(op), media_type="application/pdf")
+    raise HTTPException(status_code=404, detail="PDF no encontrado.")
+
+
+@app.post("/api/translate")
+async def api_translate(request: TranslateRequest):
+    try:
+        result = await process_url(request.url, request.model)
+        return JSONResponse(content=result)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"Error PDF: {e}")
+    except Exception as e:
+        log(f"[ERROR] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/translate-file")
+async def api_translate_file(
+    file: UploadFile = File(...), model: Optional[str] = Form(None),
+):
+    try:
+        pdf_bytes = await file.read()
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise HTTPException(status_code=400, detail="No es PDF válido.")
+        result = await process_pdf(pdf_bytes, model)
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log(f"[ERROR] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "PsiHub Reader",
+        "parser": "hybrid-pymupdf-mistral",
+        "mistral_configured": bool(MISTRAL_API_KEY),
+        "deepseek": bool(DEEPSEEK_API_KEYS),
+        "deepseek_keys": len(DEEPSEEK_API_KEYS),
+        "pipeline_version": PIPELINE_VERSION,
+    }
+
+
+@app.get("/api/logs")
+async def api_logs(since: float = 0.0, limit: int = 1000):
+    entries = [e for e in LOG_BUFFER if e["t"] >= since]
+    return JSONResponse(content={"entries": entries[-limit:], "count": len(entries)})
+
+
+@app.get("/api/logs/stream")
+async def api_logs_stream():
+    async def gen():
+        last_t = time.time()
+        while True:
+            await asyncio.sleep(0.5)
+            new = [e for e in LOG_BUFFER if e["t"] > last_t]
+            if new:
+                last_t = new[-1]["t"]
+                for entry in new:
+                    yield f"data: {json.dumps(entry)}\n\n"
+            else:
+                yield ": keepalive\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ============================================================
+# GRADIO
+# ============================================================
+
+def strip_markdown_formatting(md_text: str) -> str:
+    if not md_text:
+        return ""
+    # Remove headers
+    text = re.sub(r'^#{1,6}\s+', '', md_text, flags=re.MULTILINE)
+    # Remove bold and italic
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    text = re.sub(r'__(.*?)__', r'\1', text)
+    text = re.sub(r'_(.*?)_', r'\1', text)
+    # Remove links
+    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+    # Remove images
+    text = re.sub(r'!\[(.*?)\]\(.*?\)', r'', text)
+    # Remove blockquotes
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+    # Remove code blocks
+    text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+    text = re.sub(r'`(.*?)`', r'\1', text)
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    return text.strip()
+
+def _fmt_info(result: dict) -> str:
+    m = result.get("document_metadata", {}) or {}
+    authors = m.get("authors", []) or []
+    auth_str = ", ".join(authors[:5]) if authors else "—"
+    if len(authors) > 5:
+        auth_str += f" (+{len(authors) - 5})"
+
+    quality = result.get('quality_score', 0)
+    if quality >= 90:
+        q_label = f"🟢 Excelente ({quality}/100)"
+    elif quality >= 70:
+        q_label = f"🟡 Buena ({quality}/100)"
+    else:
+        q_label = f"🔴 Problemática ({quality}/100)"
+        
+    ocr = result.get("ocr_stats", {})
+
+    return (
+        f"### 📄 Metadata\n\n"
+        f"**Título:** {m.get('title') or '—'}\n\n"
+        f"**Autores:** {auth_str}\n\n"
+        f"**Año:** {m.get('year') or '—'}\n\n"
+        f"**DOI:** {m.get('doi') or '—'}\n\n"
+        f"---\n\n"
+        f"### 📊 Pipeline\n\n"
+        f"**Idioma Original:** {result.get('source_language', '?')}\n\n"
+        f"**Calidad Global:** {q_label}\n\n"
+        f"**Páginas Totales:** {ocr.get('pages_total', '?')}\n\n"
+        f"**Páginas OCR (Mistral):** {ocr.get('pages_mistral', 0)}\n\n"
+        f"**Costo Estimado OCR:** ${ocr.get('estimated_cost_usd', 0):.4f}\n\n"
+        f"**Imágenes Extraídas:** {result.get('images_extracted', 0)}"
+    )
+
+def _fmt_details(result: dict) -> str:
+    ocr = result.get("ocr_stats", {})
+    reasons = ocr.get("reasons", {})
+    
+    details = "### 🛠️ Detalles Técnicos\n\n"
+    if not reasons:
+        details += "No se detectaron problemas estructurales que requirieran Mistral OCR.\n"
+    else:
+        details += "**Intervenciones de OCR por página:**\n\n"
+        for pnum, issues in reasons.items():
+            details += f"- **Página {pnum}:** {', '.join(issues)}\n"
+            
+    q_report = result.get("quality_report", {})
+    if q_report:
+        details += f"\n**Puntuación media del IR:** {q_report.get('average_score', 0):.2f}\n"
+        
+    return details
+
+
+async def gradio_url_with_id(url, progress=gr.Progress()):
+    if not url or not url.strip():
+        return ("Introducí una URL.", "", "", None)
+    try:
+        progress(0.1, desc="Descargando PDF...")
+        # Since process_url is async, we can't easily emit internal progress unless we refactor it.
+        # But we can at least show a processing message.
+        progress(0.4, desc="Analizando y traduciendo documento (esto puede demorar unos minutos)...")
+        r = await process_url(url.strip())
+        progress(1.0, desc="¡Completado!")
+        return (r["markdown"], _fmt_info(r), _fmt_details(r), r.get("document_id"))
+    except Exception as e:
+        return ("", f"Error: {e}", "", None)
+
+
+async def gradio_file_with_id(file, progress=gr.Progress()):
+    if file is None:
+        return ("Subí un PDF.", "", "", None)
+    try:
+        progress(0.2, desc="Analizando y traduciendo documento (esto puede demorar unos minutos)...")
+        fp = file.name if hasattr(file, "name") else str(file)
+        pdf_bytes = Path(fp).read_bytes()
+        r = await process_pdf(pdf_bytes)
+        progress(1.0, desc="¡Completado!")
+        return (r["markdown"], _fmt_info(r), _fmt_details(r), r.get("document_id"))
+    except Exception as e:
+        return ("", f"Error: {e}", "", None)
+
+
+with gr.Blocks(title="PsiHub Reader") as demo:
+    gr.Markdown("""
+# PsiHub Reader v8
+
+Parsing híbrido (**PyMuPDF** + **Mistral OCR 4**) + traducción paralela (**DeepSeek**).
+""")
+
+    with gr.Tab("URL"):
+        url_in = gr.Textbox(label="URL del PDF", placeholder="https://...")
+        btn_url = gr.Button("Traducir PDF", variant="primary")
+        
+        with gr.Tabs():
+            with gr.Tab("📖 Modo Lectura (Renderizado)"):
+                out_url = gr.Markdown(
+                    label="Traducción",
+                    latex_delimiters=[
+                        {"left": "$$", "right": "$$", "display": True},
+                        {"left": "$", "right": "$", "display": False},
+                    ],
+                )
+            with gr.Tab("📝 Markdown Crudo"):
+                out_url_raw = gr.Code(label="Markdown Original", language="markdown")
+            with gr.Tab("📄 Texto Plano"):
+                out_url_text = gr.Textbox(label="Texto sin formato", lines=20)
+            with gr.Tab("🛠️ Detalles"):
+                out_url_details = gr.Markdown(label="Detalles de Pipeline")
+
+        info_url = gr.Markdown(label="Información")
+
+        gr.Markdown("### 💾 Descargar")
+        with gr.Row():
+            dl_url = gr.DownloadButton(
+                label="⬇️ Markdown traducido (.md)",
+                variant="secondary", visible=False,
+            )
+            dl_url_orig = gr.DownloadButton(
+                label="⬇️ Markdown original (.md)",
+                variant="secondary", visible=False,
+            )
+
+        async def _wrap_url(url):
+            md, info, details, doc_id = await gradio_url_with_id(url)
+            if not doc_id:
+                return md, md, "", info, details, gr.update(visible=False), gr.update(visible=False)
+            md_path = MD_STORE_DIR / f"{doc_id}.md"
+            orig_path = MD_STORE_DIR / f"{doc_id}.original.md"
+            return (
+                md, 
+                md,
+                strip_markdown_formatting(md),
+                info,
+                details,
+                gr.update(
+                    value=str(md_path) if md_path.exists() else None,
+                    visible=md_path.exists(),
+                ),
+                gr.update(
+                    value=str(orig_path) if orig_path.exists() else None,
+                    visible=orig_path.exists(),
+                ),
+            )
+
+        btn_url.click(
+            _wrap_url, inputs=[url_in],
+            outputs=[out_url, out_url_raw, out_url_text, info_url, out_url_details, dl_url, dl_url_orig],
+        )
+
+    with gr.Tab("Archivo"):
+        f_in = gr.File(label="PDF", file_types=[".pdf"])
+        btn_f = gr.Button("Traducir PDF", variant="primary")
+        
+        with gr.Tabs():
+            with gr.Tab("📖 Modo Lectura (Renderizado)"):
+                out_f = gr.Markdown(
+                    label="Traducción",
+                    latex_delimiters=[
+                        {"left": "$$", "right": "$$", "display": True},
+                        {"left": "$", "right": "$", "display": False},
+                    ],
+                )
+            with gr.Tab("📝 Markdown Crudo"):
+                out_f_raw = gr.Code(label="Markdown Original", language="markdown")
+            with gr.Tab("📄 Texto Plano"):
+                out_f_text = gr.Textbox(label="Texto sin formato", lines=20)
+            with gr.Tab("🛠️ Detalles"):
+                out_f_details = gr.Markdown(label="Detalles de Pipeline")
+
+        info_f = gr.Markdown(label="Información")
+
+        gr.Markdown("### 💾 Descargar")
+        with gr.Row():
+            dl_f = gr.DownloadButton(
+                label="⬇️ Markdown traducido (.md)",
+                variant="secondary", visible=False,
+            )
+            dl_f_orig = gr.DownloadButton(
+                label="⬇️ Markdown original (.md)",
+                variant="secondary", visible=False,
+            )
+
+        async def _wrap_file(file):
+            md, info, details, doc_id = await gradio_file_with_id(file)
+            if not doc_id:
+                return md, md, "", info, details, gr.update(visible=False), gr.update(visible=False)
+            md_path = MD_STORE_DIR / f"{doc_id}.md"
+            orig_path = MD_STORE_DIR / f"{doc_id}.original.md"
+            return (
+                md, 
+                md,
+                strip_markdown_formatting(md),
+                info,
+                details,
+                gr.update(
+                    value=str(md_path) if md_path.exists() else None,
+                    visible=md_path.exists(),
+                ),
+                gr.update(
+                    value=str(orig_path) if orig_path.exists() else None,
+                    visible=orig_path.exists(),
+                ),
+            )
+
+        btn_f.click(
+            _wrap_file, inputs=[f_in],
+            outputs=[out_f, out_f_raw, out_f_text, info_f, out_f_details, dl_f, dl_f_orig],
+        )
+
+
+# ============================================================
+# MOUNT GRADIO
+# ============================================================
+
+demo.queue(max_size=20)
+
+app = gr.mount_gradio_app(
+    app,
+    demo,
+    path="/",
+    show_error=True,
+    allowed_paths=[
+        str(MD_STORE_DIR),
+        str(READER_PDF_DIR),
+        str(PDF_STORE_DIR),
+        str(CACHE_DIR),
+    ],
+)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+
+    if not DEEPSEEK_API_KEYS:
+        log("[WARN] Sin API keys de DeepSeek.")
+    if not MISTRAL_API_KEY:
+        log("[WARN] Sin MISTRAL_API_KEY.")
+
+    uvicorn.run(app, host=host, port=port)

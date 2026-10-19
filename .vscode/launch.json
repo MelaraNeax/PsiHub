@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "PsyHub Web (Node: server.js)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/server.js",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "env": {
+        "PORT": "8080"
+      },
+      "serverReadyAction": {
+        "pattern": "Local:\\s+(https?://\\S+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      }
+    },
+    {
+      "name": "PsyHub API (Python: hf-space/app.py)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/hf-space/app.py",
+      "cwd": "${workspaceFolder}/hf-space",
+      "python": "C:\\Users\\Nabo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/hf-space/.env",
+      "env": {
+        "PORT": "8000",
+        "HOST": "127.0.0.1"
+      }
+    },
+    {
+      "name": "Python: archivo actual",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${fileDirname}",
+      "python": "C:\\Users\\Nabo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Node: archivo actual",
+      "type": "node",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${fileDirname}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}
