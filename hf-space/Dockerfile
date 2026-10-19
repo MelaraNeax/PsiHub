@@ -5,6 +5,7 @@ WORKDIR /app
 # Instalar dependencias básicas del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Instalar dependencias de Python
