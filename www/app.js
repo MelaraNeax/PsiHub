@@ -505,6 +505,20 @@ function initDOMRefs() {
 // INIT
 // ═══════════════════════════════════════════════════
 
+const SPLASH_START = performance.now();
+const SPLASH_MIN_MS = 1600;
+
+function hideAppSplash() {
+  const splash = document.getElementById('app-splash');
+  if (!splash) return;
+  const elapsed = performance.now() - SPLASH_START;
+  const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
+  setTimeout(() => {
+    splash.classList.add('app-splash--done');
+    setTimeout(() => splash.remove(), 520);
+  }, wait);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initDOMRefs();
   registerSW();
@@ -514,6 +528,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadRecommendations();
   loadStories();
 });
+
+window.addEventListener('load', hideAppSplash);
 
 // ═══════════════════════════════════════════════════
 // SERVICE WORKER

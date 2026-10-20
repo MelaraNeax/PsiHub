@@ -56,5 +56,7 @@ copyDir(path.join(SRC, 'src'), path.join(DEST, 'src'));
 console.log('✓ src/');
 copyDir(path.join(SRC, 'data'), path.join(DEST, 'data'));
 console.log('✓ data/');
+copyDir(path.join(SRC, 'icons'), path.join(DEST, 'icons'));
+console.log('✓ icons/');
 
 console.log('\n✅ Build completado → www/');

@@ -5188,3 +5188,57 @@ body::after { opacity: 0.016; }
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+/* ═══════════════════════════════════════════════════
+   PANTALLA DE CARGA — PsiHub (contorno que se rellena)
+   ═══════════════════════════════════════════════════ */
+.app-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #09090a;
+  transition: opacity 0.45s ease;
+}
+
+.app-splash--done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-splash-wordmark {
+  position: relative;
+  font-family: var(--font-display);
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.app-splash-wordmark .app-splash-outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgba(236, 233, 226, 0.28);
+  text-stroke: 1.5px rgba(236, 233, 226, 0.28);
+}
+
+.app-splash-wordmark .app-splash-fill {
+  position: absolute;
+  inset: 0;
+  color: #ece9e2;
+  clip-path: inset(0 100% 0 0);
+  animation: splash-fill 1.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes splash-fill {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-splash-wordmark .app-splash-fill {
+    animation-duration: 0.01s;
+  }
+}
