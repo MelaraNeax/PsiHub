@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+cache/
+brain/
+scratch/
+cd/
+python/
+test.pdf
+dummy.pdf
+app.py.backup

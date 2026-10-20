@@ -295,6 +295,8 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None,
         'elapsed_sec': stats.get('elapsed_sec'),
         **cost,
     })
+    # Deja el costo tambien en Cloud Logging (ademas del ledger en GCS).
+    log(f"[Cost] {doc_id[:12]}… {pages} pag · {cost['total_tokens']} tokens · ${cost['cost_usd']:.4f} USD")
     has_body = any(block.get('type') == 'paragraph' for block in document.get('blocks', []))
     quality = 95 if meta.get('title') and has_body else 80
 
@@ -333,6 +335,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None,
             'pages': pages,
             'usage': stats.get('usage', {}),
             'elapsed_sec': stats.get('elapsed_sec'),
+            'estimated_cost_usd': cost['cost_usd'],
         },
         'images_extracted': stats.get('figures', 0),
         'source_language': meta.get('language') or 'English',

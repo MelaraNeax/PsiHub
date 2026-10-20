@@ -1509,6 +1509,10 @@ async function loadRecommendations() {
     });
     el.recsList.appendChild(frag);
 
+    // Igual que en la búsqueda: verificar si el PDF es de descarga libre
+    // para habilitar la traducción automática desde el inicio.
+    validatePdfUrls(results);
+
   } catch (err) {
     console.error('[Recs]', err);
     el.recsList.innerHTML = '<p style="font-size:13px; color:var(--txt-3); padding: 8px 0;">Error al cargar recomendaciones.</p>';
