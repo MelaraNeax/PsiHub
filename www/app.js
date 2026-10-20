@@ -1184,7 +1184,6 @@ function updateModalPaperAction(paper) {
 // verificación real la hace el backend (sin las restricciones de CORS del
 // navegador): descarga una muestra y confirma que el contenido es un PDF.
 const PDF_CHECK_TIMEOUT_MS = 20000;
-const PDF_CHECK_BATCH_SIZE = 12;
 // Editores que casi siempre exigen login/aceptación aunque la URL parezca PDF.
 const PDF_CHECK_GATED_HOST_RE = /(^|\.)(sciencedirect\.com|link\.springer\.com|onlinelibrary\.wiley\.com|tandfonline\.com|sagepub\.com|jstor\.org|researchgate\.net|academia\.edu|psycnet\.apa\.org|proquest\.com|ssrn\.com)$/i;
 
@@ -1246,31 +1245,49 @@ async function probePdfUrl(url) {
     return { result: null, reason: `http-${res.status}` };
   } catch (err) {
     if (err && err.name === 'AbortError') return { result: null, reason: 'timeout' };
-    // CORS bloqueado: el navegador no permite leer la respuesta, pero la
-    // URL puede seguir siendo un PDF directo. Se decide con la metadata.
+    // CORS bloqueado: el navegador no puede confirmarlo. Se trata como no
+    // verificable (nunca como "Libre"): el backend es quien confirma.
     return { result: null, reason: 'cors' };
   } finally {
     clearTimeout(timer);
   }
 }
 
-// Consulta por lotes al backend: verifica varias URLs en una sola petición.
-async function fetchPdfChecks(urls) {
+// Consulta individual al backend. Cada tarjeta se resuelve en cuanto su
+// propia verificación termina, sin esperar a las demás.
+async function fetchPdfCheck(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PDF_CHECK_TIMEOUT_MS);
   try {
-    const res = await fetch(`${HF_SPACE_URL}/api/check-pdfs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls }),
+    const res = await fetch(`${HF_SPACE_URL}/api/check-pdf?url=${encodeURIComponent(url)}`, {
       signal: controller.signal
     });
-    if (!res.ok) throw new Error(`check-pdfs ${res.status}`);
-    const data = await res.json();
-    return data.results || {};
+    if (!res.ok) throw new Error(`check-pdf ${res.status}`);
+    return await res.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function resolvePdfUrl(url) {
+  try {
+    const verdict = await fetchPdfCheck(url);
+    if (verdict && typeof verdict.ok === 'boolean') return verdict;
+  } catch (_) { /* backend caído: se resolve del navegador */ }
+  // Respaldo: comprobación directa desde el navegador; solo acepta un PDF
+  // cuando el servidor lo confirma de verdad.
+  const probe = await probePdfUrl(url);
+  return { ok: probe.result === true, reason: probe.reason || 'unverified' };
+}
+
+// Muestra un indicador mientras se verifica, para que la tarjeta nunca
+// parezca congelada esperando el badge.
+function markPdfChecking(paper) {
+  document.querySelectorAll('.auto-badge-container').forEach(b => {
+    if (b.dataset.id === paper.id) {
+      b.innerHTML = '<span class="pdf-checking"><i></i>Verificando</span>';
+    }
+  });
 }
 
 function applyPdfResult(paper, isAuto, status) {
@@ -1282,61 +1299,40 @@ function applyPdfResult(paper, isAuto, status) {
   updatePaperAutomaticBadges(paper);
 }
 
-// Cola: agrupa los papers pendientes y los verifica juntos. Sin esto se
-// dispararían decenas de peticiones simultáneas al cargar el inicio.
+// Cola con concurrencia limitada: cada URL se verifica por separado y su
+// tarjeta se actualiza apenas termina, en lugar de esperar a todo el lote.
 const pdfCheckQueue = new Map(); // url -> Set<paper>
-let pdfCheckTimer = null;
-let pdfCheckRunning = false;
+const PDF_CHECK_CONCURRENCY = 5;
+let activePdfChecks = 0;
 
 function queuePdfCheck(paper, url) {
+  markPdfChecking(paper);
   if (!pdfCheckQueue.has(url)) pdfCheckQueue.set(url, new Set());
   pdfCheckQueue.get(url).add(paper);
-  if (!pdfCheckTimer) pdfCheckTimer = setTimeout(flushPdfChecks, 80);
+  pumpPdfChecks();
 }
 
-async function flushPdfChecks() {
-  pdfCheckTimer = null;
-  if (pdfCheckRunning) {
-    pdfCheckTimer = setTimeout(flushPdfChecks, 150);
-    return;
-  }
-  const urls = [...pdfCheckQueue.keys()].slice(0, PDF_CHECK_BATCH_SIZE);
-  if (!urls.length) return;
+function pumpPdfChecks() {
+  while (activePdfChecks < PDF_CHECK_CONCURRENCY && pdfCheckQueue.size) {
+    const [url, papers] = pdfCheckQueue.entries().next().value;
+    pdfCheckQueue.delete(url);
+    activePdfChecks++;
 
-  pdfCheckRunning = true;
-  const papersByUrl = new Map();
-  urls.forEach(u => {
-    papersByUrl.set(u, [...pdfCheckQueue.get(u)]);
-    pdfCheckQueue.delete(u);
-  });
-
-  let results = null;
-  try {
-    results = await fetchPdfChecks(urls);
-  } catch (err) {
-    // Backend caído: se intenta la comprobación directa desde el navegador,
-    // que solo acepta un PDF cuando el servidor lo confirma de verdad.
-    results = null;
-  }
-
-  try {
-    for (const url of urls) {
-      let isAuto = false;
-      let status = 'unverified';
-      if (results && results[url]) {
-        isAuto = results[url].ok === true;
-        status = results[url].reason || (isAuto ? 'verified' : 'not-free');
-      } else {
-        const probe = await probePdfUrl(url);
-        isAuto = probe.result === true;
-        status = probe.reason || 'unverified';
-      }
-      checkedPdfUrls.set(url, { isAutomatic: isAuto, status, pending: false });
-      (papersByUrl.get(url) || []).forEach(paper => applyPdfResult(paper, isAuto, status));
-    }
-  } finally {
-    pdfCheckRunning = false;
-    if (pdfCheckQueue.size) pdfCheckTimer = setTimeout(flushPdfChecks, 60);
+    resolvePdfUrl(url)
+      .then(verdict => {
+        const isAuto = verdict.ok === true;
+        const status = verdict.reason || (isAuto ? 'verified' : 'not-free');
+        checkedPdfUrls.set(url, { isAutomatic: isAuto, status, pending: false });
+        papers.forEach(paper => applyPdfResult(paper, isAuto, status));
+      })
+      .catch(() => {
+        checkedPdfUrls.set(url, { isAutomatic: false, status: 'unverified', pending: false });
+        papers.forEach(paper => applyPdfResult(paper, false, 'unverified'));
+      })
+      .finally(() => {
+        activePdfChecks--;
+        pumpPdfChecks();
+      });
   }
 }
 

@@ -387,7 +387,7 @@ async def process_url(url: str, model: Optional[str] = None) -> dict:
 # editor no expone CORS. Aqui se descarga una muestra real del PDF desde el
 # backend, que si puede seguir redirecciones y leer el Content-Type. Solo los
 # PDFs confirmados se marcan como "Libre" (traduccion automatica).
-PDF_PROBE_TIMEOUT = 10.0
+PDF_PROBE_TIMEOUT = 8.0
 PDF_PROBE_MAX_BYTES = 8192
 PDF_PROBE_CACHE_TTL = 900
 PDF_PROBE_MAX_URLS = 20
@@ -412,9 +412,11 @@ def _pdf_url_is_safe(url: str) -> bool:
                 or ip.is_reserved or ip.is_multicast)
 
 
-async def probe_pdf(url: str) -> dict:
+async def probe_pdf(url: str) -> dict[str, object]:
     """Confirma que la URL entrega un PDF descargable sin login."""
-    verdict = {'ok': False, 'reason': 'error', 'status': None, 'content_type': ''}
+    verdict: dict[str, object] = {
+        'ok': False, 'reason': 'error', 'status': None, 'content_type': '',
+    }
     if not _pdf_url_is_safe(url):
         verdict['reason'] = 'invalid-url'
         return verdict
@@ -558,6 +560,14 @@ async def api_translate(request: TranslateRequest):
     except Exception as exc:  # noqa: BLE001
         log(f'[ERROR] {type(exc).__name__}: {exc}')
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get('/api/check-pdf')
+async def api_check_pdf(url: str = Query('')):
+    url = url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail='Falta la URL.')
+    return JSONResponse(content=await probe_pdf(url))
 
 
 @app.post('/api/check-pdfs')

@@ -4774,6 +4774,32 @@ body::after { opacity: 0.016; }
 
 .free-badge i { font-size: 11px; }
 
+/* Mientras el backend verifica si el PDF es descargable */
+.pdf-checking {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--txt-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pdf-checking i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pdfCheckingPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes pdfCheckingPulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
 /* Contenido con menos aire lateral en móvil */
 @media (max-width: 899px) {
   .profile-scroll {
