@@ -20,7 +20,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
     rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="style.css?v=34">
+  <link rel="stylesheet" href="style.css?v=35">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
@@ -48,17 +48,13 @@
           <h1 class="app-title app-logo" id="home-app-title">PsiHub</h1>
         </div>
 
-        <button class="icon-btn home-search-btn" id="btn-search-open" aria-label="Buscar">
-          <i class="ph-bold ph-magnifying-glass"></i>
-        </button>
-      </div>
-
-      <div class="search-inline-wrapper home-search-bar" id="search-inline-wrapper">
-        <i class="ph-bold ph-magnifying-glass search-inline-icon"></i>
-        <input type="search" id="search-input" class="search-inline-input"
-          placeholder="Buscar artículos, autores, temas…" autocomplete="off" enterkeyhint="search">
-        <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i
-            class="ph-bold ph-x"></i></button>
+        <div class="search-inline-wrapper home-search-bar" id="search-inline-wrapper" role="search">
+          <i class="ph-bold ph-magnifying-glass search-inline-icon"></i>
+          <input type="search" id="search-input" class="search-inline-input"
+            placeholder="Buscar artículos, autores, temas…" autocomplete="off" enterkeyhint="search">
+          <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i
+              class="ph-bold ph-x"></i></button>
+        </div>
       </div>
     </header>
 
@@ -342,7 +338,6 @@
       <div class="home-header-top">
         <div class="brand-block">
           <h1 class="app-title">Biblioteca</h1>
-          <p class="app-tagline">Traducir · convertir · leer</p>
         </div>
       </div>
     </header>
@@ -356,8 +351,7 @@
         </div>
         <h3 class="library-hero-title">Traducir y convertir en PsiHub</h3>
         <p class="library-hero-desc">
-          Traducí papers completos al español, exportalos en PDF o Markdown y leelos dentro de la app. Sin copiar y
-          pegar, sin salir de PsiHub.
+          Traducí papers completos al español, exportalos en PDF o Markdown y leelos dentro de la app.
         </p>
         <div class="library-hero-features">
           <span class="library-feature"><i class="ph-bold ph-translate"></i> Traducción</span>

@@ -5242,3 +5242,110 @@ body::after { opacity: 0.016; }
     animation-duration: 0.01s;
   }
 }
+
+/* ═══════════════════════════════════════════════════
+   HOME — la lupa se convierte en buscador
+   ═══════════════════════════════════════════════════ */
+
+/* Al buscar, el título cede todo el ancho a la barra */
+#page-home .home-header-top {
+  align-items: center;
+  gap: 10px;
+}
+
+#page-home .home-header-top .brand-block {
+  transition: opacity 0.18s var(--ease);
+}
+
+#page-home .home-header-top.searching .brand-block {
+  display: none;
+}
+
+/* Estado colapsado: solo la lupa, mismo tamaño que un botón */
+#page-home .home-search-bar {
+  width: 42px !important;
+  height: 42px;
+  flex: 0 0 auto;
+  padding: 0;
+  justify-content: center;
+  cursor: pointer;
+  transition: width 0.3s var(--ease-out), background 0.2s, border-color 0.2s;
+}
+
+#page-home .home-search-bar .search-inline-icon {
+  font-size: 18px;
+  color: var(--txt);
+}
+
+#page-home .home-search-bar .search-inline-input {
+  width: 0;
+  opacity: 0;
+  padding: 0 !important;
+  pointer-events: none;
+}
+
+#page-home .home-search-bar:not(.active) .btn-clear-search {
+  display: none !important;
+}
+
+/* Estado expandido: ocupa todo el ancho de la fila */
+#page-home .home-search-bar.active {
+  width: 100% !important;
+  height: 42px;
+  padding: 0 8px 0 14px;
+  justify-content: flex-start;
+  cursor: text;
+}
+
+#page-home .home-search-bar.active .search-inline-icon {
+  font-size: 16px;
+  color: var(--txt-2);
+}
+
+#page-home .home-search-bar.active .search-inline-input {
+  width: auto;
+  opacity: 1;
+  padding: 0 6px 0 10px !important;
+  pointer-events: auto;
+}
+
+/* La 'x' la muestra el JS solo cuando hay texto */
+
+/* Un poco menos de aire arriba: la cabecera ahora es una sola fila */
+#page-home .home-header {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+}
+
+/* ═══════════════════════════════════════════════════
+   NAVEGACIÓN INFERIOR — más aire (PWA instalada)
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 14px);
+  --nav-base-h:  64px;
+}
+
+.bottom-nav {
+  height: var(--nav-h);
+  align-items: center;
+  padding: 10px 8px calc(var(--safe-bottom) + 6px);
+}
+
+.nav-btn {
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.nav-btn i {
+  font-size: 22px;
+}
+
+.nav-btn .nav-label {
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+@media (max-height: 620px) {
+  :root { --nav-base-h: 58px; }
+  .bottom-nav { padding-top: 7px; padding-bottom: calc(var(--safe-bottom) + 2px); }
+}

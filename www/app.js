@@ -562,6 +562,8 @@ function resetInlineSearch() {
   }
   if (el.searchInlineWrapper) {
     el.searchInlineWrapper.classList.remove('active');
+    const top = el.searchInlineWrapper.closest('.home-header-top');
+    if (top) top.classList.remove('searching');
   }
 }
 
@@ -3033,10 +3035,21 @@ function setupEventListeners() {
     }
   }
 
-  el.btnSearchOpen?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    el.searchInlineWrapper?.classList.add('active');
-    el.searchInput?.focus();
+  function setHomeSearchOpen(open) {
+    if (!el.searchInlineWrapper) return;
+    el.searchInlineWrapper.classList.toggle('active', open);
+    const top = el.searchInlineWrapper.closest('.home-header-top');
+    if (top) top.classList.toggle('searching', open);
+  }
+
+  // La lupa es el propio buscador colapsado: al tocarla se expande en barra.
+  el.searchInlineWrapper?.addEventListener('click', (e) => {
+    if (e.target.closest('.btn-clear-search')) return;
+    if (!el.searchInlineWrapper.classList.contains('active')) {
+      e.stopPropagation();
+      setHomeSearchOpen(true);
+      el.searchInput?.focus();
+    }
   });
 
   // "Ver todas" → página de búsqueda
@@ -3054,7 +3067,7 @@ function setupEventListeners() {
       if (!el.searchInput.value.trim()) {
         resetInlineSearch();
       } else {
-        el.searchInlineWrapper.classList.remove('active');
+        setHomeSearchOpen(false);
         if (el.btnClearSearch) el.btnClearSearch.style.display = 'none';
       }
     }
