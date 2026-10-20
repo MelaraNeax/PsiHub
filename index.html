@@ -4,21 +4,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Psi-hub</title>
+  <title>PsiHub</title>
   <meta name="description" content="Tu plataforma de lectura científica en psicoterapia.">
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#0b0c0d">
+  <meta name="theme-color" content="#09090a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Psi-hub">
+  <meta name="apple-mobile-web-app-title" content="PsiHub">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&display=swap"
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
     rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="style.css?v=32">
+  <link rel="stylesheet" href="style.css?v=34">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
@@ -32,25 +32,34 @@
 
     <header class="home-header">
       <div class="home-header-top">
-        <h1 class="app-title" id="home-app-title">Psi-hub</h1>
-
-        <div class="search-inline-wrapper" id="search-inline-wrapper">
-          <input type="search" id="search-input" class="search-inline-input" placeholder="Buscar papers..."
-            autocomplete="off" enterkeyhint="search">
-          <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i
-              class="ph-bold ph-x"></i></button>
-          <button class="icon-btn search-inline-trigger" id="btn-search-open" aria-label="Buscar">
-            <i class="ph-bold ph-magnifying-glass"></i>
-          </button>
+        <div class="brand-block">
+          <h1 class="app-title app-logo" id="home-app-title">PsiHub</h1>
         </div>
+
+        <button class="icon-btn home-search-btn" id="btn-search-open" aria-label="Buscar">
+          <i class="ph-bold ph-magnifying-glass"></i>
+        </button>
+      </div>
+
+      <div class="search-inline-wrapper home-search-bar" id="search-inline-wrapper">
+        <i class="ph-bold ph-magnifying-glass search-inline-icon"></i>
+        <input type="search" id="search-input" class="search-inline-input"
+          placeholder="Buscar artículos, autores, temas…" autocomplete="off" enterkeyhint="search">
+        <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i
+            class="ph-bold ph-x"></i></button>
       </div>
     </header>
 
     <div class="page-scroll">
 
-      <!-- Corrientes — fila deslizable -->
-      <section class="section">
-        <h2 class="section-title">Corrientes</h2>
+      <!-- Temáticas — fila deslizable -->
+      <section class="section topics-section">
+        <div class="section-header-row topics-header">
+          <h2 class="section-eyebrow">Temáticas</h2>
+          <button class="btn-see-all" id="btn-all-topics">
+            Ver todas <i class="ph-bold ph-arrow-right"></i>
+          </button>
+        </div>
         <div class="corrientes-row" id="corrientes-row">
           <!-- Generado por JS -->
         </div>
@@ -58,8 +67,8 @@
 
       <!-- Te puede interesar -->
       <section class="section section-recs">
-        <div class="section-header-row">
-          <h2 class="section-title" style="margin-bottom:0;">Te puede interesar</h2>
+        <div class="section-header-row recs-header">
+          <h2 class="section-title">Te puede interesar</h2>
           <button class="btn-link-subtle" id="btn-refresh-recs" title="Actualizar recomendaciones">
             <i class="ph-bold ph-arrows-clockwise"></i>
           </button>
@@ -269,34 +278,9 @@
       </div>
 
       <!-- Métricas rápidas (Stats) -->
-      <div class="profile-stats-grid">
-        <div class="profile-stat-pill">
-          <div class="stat-pill-icon"><i class="ph-bold ph-bookmark-simple"></i></div>
-          <div class="stat-pill-info">
-            <span class="stat-pill-value" id="stat-saved">0</span>
-            <span class="stat-pill-label">Guardados</span>
-          </div>
-        </div>
-      </div>
+      <!-- Se quitó el contador de guardados: la lista ya comunica el contenido -->
 
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════
-       BIBLIOTECA
-  ══════════════════════════════════════ -->
-  <div class="page hidden" id="page-library">
-    <div class="results-bg-glow library-bg-glow"></div>
-
-    <header class="home-header">
-      <div class="home-header-top">
-        <h1 class="app-title">Biblioteca</h1>
-      </div>
-    </header>
-
-    <div class="page-scroll profile-scroll">
-
-      <!-- Botón para abrir Guardados -->
+      <!-- Artículos guardados (movidos desde Biblioteca) -->
       <div class="profile-card library-action-card" id="library-saved-card">
         <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;"
           id="library-saved-header">
@@ -306,7 +290,7 @@
           </div>
           <div class="auth-card-meta">
             <h3 class="auth-card-title">Artículos guardados</h3>
-            <p class="auth-card-subtitle">Tus papers almacenados sin conexión</p>
+            <p class="auth-card-subtitle">Tu lista de lectura, siempre a mano</p>
           </div>
           <button class="btn-modal-close" style="background: rgba(255,255,255,0.05); pointer-events: none;">
             <i class="ph-bold ph-caret-down" id="icon-toggle-saved"></i>
@@ -333,60 +317,68 @@
         </div>
       </div>
 
-      <!-- Tarjeta de Modo Lector -->
-      <div class="profile-card library-action-card" id="library-reader-card">
-        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px;">
-          <div class="google-badge-icon"
-            style="color: var(--txt-2); background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.09);">
-            <i class="ph-bold ph-file-pdf" style="font-size: 20px;"></i>
-          </div>
-          <div class="auth-card-meta">
-            <h3 class="auth-card-title">Modo Lector</h3>
-            <p class="auth-card-subtitle">Traducir un PDF para leerlo</p>
-          </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       BIBLIOTECA
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-library">
+    <div class="results-bg-glow library-bg-glow"></div>
+
+    <header class="home-header">
+      <div class="home-header-top">
+        <div class="brand-block">
+          <h1 class="app-title">Biblioteca</h1>
+          <p class="app-tagline">Traducir · convertir · leer</p>
         </div>
-        <p class="auth-card-desc" style="margin: 12px 0 16px;">
-          Sube un archivo PDF para extraer el texto y traducirlo al instante de forma automática.
+      </div>
+    </header>
+
+    <div class="page-scroll profile-scroll library-scroll">
+
+      <!-- Módulo principal: Traducir y convertir -->
+      <div class="library-hero-card" id="library-reader-card">
+        <div class="library-hero-badge">
+          <i class="ph-bold ph-translate"></i>
+        </div>
+        <h3 class="library-hero-title">Traducir y convertir en PsiHub</h3>
+        <p class="library-hero-desc">
+          Traducí papers completos al español, exportalos en PDF o Markdown y leelos dentro de la app. Sin copiar y
+          pegar, sin salir de PsiHub.
         </p>
-        <label class="btn-google-login"
-          style="cursor: pointer; background: var(--glass); color: var(--txt); border: 1px solid var(--stroke); font-weight: 500;">
-          <i class="ph-bold ph-upload-simple" style="font-size: 18px; margin-right: 4px;"></i> Subir archivo PDF
+        <div class="library-hero-features">
+          <span class="library-feature"><i class="ph-bold ph-translate"></i> Traducción</span>
+          <span class="library-feature"><i class="ph-bold ph-file-pdf"></i> PDF</span>
+          <span class="library-feature"><i class="ph-bold ph-file-text"></i> Markdown</span>
+          <span class="library-feature"><i class="ph-bold ph-book-open"></i> Modo lectura</span>
+        </div>
+        <label class="library-upload-btn" for="library-file-upload">
+          <span class="library-upload-icon"><i class="ph-bold ph-upload-simple"></i></span>
+          <span class="library-upload-copy">
+            <span class="library-upload-title">Subir archivo PDF</span>
+            <span class="library-upload-sub">Traducilo y leelo dentro de PsiHub</span>
+          </span>
+          <i class="ph-bold ph-arrow-right library-upload-arrow"></i>
           <input type="file" id="library-file-upload" accept=".pdf" style="display: none;">
         </label>
       </div>
 
-      <!-- Artículos en la app (Procesados) -->
-      <div class="profile-card library-action-card" id="library-processed-card">
-        <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;"
-          id="library-processed-header">
-          <div class="google-badge-icon"
-            style="color: var(--txt-2); background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.09);">
-            <i class="ph-bold ph-hard-drives" style="font-size: 20px;"></i>
-          </div>
-          <div class="auth-card-meta">
-            <h3 class="auth-card-title">Artículos en la app</h3>
-            <p class="auth-card-subtitle">Documentos procesados y cacheados</p>
-          </div>
-          <button class="btn-modal-close" style="background: rgba(255,255,255,0.05); pointer-events: none;">
-            <i class="ph-bold ph-caret-down" id="icon-toggle-processed"></i>
-          </button>
+      <!-- Artículos recientes (procesados) -->
+      <div class="library-recent" id="library-processed-card">
+        <div class="library-recent-header">
+          <h2 class="section-eyebrow">Artículos recientes</h2>
+          <button class="btn-clear-saved-text" id="btn-clear-all-processed">Vaciar</button>
         </div>
 
-        <div class="library-processed-container" id="library-processed-container"
-          style="display: none; margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
-          <section class="section profile-section" id="section-processed" style="display:none; padding: 0;">
-            <div class="saved-section-header" style="margin-bottom: 12px;">
-              <h3 class="subsection-title" style="margin-bottom:0; font-size: 14px;">Historial local</h3>
-              <button class="btn-clear-saved-text" id="btn-clear-all-processed">Vaciar</button>
-            </div>
-            <ul class="saved-list paper-list" id="processed-list"></ul>
-          </section>
+        <section id="section-processed" style="display: none;">
+          <ul class="saved-list paper-list" id="processed-list"></ul>
+        </section>
 
-          <div class="profile-empty-saved" id="profile-empty-processed" style="padding: 20px 0;">
-            <div class="empty-icon-wrap"><i class="ph-bold ph-clock-counter-clockwise"></i></div>
-            <p class="empty-title" style="font-size: 14px;">Sin artículos procesados</p>
-            <p class="empty-subtitle">Los PDFs que traduzcas aparecerán aquí para acceso rápido.</p>
-          </div>
+        <div class="profile-empty-saved" id="profile-empty-processed" style="padding: 26px 0 8px;">
+          <div class="empty-icon-wrap"><i class="ph-bold ph-clock-counter-clockwise"></i></div>
+          <p class="empty-title" style="font-size: 14px;">Todavía no traduciste nada</p>
+          <p class="empty-subtitle">Los PDFs que traduzcas aparecerán acá, listos para volver a leerlos.</p>
         </div>
       </div>
 
@@ -402,12 +394,14 @@
     <header class="home-header">
       <div class="home-header-top" style="gap: 12px; margin-bottom: 8px;">
         <div class="search-inline-wrapper active" id="search-page-wrapper" style="width: 100%; display: flex;">
-          <input type="search" id="search-page-input" class="search-inline-input" placeholder="Buscar papers..."
-            autocomplete="off" enterkeyhint="search" style="opacity: 1; padding: 0 6px 0 14px;">
+          <i class="ph-bold ph-magnifying-glass search-inline-icon"></i>
+          <input type="search" id="search-page-input" class="search-inline-input"
+            placeholder="Buscar artículos, autores, temas…" autocomplete="off" enterkeyhint="search"
+            style="opacity: 1; padding: 0 6px 0 10px;">
           <button class="btn-clear-search" id="btn-clear-search-page" style="display:none;"><i
               class="ph-bold ph-x"></i></button>
           <button class="icon-btn search-inline-trigger" id="btn-do-search-page" aria-label="Buscar">
-            <i class="ph-bold ph-magnifying-glass"></i>
+            <i class="ph-bold ph-arrow-right"></i>
           </button>
         </div>
       </div>
@@ -521,18 +515,23 @@
   <nav class="bottom-nav" id="bottom-nav">
     <button class="nav-btn active" data-page="home" id="nav-home">
       <i class="ph-bold ph-house-simple"></i>
+      <span class="nav-label">Inicio</span>
     </button>
     <button class="nav-btn" data-page="explore" id="nav-explore">
       <i class="ph-bold ph-compass"></i>
+      <span class="nav-label">Explorar</span>
     </button>
     <button class="nav-btn" data-page="library" id="nav-library">
       <i class="ph-bold ph-books"></i>
+      <span class="nav-label">Biblioteca</span>
     </button>
     <button class="nav-btn" data-page="search" id="nav-search">
       <i class="ph-bold ph-magnifying-glass"></i>
+      <span class="nav-label">Buscar</span>
     </button>
     <button class="nav-btn" data-page="profile" id="nav-profile">
       <i class="ph-bold ph-user-circle"></i>
+      <span class="nav-label">Perfil</span>
     </button>
   </nav>
 
@@ -592,9 +591,9 @@
         <button class="btn-cta-primary explore-action-read" id="btn-psihub-read-es"
           style="background: #fff; color: #000; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
           <i class="ph-bold ph-translate"></i>
-          <span>Leer artículo en español</span>
+          <span id="btn-psihub-read-es-label">Leer artículo en español</span>
           <span id="btn-psihub-read-es-badge"
-            style="display: none; font-size: 10px; padding: 2px 8px; border-radius: 100px; background: rgba(0,0,0,0.08); color: #16a34a; font-weight: 700;">Automático</span>
+            style="display: none; font-size: 10px; padding: 2px 8px; border-radius: 100px; background: rgba(0,0,0,0.08); color: #16a34a; font-weight: 700;">Libre</span>
         </button>
         <button class="btn-cta-secondary" id="btn-psihub-summarize" type="button"
           style="opacity: 0.6; cursor: pointer; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; font-weight: 600; padding: 14px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 8px;">
@@ -704,7 +703,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=32"></script>
+  <script type="module" src="app.js?v=34"></script>
 </body>
 
 </html>

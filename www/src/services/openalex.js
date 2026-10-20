@@ -103,63 +103,122 @@ export function reconstructAbstract(invertedIndex) {
 }
 
 /**
- * Busca papers en OpenAlex con Polite Pool y reintentos automáticos.
- * @param {Object} opts
- * @param {string} opts.query      - Término base de búsqueda
- * @param {string} opts.subtype    - 'all' | 'teorico' | 'evidencia' | 'clinico'
- * @param {string} opts.sort       - ej. 'cited_by_count:desc'
- * @param {number} opts.perPage    - resultados por página
- * @param {number} opts.page       - número de página (1-based)
- * @param {AbortSignal} opts.signal - para cancelar peticiones obsoletas
+ * Extrae la mejor URL de PDF de un work de OpenAlex.
+ *
+ * Prioridad:
+ *   1. best_oa_location.pdf_url (es la ubicación OA "ganadora")
+ *   2. Cualquier location.pdf_url que sea OA
+ *   3. primary_location.pdf_url
+ *   4. oa_url si termina en .pdf o matchea patrones típicos de descarga
+ *
+ * Devuelve null si no hay ninguna URL con forma de PDF.
  */
-export async function fetchPapers({
-  query = 'psychotherapy',
-  subtype = 'all',
-  sort = null,
-  perPage = 10,
-  page = 1,
-  signal = null
-} = {}) {
+function extractPdfUrl(w) {
+  const candidates = [];
+
+  if (w.best_oa_location?.pdf_url) {
+    candidates.push(w.best_oa_location.pdf_url);
+  }
+
+  for (const loc of w.locations || []) {
+    if (loc?.pdf_url) {
+      candidates.push(loc.pdf_url);
+    }
+  }
+
+  if (w.primary_location?.pdf_url) {
+    candidates.push(w.primary_location.pdf_url);
+  }
+
+  // Filtrar duplicados preservando orden.
+  const seen = new Set();
+  const unique = candidates.filter(u => u && !seen.has(u) && (seen.add(u), true));
+
+  if (unique.length > 0) {
+    return unique[0];
+  }
+
+  // Fallback: oa_url si tiene pinta de ser un PDF directo.
+  const oaUrl = w.open_access?.oa_url;
+  if (oaUrl) {
+    if (
+      oaUrl.toLowerCase().endsWith('.pdf') ||
+      /\/(?:pdf|download|fulltext|full-text|article\/[^/]+\/pdf)/i.test(oaUrl)
+    ) {
+      return oaUrl;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Determina si un paper es "auto-descargable": OA + tiene URL de PDF.
+ */
+function isAutoDownloadable(w) {
+  if (!w?.open_access?.is_oa) return false;
+  return Boolean(extractPdfUrl(w));
+}
+
+const PSY_FIELDS = 'primary_topic.field.id:32|27';
+const WORK_TYPES = 'type:article|review';
+const SELECT_FIELDS = [
+  'id', 'doi', 'title', 'publication_year', 'cited_by_count', 'authorships',
+  'primary_location', 'best_oa_location', 'locations', 'open_access',
+  'abstract_inverted_index', 'primary_topic', 'topics', 'concepts', 'type', 'mesh'
+].join(',');
+const CACHE_TTL_MS = 3 * 60 * 1000;
+const responseCache = new Map();
+
+function sanitizeQuery(text) {
+  return String(text || '')
+    .replace(/[,|"'()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildWorksParams({ query, subtype, sort, perPage, page, precise, apiKey, email }) {
   const extras = SUBTYPE_TERMS[subtype] || '';
-  const fullQuery = extras ? `${query} ${extras}` : query;
-  const apiKey = getOpenAlexApiKey();
-  const email = getPoliteEmail();
+  const fullQuery = sanitizeQuery(extras ? `${query} ${extras}` : query);
+  const filters = ['is_oa:true', PSY_FIELDS, WORK_TYPES];
+
+  if (precise && fullQuery) filters.push(`title_and_abstract.search:${fullQuery}`);
 
   const params = new URLSearchParams({
-    filter: 'is_oa:true',
-    'per-page': perPage,
-    page
+    filter: filters.join(','),
+    'per-page': String(perPage),
+    page: String(page),
+    select: SELECT_FIELDS
   });
 
-  if (fullQuery) {
-    params.set('search', fullQuery);
-  }
+  if (!precise && fullQuery) params.set('search', fullQuery);
+  if (apiKey) params.set('api_key', apiKey);
+  else if (email) params.set('mailto', email);
+  if (sort) params.set('sort', sort);
 
-  if (apiKey) {
-    params.set('api_key', apiKey);
-  } else if (email) {
-    params.set('mailto', email);
-  }
+  return params;
+}
 
-  if (sort) {
-    params.set('sort', sort);
-  }
+async function fetchWorksPage(params, signal) {
+  const url = `${BASE}?${params}`;
+  const cached = responseCache.get(url);
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.data;
 
-  let res = await fetchWithRetry(`${BASE}?${params}`, { signal });
+  let res = await fetchWithRetry(url, { signal });
 
-  // Manejo de contingencia: si el cluster de búsqueda anónima de OpenAlex arroja 503
+  // Contingencia: si la búsqueda anónima devuelve 503, caemos a topics.
   if (res && res.status === 503) {
-    console.warn('[OpenAlex 503] Búsqueda anónima pausada por sobrecarga en OpenAlex. Activando fallback por topics/filtros...');
-    const fallbackFilter = getFallbackFilterForQuery(query);
-    const fallbackParams = new URLSearchParams({
-      filter: `${fallbackFilter},is_oa:true`,
-      'per-page': perPage,
-      page,
-      sort: sort || 'cited_by_count:desc'
-    });
-    if (apiKey) fallbackParams.set('api_key', apiKey);
-    else if (email) fallbackParams.set('mailto', email);
-
+    console.warn('[OpenAlex 503] Activando fallback por topics…');
+    const fallbackParams = new URLSearchParams(params);
+    const originalFilter = fallbackParams.get('filter') || '';
+    const cleanFilter = originalFilter
+      .split(',')
+      .filter(part => !part.startsWith('title_and_abstract.search:'))
+      .join(',');
+    const topicFilter = getFallbackFilterForQuery(fallbackParams.get('search') || originalFilter);
+    fallbackParams.set('filter', `${cleanFilter},${topicFilter}`);
+    fallbackParams.delete('search');
+    if (!fallbackParams.get('sort')) fallbackParams.set('sort', 'cited_by_count:desc');
     res = await fetchWithRetry(`${BASE}?${fallbackParams}`, { signal });
   }
 
@@ -174,8 +233,48 @@ export async function fetchPapers({
   }
 
   const data = await res.json();
+  if (!signal?.aborted) {
+    if (responseCache.size > 40) {
+      responseCache.delete(responseCache.keys().next().value);
+    }
+    responseCache.set(url, { at: Date.now(), data });
+  }
+  return data;
+}
 
-  const results = data.results.map(w => {
+/**
+ * Busca papers en OpenAlex con Polite Pool y reintentos automáticos.
+ *
+ * Estrategia de precisión:
+ *  1. Filtra a Psicología/Psiquiatría y a artículos/revisiones.
+ *  2. Busca en título + abstract (title_and_abstract.search).
+ *  3. Si el resultado es demasiado estrecho, repite con búsqueda amplia.
+ */
+export async function fetchPapers({
+  query = 'psychotherapy',
+  subtype = 'all',
+  sort = null,
+  perPage = 10,
+  page = 1,
+  precise = true,
+  signal = null
+} = {}) {
+  const apiKey = getOpenAlexApiKey();
+  const email = getPoliteEmail();
+  const base = { query, subtype, sort, perPage, page, precise, apiKey, email };
+
+  let data = await fetchWorksPage(buildWorksParams(base), signal);
+
+  // Fallback de precisión: si title/abstract devuelve muy poco, ampliamos.
+  if (precise && page === 1 && (data.meta?.count ?? 0) < Math.max(perPage, 5)) {
+    const broad = await fetchWorksPage(
+      buildWorksParams({ ...base, precise: false }),
+      signal
+    );
+    if ((broad.meta?.count ?? 0) > (data.meta?.count ?? 0)) data = broad;
+  }
+
+  const results = (data.results || []).map(w => {
     const abstract = reconstructAbstract(w.abstract_inverted_index);
     const authors = (w.authorships || []).map(a => a.author?.display_name).filter(Boolean);
     const source = w.primary_location?.source;
@@ -195,8 +294,10 @@ export async function fetchPapers({
       journal: source?.display_name || null,
       year: w.publication_year || null,
       isOa: w.open_access?.is_oa ?? false,
+      oaStatus: w.open_access?.oa_status || null,
       oaUrl,
-      pdfUrl: w.primary_location?.pdf_url || w.best_oa_location?.pdf_url || (oaUrl && oaUrl.toLowerCase().endsWith('.pdf') ? oaUrl : null),
+      pdfUrl: extractPdfUrl(w),
+      isAutoDownloadable: isAutoDownloadable(w),
       citations: w.cited_by_count ?? 0,
       abstract,
       topics,
@@ -254,8 +355,10 @@ export async function fetchWorkById(id, signal = null) {
     journal: source?.display_name || null,
     year: w.publication_year || null,
     isOa: w.open_access?.is_oa ?? false,
+    oaStatus: w.open_access?.oa_status || null,
     oaUrl,
-    pdfUrl: w.primary_location?.pdf_url || w.best_oa_location?.pdf_url || (oaUrl && oaUrl.toLowerCase().endsWith('.pdf') ? oaUrl : null),
+    pdfUrl: extractPdfUrl(w),
+    isAutoDownloadable: isAutoDownloadable(w),
     citations: w.cited_by_count ?? 0,
     abstract,
     topics,

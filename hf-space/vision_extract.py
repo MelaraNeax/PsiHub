@@ -164,6 +164,33 @@ def _as_int(value: Any, default: Optional[int] = None) -> Optional[int]:
     return number
 
 
+# Enumeradores impresos ("25.", "25)") y numeros de pagina sueltos que el
+# modelo de vision a veces arrastra al cambiar de pagina. Los quitamos antes de
+# exportar porque el exportador ya numera las listas ordenadas: sin esto el
+# resultado repite el numero ("25. 25. JEONG...") o reinicia en cada pagina.
+_LIST_ENUM_RE = re.compile(r'^\s*(?:[-–—•]\s*)?\(?\d{1,4}[.)]\s*')
+_PAGE_NUMBER_RE = re.compile(
+    r'^\s*(?:p[áa]gina\s*)?\d{1,4}(?:\s*(?:of|de)\s*\d{1,4})?\s*$', re.IGNORECASE)
+
+
+_PAGE_BREAK_MARKER_RE = re.compile(r'^\s*[-–—•]\s*\(?\d{1,4}[.)]\s+')
+
+
+def _clean_list_items(items: list[str], ordered: bool) -> list[str]:
+    cleaned: list[str] = []
+    for item in items:
+        if ordered:
+            text = _LIST_ENUM_RE.sub('', item).strip()
+        else:
+            # En listas sin numerar solo quitamos marcas de salto de pagina
+            # ("- 1. ..."), no guiones normales de item.
+            text = _PAGE_BREAK_MARKER_RE.sub('', item).strip()
+        if not text or _PAGE_NUMBER_RE.match(text):
+            continue
+        cleaned.append(text)
+    return cleaned
+
+
 def normalize_page_payload(obj: dict, page_number: int) -> dict:
     """Valida y normaliza el JSON de una pagina para que el resto del pipeline
     no tenga que lidiar con tipos inesperados."""
@@ -208,8 +235,10 @@ def normalize_page_payload(obj: dict, page_number: int) -> dict:
                 blocks.append({'type': btype, 'text': text})
         elif btype == 'list':
             items = _as_str_list(raw.get('items'))
+            ordered = bool(raw.get('ordered'))
+            items = _clean_list_items(items, ordered)
             if items:
-                blocks.append({'type': 'list', 'ordered': bool(raw.get('ordered')), 'items': items})
+                blocks.append({'type': 'list', 'ordered': ordered, 'items': items})
         elif btype == 'table':
             headers = _as_str_list(raw.get('headers'))
             rows = []
@@ -410,13 +439,44 @@ def _renumber_footnotes(page: dict, counter: list[int]) -> None:
             block['caption'] = replace(block['caption'])
 
 
+_REFERENCE_HEADINGS = (
+    'referencias', 'referenciasbibliograficas', 'references', 'bibliografia',
+)
+
+
+def _is_reference_heading(block: dict) -> bool:
+    if block.get('type') != 'heading':
+        return False
+    title = re.sub(r'[^a-záéíóúñ]', '', (block.get('text') or '').lower())
+    return title in _REFERENCE_HEADINGS
+
+
+def _join_split_items(previous: list[str], incoming: list[str]) -> list[str]:
+    """Une una lista partida por un salto de pagina.
+
+    Si el ultimo item termina en guion de particion ("de-") y el primero de la
+    pagina siguiente continua en minuscula ("pression..."), se reconstruye la
+    palabra; asi no quedan restos como "de- pression" ni reinicios de numero.
+    """
+    merged = list(previous)
+    for item in incoming:
+        text = item.strip()
+        if not text:
+            continue
+        if merged and re.search(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]-$', merged[-1]) and text[:1].islower():
+            merged[-1] = merged[-1][:-1] + text
+        else:
+            merged.append(text)
+    return merged
+
+
 def _collect_references(blocks: list[dict]) -> list[str]:
     references: list[str] = []
     in_refs = False
     for block in blocks:
         if block.get('type') == 'heading':
             title = re.sub(r'[^a-záéíóúñ]', '', (block.get('text') or '').lower())
-            in_refs = title in ('referencias', 'referenciasbibliograficas', 'references', 'bibliografia')
+            in_refs = title in _REFERENCE_HEADINGS
             continue
         if in_refs and block.get('type') == 'list':
             references.extend(block.get('items') or [])
@@ -445,6 +505,7 @@ def merge_pages(pages: list[dict]) -> dict:
     blocks: list[dict] = []
     footnotes: list[dict] = []
     counter = [0]
+    in_references = False
     for page in pages:
         _renumber_footnotes(page, counter)
         footnotes.extend(page.get('footnotes') or [])
@@ -459,14 +520,31 @@ def merge_pages(pages: list[dict]) -> dict:
             page_blocks.append(block)
 
         continues = bool(page.get('layout', {}).get('continues_previous'))
-        if continues and blocks and page_blocks:
+        if blocks and page_blocks:
             prev, first = blocks[-1], page_blocks[0]
-            if prev.get('type') == 'paragraph' and first.get('type') == 'paragraph':
+            same_list = prev.get('type') == 'list' and first.get('type') == 'list'
+            if same_list and (in_references or continues):
+                # Bibliografia o lista numerada que continua en la pagina
+                # siguiente: un solo bloque para que la numeracion no reinicie.
+                prev['items'] = _join_split_items(
+                    prev.get('items') or [], first.get('items') or [])
+                prev['ordered'] = bool(prev.get('ordered') or first.get('ordered'))
+                page_blocks = page_blocks[1:]
+            elif continues and prev.get('type') == 'paragraph' and first.get('type') == 'paragraph':
                 prev_text = prev.get('text', '').rstrip()
                 next_text = first.get('text', '').lstrip()
                 if prev_text and next_text:
-                    prev['text'] = prev_text + ' ' + next_text
+                    if re.search(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]-$', prev_text) and next_text[:1].islower():
+                        prev['text'] = prev_text[:-1] + next_text
+                    else:
+                        prev['text'] = prev_text + ' ' + next_text
                     page_blocks = page_blocks[1:]
+
+        for block in page_blocks:
+            if _is_reference_heading(block):
+                in_references = True
+            elif block.get('type') not in ('list',):
+                in_references = False
         blocks.extend(page_blocks)
 
     # Columnas: la moda entre las paginas con valor > 1; si no, la de la pagina 1.

@@ -71,29 +71,69 @@ const QUERY_EXPANSION = {
   'diagnostico': 'diagnosis diagnostic criteria DSM clinical',
 };
 
+function normalizeQueryText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallback), ms))
+  ]);
+}
+
+/**
+ * Expande la query usando el diccionario ES→EN por palabras/frases completas.
+ * Evita falsos positivos como "práctica" → "act".
+ */
+function expandQueryLocally(rawQuery) {
+  const normalized = normalizeQueryText(rawQuery);
+  if (!normalized) return { text: '', matched: false };
+
+  let out = ` ${normalized} `;
+  let matched = false;
+
+  const entries = Object.entries(QUERY_EXPANSION)
+    .map(([key, value]) => ({ key: normalizeQueryText(key), value }))
+    .filter((entry, index, all) => entry.key && all.findIndex(e => e.key === entry.key) === index)
+    .sort((a, b) => b.key.length - a.key.length);
+
+  for (const { key, value } of entries) {
+    const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(key)}(?=$|[^a-z0-9])`, 'g');
+    if (pattern.test(out)) {
+      out = out.replace(pattern, ` ${value} `);
+      matched = true;
+    }
+  }
+
+  const tokens = out.split(/\s+/).filter(Boolean);
+  return { text: [...new Set(tokens)].join(' '), matched };
+}
+
 /**
  * Expande y traduce la query del usuario al inglés para optimizar OpenAlex.
  * Nunca muestra la query traducida al usuario.
  */
 async function smartExpandQuery(rawQuery) {
-  const lower = rawQuery.toLowerCase().trim();
-  const normalized = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-  // 1. Buscar coincidencia exacta en el diccionario
-  if (QUERY_EXPANSION[lower]) return QUERY_EXPANSION[lower];
-  if (QUERY_EXPANSION[normalized]) return QUERY_EXPANSION[normalized];
-
-  // 2. Buscar si contiene palabras clave del diccionario
-  for (const [es, en] of Object.entries(QUERY_EXPANSION)) {
-    const esNorm = es.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (normalized === esNorm || normalized.includes(esNorm)) {
-      return en;
-    }
+  const local = expandQueryLocally(rawQuery);
+  if (local.matched) {
+    return local.text.replace(/[,|]/g, ' ').trim();
   }
 
-  // 3. Si no está en el diccionario, traducir automáticamente con Google Translate
-  const translated = await translateToEnglish(rawQuery);
-  return translated || rawQuery;
+  // Si no está en el diccionario, traducir con un límite de espera:
+  // es mejor buscar ya con el texto original que bloquear la UI.
+  const translated = await withTimeout(translateToEnglish(rawQuery), 2500, '');
+  return (translated || rawQuery).replace(/[,|]/g, ' ').trim();
 }
 
 // ═══════════════════════════════════════════════════
@@ -299,6 +339,7 @@ const S = {
   searches: loadData('psyhub_searches_count', 0),
   currentPaper: null,
   deferredInstall: null,
+  readerDocId: null,
 
   // Historias / Explorar
   stories: [],
@@ -455,6 +496,8 @@ function initDOMRefs() {
     btnReaderFontToggle: $('btn-reader-font-toggle'),
     btnReaderCopyText: $('btn-reader-copy-text'),
     btnReaderViewPdf: $('btn-reader-view-pdf'),
+    btnReaderDownloadMd: $('btn-reader-download-md'),
+    btnReaderDownloadPdf: $('btn-reader-download-pdf'),
   };
 }
 
@@ -521,6 +564,7 @@ function navigateTo(page) {
   pages[page].classList.remove('hidden');
   el.navBtns.forEach(b => b.classList.toggle('active', b.dataset.page === page));
   if (page === 'profile' || page === 'library') refreshProfile();
+  if (page === 'library' && typeof refreshProcessedArticles === 'function') refreshProcessedArticles();
   if (page === 'explore') {
     if (!S.stories || S.stories.length === 0) {
       loadStories();
@@ -551,17 +595,19 @@ function updateGlow() {
 // ═══════════════════════════════════════════════════
 
 function renderCorrientes() {
-  el.corrientesRow.innerHTML = CORRIENTES.map(c => `
-    <div class="corriente-card" style="--c-color:${c.color};" data-id="${c.id}">
-      <div class="corriente-icon-wrap"><i class="ph-bold ${c.icon}"></i></div>
-      <span class="corriente-name">${c.label}</span>
-    </div>
+  el.corrientesRow.innerHTML = CORRIENTES.map((c, i) => `
+    <button class="topic-tab${i === 0 ? ' active' : ''}" style="--c-color:${c.color};" data-id="${c.id}">
+      ${c.label}
+    </button>
   `).join('');
 
-  el.corrientesRow.querySelectorAll('.corriente-card').forEach(card => {
+  el.corrientesRow.querySelectorAll('.topic-tab').forEach(card => {
     card.addEventListener('click', () => {
       const corriente = CORRIENTES.find(c => c.id === card.dataset.id);
-      if (corriente) openCorriente(corriente);
+      if (!corriente) return;
+      el.corrientesRow.querySelectorAll('.topic-tab').forEach(t => t.classList.remove('active'));
+      card.classList.add('active');
+      openCorriente(corriente);
     });
   });
 }
@@ -687,6 +733,7 @@ function resetSearchToInitial() {
   S.activeSubtype = 'all';
 
   if (el.paperList) el.paperList.innerHTML = '';
+  cardEls.clear();
   if (el.searchInitial) el.searchInitial.style.display = 'flex';
   if (el.resultsHeader) el.resultsHeader.style.display = 'none';
   if (el.searchSubtabsBar) el.searchSubtabsBar.style.display = 'none';
@@ -795,24 +842,8 @@ async function doFetch() {
       return;
     }
 
-    // Traducir títulos y snippets en lote antes de mostrar
-    const titles = finalResults.map(p => p.title);
-    const abstracts = finalResults.map(p => p.abstract ? p.abstract.slice(0, 150) : '');
-
-    const [translatedTitles, translatedAbstracts] = await Promise.all([
-      translateBatch(titles),
-      translateBatch(abstracts)
-    ]);
-
-    if (signal.aborted) return;
-
-    finalResults.forEach((p, i) => {
-      p.titleEs = translatedTitles[i];
-      if (abstracts[i]) p.abstractEs = translatedAbstracts[i] + '...';
-    });
-
-    if (signal.aborted) return;
-
+    // Render inmediato con los datos de OpenAlex. La traducción llega después
+    // y actualiza las tarjetas en segundo plano, sin bloquear la búsqueda.
     renderPapers(finalResults, !isFirstPage);
     showResultsState('results');
 
@@ -823,6 +854,21 @@ async function doFetch() {
     if (el.resultsEndNotice) {
       el.resultsEndNotice.style.display = (!hasMore && S.papers.length >= 10) ? 'flex' : 'none';
     }
+
+    const titles = finalResults.map(p => p.title);
+    const abstracts = finalResults.map(p => p.abstract ? p.abstract.slice(0, 150) : '');
+
+    Promise.all([
+      translateBatch(titles),
+      translateBatch(abstracts)
+    ]).then(([translatedTitles, translatedAbstracts]) => {
+      if (signal.aborted) return;
+      finalResults.forEach((p, i) => {
+        p.titleEs = translatedTitles[i];
+        if (abstracts[i] && translatedAbstracts[i]) p.abstractEs = translatedAbstracts[i] + '...';
+      });
+      updateCardTranslations(finalResults);
+    }).catch(() => { });
 
   } catch (err) {
     if (err.name === 'AbortError' || signal.aborted) return;
@@ -898,6 +944,7 @@ const HF_SPACE_URL = 'https://mi-servidor-api-42204102300.southamerica-east1.run
 const checkedPdfUrls = new Map(); // url -> { isAutomatic: boolean, status: string, pending: boolean }
 const paperTranslations = new Map(); // id/url -> markdown
 const activeTranslations = new Map(); // id -> Promise
+const cardEls = new Map(); // paper.id -> <li> visible en resultados
 
 function getCleanTranslationKey(key) {
   if (!key) return '';
@@ -913,12 +960,37 @@ function getPersistedTranslation(paperId, paperUrl) {
   return res;
 }
 
-function persistTranslation(paperId, paperUrl, markdown) {
+function persistTranslation(paperId, paperUrl, markdown, documentId) {
   if (!markdown) return;
   const k1 = getCleanTranslationKey(paperId);
   const k2 = getCleanTranslationKey(paperUrl);
   if (k1) saveData('psy_tr_' + k1, markdown);
   if (k2 && k2 !== k1) saveData('psy_tr_' + k2, markdown);
+  if (documentId) {
+    if (k1) saveData('psy_trmeta_' + k1, { documentId });
+    if (k2 && k2 !== k1) saveData('psy_trmeta_' + k2, { documentId });
+  }
+}
+
+function getPersistedTranslationMeta(paperId, paperUrl) {
+  const k1 = getCleanTranslationKey(paperId);
+  const k2 = getCleanTranslationKey(paperUrl);
+  if (k1) {
+    const meta = loadData('psy_trmeta_' + k1, null);
+    if (meta && meta.documentId) return meta;
+  }
+  if (k2) {
+    const meta = loadData('psy_trmeta_' + k2, null);
+    if (meta && meta.documentId) return meta;
+  }
+  return null;
+}
+
+// Muestra u oculta las descargas del documento traducido en la cabecera del lector.
+function updateReaderExportButtons() {
+  const visible = S.readerDocId ? 'flex' : 'none';
+  if (el.btnReaderDownloadMd) el.btnReaderDownloadMd.style.display = visible;
+  if (el.btnReaderDownloadPdf) el.btnReaderDownloadPdf.style.display = visible;
 }
 
 async function fetchWithBackgroundRetry(url, options, maxRetries = 2) {
@@ -937,10 +1009,10 @@ async function fetchWithBackgroundRetry(url, options, maxRetries = 2) {
       if (msg.includes('DIRECT_UPLOAD_REQUIRED') || msg.includes('403') || msg.includes('bloqueó')) {
         throw err;
       }
-      const isNetworkDrop = !msg || 
-        msg.includes('Failed to fetch') || 
-        msg.includes('NetworkError') || 
-        msg.includes('abort') || 
+      const isNetworkDrop = !msg ||
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('abort') ||
         msg.includes('timeout') ||
         err.name === 'TypeError';
 
@@ -997,12 +1069,12 @@ function showReaderRequisiteScreen(paper, customMsg = '') {
 function handleReaderTranslationError(error, paper) {
   el.readerLoading.style.display = 'none';
   el.readerContent.innerHTML = '';
-  
+
   const msg = error?.message || '';
-  const isDirectUploadRequired = msg.includes('DIRECT_UPLOAD_REQUIRED') 
-    || msg.includes('403') 
-    || msg.includes('bloqueó') 
-    || msg.includes('adjuntar') 
+  const isDirectUploadRequired = msg.includes('DIRECT_UPLOAD_REQUIRED')
+    || msg.includes('403')
+    || msg.includes('bloqueó')
+    || msg.includes('adjuntar')
     || msg.includes('manual')
     || msg.includes('bot protection')
     || msg.includes('captcha');
@@ -1018,13 +1090,13 @@ function handleReaderTranslationError(error, paper) {
     }
     const titleEl = document.getElementById('reader-requisite-title');
     if (titleEl) titleEl.textContent = 'Conexión interrumpida';
-    
+
     const errorMsgEl = document.getElementById('reader-error-msg');
     if (errorMsgEl) {
       errorMsgEl.style.display = 'block';
       errorMsgEl.textContent = 'Comprueba tu conexión o reintenta en unos instantes.';
     }
-    
+
     const journalActionWrap = document.getElementById('reader-journal-action-wrap');
     if (journalActionWrap) journalActionWrap.style.display = 'none';
 
@@ -1036,41 +1108,137 @@ function handleReaderTranslationError(error, paper) {
 }
 
 function updatePaperAutomaticBadges(paper) {
-  if (!paper || !paper.isAutomatic) return;
+  if (!paper || !paper.pdfChecked) return;
 
-  // 1. Actualizar badges en las tarjetas del DOM
+  // 1. Actualizar badges de disponibilidad en las tarjetas del DOM.
+  //    "Libre" solo aparece si el PDF se puede bajar en un clic.
   const badges = document.querySelectorAll('.auto-badge-container');
   badges.forEach(b => {
     if (b.dataset.id === paper.id) {
-      b.innerHTML = `<span class="auto-badge" style="font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:3px;"><i class="ph-bold ph-lightning"></i>Automático</span>`;
+      b.innerHTML = paper.isAutomatic ? freeBadgeHtml() : '';
     }
   });
 
-  // 2. Si el modal abierto corresponde a este paper, actualizar subtítulo y badge en opciones
+  // 2. Si el modal abierto corresponde a este paper, actualizar la acción
+  updateModalPaperAction(paper);
+
   if (S.currentPaper && S.currentPaper.id === paper.id) {
-    const sub = document.getElementById('modal-psihub-btn-sub');
-    if (sub) {
-      sub.textContent = '⚡ Traducción automática';
-    }
     const badgeEs = document.getElementById('btn-psihub-read-es-badge');
-    if (badgeEs) {
-      badgeEs.style.display = 'inline-block';
+    if (badgeEs) badgeEs.style.display = paper.isAutomatic ? 'inline-block' : 'none';
+    const legacyLabel = document.getElementById('btn-psihub-read-es-label');
+    if (legacyLabel) {
+      legacyLabel.textContent = paper.isAutomatic ? 'Leer artículo en español' : 'Traducir PDF descargado';
     }
   }
 }
 
+function updateModalPaperAction(paper) {
+  if (!S.currentPaper || S.currentPaper.id !== paper.id) return;
+
+  const label = document.getElementById('modal-psihub-btn-label');
+  const sub = document.getElementById('modal-psihub-btn-sub');
+  const btn = document.getElementById('btn-modal-psihub-options');
+
+  if (paper.isAutomatic) {
+    if (label) label.textContent = 'Leer en PsiHub';
+    if (sub) sub.textContent = 'Libre · traducción automática';
+    if (btn) btn.dataset.mode = 'auto';
+  } else {
+    if (label) label.textContent = 'Traducir PDF descargado';
+    if (sub) sub.textContent = 'Requiere descarga manual';
+    if (btn) btn.dataset.mode = 'manual';
+  }
+}
+
+// --- Verificación de descarga en un clic ---------------------------------
+// El PDF es "libre" cuando se puede bajar directo, sin login ni pasos extra.
+// Primero se verifica con una petición real (HEAD/GET con Range). Si el
+// servidor no expone CORS, se usa la metadata de OpenAlex (acceso abierto +
+// URL directa a PDF) como señal de confianza.
+const PDF_CHECK_TIMEOUT_MS = 4500;
+// Editores que casi siempre exigen login/aceptación aunque la URL parezca PDF.
+const PDF_CHECK_GATED_HOST_RE = /(^|\.)(sciencedirect\.com|link\.springer\.com|onlinelibrary\.wiley\.com|tandfonline\.com|sagepub\.com|jstor\.org|researchgate\.net|academia\.edu|psycnet\.apa\.org|proquest\.com|ssrn\.com)$/i;
+
+function isDirectPdfUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const path = u.pathname.toLowerCase();
+    return (
+      /\.pdf$/.test(path) ||
+      /\/(?:pdf|download|fulltext|full-text|bitstream|bitstreams)(?:\/|$)/.test(path) ||
+      /pdf/.test(u.search.toLowerCase())
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+function metadataSaysFree(paper, url) {
+  try {
+    if (PDF_CHECK_GATED_HOST_RE.test(new URL(url).hostname)) return false;
+  } catch (_) {
+    return false;
+  }
+  if (paper.isOa === false) return false;
+  const autoFlag = paper.isAutoDownloadable === true ||
+    (paper.isOa === true && !!paper.pdfUrl && isDirectPdfUrl(paper.pdfUrl));
+  if (!autoFlag) return false;
+  if (String(paper.oaStatus || '').toLowerCase() === 'closed') return false;
+  return isDirectPdfUrl(url);
+}
+
+async function probePdfUrl(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PDF_CHECK_TIMEOUT_MS);
+  try {
+    let res = await fetch(url, {
+      method: 'HEAD',
+      mode: 'cors',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    if (res.status === 405 || res.status === 501) {
+      res = await fetch(url, {
+        method: 'GET',
+        mode: 'cors',
+        redirect: 'follow',
+        cache: 'no-store',
+        headers: { Range: 'bytes=0-2047' },
+        signal: controller.signal
+      });
+    }
+    const type = (res.headers.get('content-type') || '').toLowerCase();
+    if (res.ok && type.includes('pdf')) return { result: true, reason: 'verified' };
+    if (res.status === 401 || res.status === 403) return { result: false, reason: 'auth' };
+    if (res.status === 404 || res.status === 410) return { result: false, reason: 'missing' };
+    if (res.ok && type.includes('html')) return { result: false, reason: 'landing' };
+    return { result: null, reason: `http-${res.status}` };
+  } catch (err) {
+    if (err && err.name === 'AbortError') return { result: null, reason: 'timeout' };
+    // CORS bloqueado: el navegador no permite leer la respuesta, pero la
+    // URL puede seguir siendo un PDF directo. Se decide con la metadata.
+    return { result: null, reason: 'cors' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function checkPaperPdf(paper) {
-  if (!paper) return;
+  if (!paper || paper.pdfChecking) return;
   const url = paper.pdfUrl || paper.oaUrl;
   if (!url) {
     paper.pdfChecked = true;
     paper.isAutomatic = false;
+    paper.isFree = false;
+    updatePaperAutomaticBadges(paper);
     return;
   }
 
   // Si ya fue chequeado en este objeto
   if (paper.pdfChecked && paper.isAutomatic !== undefined) {
-    if (paper.isAutomatic) updatePaperAutomaticBadges(paper);
+    updatePaperAutomaticBadges(paper);
     return;
   }
 
@@ -1079,49 +1247,86 @@ async function checkPaperPdf(paper) {
     const cached = checkedPdfUrls.get(url);
     if (!cached.pending) {
       paper.isAutomatic = cached.isAutomatic;
+      paper.isFree = cached.isAutomatic;
       paper.pdfChecked = true;
-      if (paper.isAutomatic) updatePaperAutomaticBadges(paper);
+      updatePaperAutomaticBadges(paper);
     }
     return;
   }
 
-  // Marcar como pendiente para no enviar múltiples peticiones simultáneas de la misma URL
+  // Marcar como pendiente para no duplicar peticiones de la misma URL
   checkedPdfUrls.set(url, { isAutomatic: false, status: 'checking', pending: true });
-  paper.pdfChecked = true;
+  paper.pdfChecking = true;
+
+  let isAuto = false;
+  let status = 'not-free';
 
   try {
-    const res = await fetch(`${HF_SPACE_URL}/api/check-pdf`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
-    });
-    const data = await res.json();
-    const isAuto = (data.status === 'ok');
-    checkedPdfUrls.set(url, { isAutomatic: isAuto, status: data.status, pending: false });
-    paper.isAutomatic = isAuto;
-    if (isAuto) {
-      updatePaperAutomaticBadges(paper);
+    const metadataFree = metadataSaysFree(paper, url);
+    if (metadataFree) {
+      const probe = await probePdfUrl(url);
+      if (probe.result === true) {
+        isAuto = true;
+        status = 'verified';
+      } else if (probe.result === false) {
+        isAuto = false;
+        status = probe.reason; // auth, landing, missing
+      } else {
+        // Sin CORS o timeout: la metadata de OpenAlex es la mejor señal.
+        isAuto = true;
+        status = `metadata-${probe.reason}`;
+      }
     }
   } catch (err) {
-    checkedPdfUrls.set(url, { isAutomatic: false, status: 'error', pending: false });
-    paper.isAutomatic = false;
+    isAuto = false;
+    status = 'error';
   }
+
+  checkedPdfUrls.set(url, { isAutomatic: isAuto, status, pending: false });
+  paper.pdfChecking = false;
+  paper.pdfChecked = true;
+  paper.isAutomatic = isAuto;
+  paper.isFree = isAuto;
+  updatePaperAutomaticBadges(paper);
 }
 
 function validatePdfUrls(papers) {
   if (!Array.isArray(papers)) return;
   // Solo verificar papers que no hayan sido revisados antes
-  const papersToCheck = papers.filter(p => !p.pdfChecked && (p.pdfUrl || p.oaUrl));
+  const papersToCheck = papers.filter(p => !p.pdfChecked && !p.pdfChecking && (p.pdfUrl || p.oaUrl));
   papersToCheck.forEach(p => checkPaperPdf(p));
 }
 
 function renderPapers(papers, append) {
   const frag = document.createDocumentFragment();
-  papers.forEach(p => frag.appendChild(buildCard(p)));
-  if (!append) el.paperList.innerHTML = '';
+  if (!append) {
+    el.paperList.innerHTML = '';
+    cardEls.clear();
+  }
+  papers.forEach(p => {
+    const card = buildCard(p);
+    if (p.id) cardEls.set(p.id, card);
+    frag.appendChild(card);
+  });
   el.paperList.appendChild(frag);
 
   validatePdfUrls(papers);
+}
+
+function freeBadgeHtml() {
+  return `<span class="free-badge" title="PDF descargable en un clic · traducción automática"><i class="ph-bold ph-lock-open"></i>Libre</span>`;
+}
+
+function updateCardTranslations(papers) {
+  if (!Array.isArray(papers)) return;
+  papers.forEach(p => {
+    const li = p.id ? cardEls.get(p.id) : null;
+    if (!li) return;
+    const titleEl = li.querySelector('.paper-card-title');
+    if (titleEl && p.titleEs) titleEl.textContent = p.titleEs;
+    const snippetEl = li.querySelector('.paper-card-snippet');
+    if (snippetEl && p.abstractEs) snippetEl.textContent = p.abstractEs;
+  });
 }
 
 function buildCard(paper, onBookmarkChange) {
@@ -1138,23 +1343,26 @@ function buildCard(paper, onBookmarkChange) {
   const isFilterActiveInResults = Boolean(S.resultsOpen && S.activeSubtype && S.activeSubtype !== 'all');
   const tags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
 
+  const cites = (paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? 0).toLocaleString('es');
+
   li.innerHTML = `
-    <div class="paper-card-body" style="padding-left: 0;">
+    <div class="paper-card-body">
+      <div class="paper-card-tags">${tags.map(tagBadge).join('')}</div>
       <div class="paper-card-top">
         <h3 class="paper-card-title">${esc(displayTitle)}</h3>
-        <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id || '')}" data-doi="${esc(paper.doi || '')}" aria-label="Guardar">
-          <i class="${isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple'}"></i>
-        </button>
       </div>
       <p class="paper-card-authors">${esc(firstAuthor + moreAuthors)}</p>
       ${snippet ? `<p class="paper-card-snippet">${esc(snippet)}</p>` : ''}
       <div class="paper-card-meta">
-        ${tags.map(tagBadge).join('')}
-        ${paper.year ? `<span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span>` : ''}
-        <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt-3);"><i class="ph-bold ph-quotes"></i>${(paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? 0).toLocaleString('es')}</span>
-        ${paper.isAutomatic ? `<span class="auto-badge" style="margin-left:auto;font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:3px;"><i class="ph-bold ph-lightning"></i>Automático</span>` : `<div class="auto-badge-container" data-id="${esc(paper.id)}" data-url="${esc(paper.pdfUrl || paper.oaUrl || '')}" style="margin-left:auto;"></div>`}
+        ${paper.year ? `<span><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span><span class="meta-dot">·</span>` : ''}
+        <span><i class="ph-bold ph-quotes"></i>${cites} citas</span>
+        <div class="auto-badge-container" data-id="${esc(paper.id)}" data-url="${esc(paper.pdfUrl || paper.oaUrl || '')}">${(paper.pdfChecked && paper.isAutomatic) ? freeBadgeHtml() : ''}</div>
       </div>
     </div>
+    <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id || '')}" data-doi="${esc(paper.doi || '')}" aria-label="Guardar">
+      <i class="${isBk ? 'ph-fill ph-bookmark-simple' : 'ph-bold ph-bookmark-simple'}"></i>
+    </button>
+    <span class="paper-card-arrow"><i class="ph-bold ph-caret-right"></i></span>
   `;
 
   li.addEventListener('click', () => openModal(paper, corriente));
@@ -1172,12 +1380,12 @@ function buildCard(paper, onBookmarkChange) {
 
 function tagBadge(t) {
   const configs = {
-    clinico: { label: 'Clínico', icon: 'ph-stethoscope', cls: 'tag-clinico' },
-    evidencia: { label: 'Evidencia', icon: 'ph-chart-line-up', cls: 'tag-evidencia' },
-    teorico: { label: 'Teórico', icon: 'ph-brain', cls: 'tag-teorico' }
+    clinico: { label: 'Clínico', cls: 'tag-clinico' },
+    evidencia: { label: 'Evidencia', cls: 'tag-evidencia' },
+    teorico: { label: 'Teórico', cls: 'tag-teorico' }
   };
-  const c = configs[t] || { label: t, icon: 'ph-tag', cls: 'tag-teorico' };
-  return `<span class="tag-pill ${c.cls}"><i class="ph-bold ${c.icon}"></i><span>${c.label}</span></span>`;
+  const c = configs[t] || { label: t, cls: 'tag-teorico' };
+  return `<span class="tag-pill ${c.cls}"><span>${c.label}</span></span>`;
 }
 
 function tagLabel(t) {
@@ -1429,12 +1637,12 @@ async function openModal(paper, corriente) {
         const langElUpdated = document.getElementById('modal-abstract-lang');
         if (abstractEl && S.currentPaper?.id === paper.id) {
           abstractEl.textContent = abstractEs;
-          if (langElUpdated) langElUpdated.innerHTML = '<span class="modal-lang-badge"><i class="ph-bold ph-translate"></i> Traducido al español</span>';
+          if (langElUpdated) langElUpdated.innerHTML = '<span class="modal-lang-badge">Traducido al español</span>';
         }
       } catch (errTrans) {
         console.warn('[openModal] Falló traducción:', errTrans);
         const langEl = document.getElementById('modal-abstract-lang');
-        if (langEl) langEl.innerHTML = '<span class="modal-lang-badge en"><i class="ph-bold ph-translate"></i> Original en inglés</span>';
+        if (langEl) langEl.innerHTML = '<span class="modal-lang-badge en">Original en inglés</span>';
       }
     }
   } catch (err) {
@@ -1509,7 +1717,7 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
   if (isCorriente) {
     const tagColor = corriente.color || 'var(--txt-3)';
     const tagStyle = `background:${tagColor}1c; color:${tagColor}; border:1px solid ${tagColor}44;`;
-    tagsHtml += `<span class="modal-tag" style="${tagStyle}"><i class="ph-bold ph-bookmarks" style="font-size:11px; margin-right:3px;"></i>${esc(corriente.label)}</span>`;
+    tagsHtml += `<span class="modal-tag" style="${tagStyle}">${esc(corriente.label)}</span>`;
   }
   if (tags && tags.length) {
     const validTag = tags.find(t => t && !t.toLowerCase().includes('articulo') && !t.toLowerCase().includes('artículo'));
@@ -1536,37 +1744,26 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
     return s.length > 22 ? s.slice(0, 21) + '…' : s;
   });
 
+  const availabilityKnown = paper.pdfChecked === true;
+  const isFreePdf = paper.isAutomatic === true;
+  const primaryLabel = (availabilityKnown && !isFreePdf) ? 'Traducir PDF descargado' : 'Leer en PsiHub';
+  const primarySub = !availabilityKnown
+    ? 'Verificando disponibilidad…'
+    : (isFreePdf ? 'Libre · traducción automática' : 'Requiere descarga manual');
+
+  const facts = [];
+  if (sourceStr) facts.push(`<span class="modal-fact">${esc(sourceStr)}</span>`);
+  if (paper.year) facts.push(`<span class="modal-fact">${paper.year}</span>`);
+  facts.push(`<span class="modal-fact">${citations.toLocaleString('es')} ${citations === 1 ? 'cita' : 'citas'}</span>`);
+  const factsHtml = facts.join('<span class="modal-fact-dot" aria-hidden="true">·</span>');
+  const pdfHref = paper.oaUrl || paper.pdfUrl;
+
   return `
     ${tagsHtml ? `<div class="modal-tags">${tagsHtml}</div>` : ''}
 
     <h2 class="modal-title">${esc(displayTitle || 'Sin título')}</h2>
-
-    <div class="modal-meta-row">
-      ${authorsStr ? `
-        <span class="modal-meta-item">
-          <i class="ph-bold ph-users"></i>
-          <span>${esc(authorsStr)}</span>
-        </span>
-      ` : ''}
-      ${sourceStr ? `
-        <span class="modal-meta-item">
-          <i class="ph-bold ph-book"></i>
-          <span>${esc(sourceStr)}</span>
-        </span>
-      ` : ''}
-      <div class="modal-meta-subrow">
-        ${paper.year ? `
-          <span class="modal-meta-item">
-            <i class="ph-bold ph-calendar-blank"></i>
-            <span>${paper.year}</span>
-          </span>
-        ` : ''}
-        <span class="modal-meta-item">
-          <i class="ph-bold ph-quotes"></i>
-          <span>${citations.toLocaleString('es')} ${citations === 1 ? 'cita' : 'citas'}</span>
-        </span>
-      </div>
-    </div>
+    ${authorsStr ? `<p class="modal-byline">${esc(authorsStr)}</p>` : ''}
+    <div class="modal-facts">${factsHtml}</div>
 
     <div class="modal-abstract-section">
       <div class="modal-abstract-header">
@@ -1575,7 +1772,7 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
           ${(paper.abstract || abstractEs) ? (
       translating && paper.abstract
         ? '<span class="modal-lang-badge translating"><div class="spinner modal-spinner-mini"></div> Traduciendo…</span>'
-        : '<span class="modal-lang-badge"><i class="ph-bold ph-translate"></i> Traducido</span>'
+        : '<span class="modal-lang-badge">Traducido</span>'
     ) : ''}
         </div>
       </div>
@@ -1590,29 +1787,30 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
       </div>
     ` : ''}
 
-    <div class="explore-actions-bar" style="padding: 0; margin-top: 16px;">
-      <div class="explore-actions-bar-row">
-        <button class="btn-cta-primary explore-action-read" id="btn-modal-psihub-options" style="flex-direction: column; gap: 2px;">
-          <div style="display: flex; align-items: center; gap: 6px;">
-            <i class="ph-bold ph-book-open"></i> Leer en PsiHub
-          </div>
-          <span id="modal-psihub-btn-sub" style="font-size: 10px; opacity: 0.8; font-weight: normal;">${paper.isAutomatic ? '⚡ Traducción automática' : 'incluye traducción'}</span>
-        </button>
-        ${paper.oaUrl || paper.pdfUrl
-      ? `<a class="btn-cta-secondary" href="${esc(paper.oaUrl || paper.pdfUrl)}" target="_blank" rel="noopener" style="flex: 1; text-decoration: none; cursor: pointer;">
-             <i class="ph-bold ph-file-pdf"></i> Leer PDF
+    <div class="modal-actions">
+      <button class="modal-primary-action" id="btn-modal-psihub-options" data-mode="${isFreePdf ? 'auto' : 'manual'}">
+        <span class="modal-primary-icon"><i class="ph-bold ph-book-open"></i></span>
+        <span class="modal-primary-copy">
+          <span class="modal-primary-label" id="modal-psihub-btn-label">${primaryLabel}</span>
+          <span class="modal-primary-sub" id="modal-psihub-btn-sub">${primarySub}</span>
+        </span>
+        <i class="ph-bold ph-arrow-right modal-primary-arrow"></i>
+      </button>
+
+      <div class="modal-action-row">
+        ${pdfHref
+      ? `<a class="modal-action-btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">
+             <i class="ph-bold ph-file-pdf"></i><span>PDF</span>
            </a>`
       : ''}
-      </div>
-      <div class="explore-actions-bar-row">
-        <button class="explore-action-save btn-copy-apa" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
-          <i class="ph-bold ph-copy"></i> APA
+        <button class="modal-action-btn" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
+          <i class="ph-bold ph-copy"></i><span>APA</span>
         </button>
-        <button class="explore-action-save btn-copy-doi" id="btn-modal-copy-doi" title="Copiar DOI" ${!paper.doi ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
-          <i class="ph-bold ph-link"></i> DOI
+        <button class="modal-action-btn" id="btn-modal-copy-doi" title="Copiar DOI" ${!paper.doi ? 'disabled' : ''}>
+          <i class="ph-bold ph-link"></i><span>DOI</span>
         </button>
-        <button class="explore-action-save" id="btn-modal-share" title="Compartir (próximamente)" disabled style="opacity: 0.5; cursor: not-allowed;">
-          <i class="ph-bold ph-share-network"></i> Compartir
+        <button class="modal-action-btn" id="btn-modal-share" title="Compartir (próximamente)" disabled>
+          <i class="ph-bold ph-share-network"></i><span>Compartir</span>
         </button>
       </div>
     </div>
@@ -1756,6 +1954,11 @@ const postProcessReaderContent = () => {
     }
   });
 
+  // Resolver imágenes y enlaces servidos por el backend de traducción
+  el.readerContent.querySelectorAll('img[src^="/api/"], img[src^="/files/"]').forEach(img => {
+    img.src = HF_SPACE_URL + img.getAttribute('src');
+  });
+
   // Envolver imágenes y figuras en un contenedor dedicado SIN alterar el párrafo de texto
   el.readerContent.querySelectorAll('img').forEach(img => {
     if (img.closest('.reader-figure-container')) return;
@@ -1773,7 +1976,7 @@ const postProcessReaderContent = () => {
       pdfLink = parentP.querySelector('.internal-pdf-link');
       if (!pdfLink && parentP.nextElementSibling) {
         pdfLink = parentP.nextElementSibling.querySelector('.internal-pdf-link') ||
-                  (parentP.nextElementSibling.classList.contains('internal-pdf-link') ? parentP.nextElementSibling : null);
+          (parentP.nextElementSibling.classList.contains('internal-pdf-link') ? parentP.nextElementSibling : null);
       }
     }
 
@@ -1884,7 +2087,7 @@ function startReaderLoadingProgress(isLocalFile = false) {
     } else if (elapsed < 8) {
       stepText = 'Extrayendo estructura y figuras del PDF…';
     } else if (elapsed < 16) {
-      stepText = 'Traduciendo secciones con IA (Gemini)…';
+      stepText = 'Traduciendo secciones';
     } else if (elapsed < 25) {
       stepText = 'Adaptando conceptos científicos al español…';
     } else if (elapsed < 36) {
@@ -1945,9 +2148,11 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   if (cachedMarkdown) {
     S.readerPaperId = effectiveId;
     S.readerPdfUrl = paperUrl || paper?.pdfUrl || paper?.oaUrl || null;
+    S.readerDocId = getPersistedTranslationMeta(effectiveId, paperUrl)?.documentId || null;
     if (el.btnReaderViewPdf) {
       el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
     }
+    updateReaderExportButtons();
     if (!el.pageExplore.classList.contains('hidden') && !S.storyPaused) {
       pauseStory();
     }
@@ -1964,10 +2169,30 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     return;
   }
 
-  // 2. Si no está traducido y no hay enlace directo, mostrar pantalla amigable de requisito
+  // 2. Si verificamos que el PDF no es de descarga libre, no mostramos
+  //    traducción automática: el usuario debe descargarlo y subirlo.
+  if (paper && paper.pdfChecked && paper.isAutomatic === false) {
+    S.readerPaperId = effectiveId;
+    S.readerPdfUrl = paperUrl || paper?.pdfUrl || paper?.oaUrl || null;
+    S.readerDocId = null;
+    updateReaderExportButtons();
+    if (el.btnReaderViewPdf) {
+      el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
+    }
+    el.readerOverlay.classList.remove('hidden');
+    if (el.readerModal) el.readerModal.classList.remove('slide-left');
+    document.body.style.overflow = 'hidden';
+    if (el.readerScroll) el.readerScroll.scrollTop = 0;
+    showReaderRequisiteScreen(paper);
+    return;
+  }
+
+  // 3. Si no está traducido y no hay enlace directo, mostrar pantalla amigable de requisito
   if (!paperUrl) {
     S.readerPaperId = effectiveId;
     S.readerPdfUrl = null;
+    S.readerDocId = null;
+    updateReaderExportButtons();
     el.readerOverlay.classList.remove('hidden');
     if (el.readerModal) el.readerModal.classList.remove('slide-left');
     document.body.style.overflow = 'hidden';
@@ -1978,6 +2203,8 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   // Anclar el visor estrictamente a este paper en específico
   S.readerPaperId = effectiveId;
   S.readerPdfUrl = paperUrl || paper?.pdfUrl || paper?.oaUrl || null;
+  S.readerDocId = null;
+  updateReaderExportButtons();
   if (el.btnReaderViewPdf) {
     el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
   }
@@ -2006,16 +2233,18 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   if (activeTranslations.has(effectiveId)) {
     try {
       const data = await activeTranslations.get(effectiveId);
-      
+
       paperTranslations.set(effectiveId, data.markdown);
-      persistTranslation(effectiveId, paperUrl, data.markdown);
+      persistTranslation(effectiveId, paperUrl, data.markdown, data.document_id);
+      S.readerDocId = data.document_id || null;
+      updateReaderExportButtons();
       if (paper) {
         paper.translatedMarkdown = data.markdown;
         paper.isAutomatic = true;
         updatePaperAutomaticBadges(paper);
       }
       if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-      
+
       if (typeof saveProcessedArticle === 'function') {
         saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper, data.markdown);
       }
@@ -2030,7 +2259,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 
       el.readerLoading.style.display = 'none';
       if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
-      
+
       renderReaderPaperContent(paper, data.markdown);
     } catch (err) {
       if (S.readerPaperId !== effectiveId) return;
@@ -2043,13 +2272,13 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   const translatePromise = (async () => {
     let taskId = null;
     const { BackgroundTask, LocalNotifications } = window.Capacitor?.Plugins || {};
-    
+
     if (BackgroundTask) {
       try {
         taskId = await BackgroundTask.beforeExit(async () => {
           console.log('[BackgroundTask] Notificación de suspensión recibida por el SO');
           if (taskId !== null) {
-            try { BackgroundTask.finish({ taskId }); } catch (e) {}
+            try { BackgroundTask.finish({ taskId }); } catch (e) { }
             taskId = null;
           }
         });
@@ -2063,7 +2292,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
       });
-      
+
       if (LocalNotifications) {
         try {
           await LocalNotifications.requestPermissions();
@@ -2096,7 +2325,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     } finally {
       activeTranslations.delete(effectiveId);
       if (BackgroundTask && taskId !== null) {
-        try { BackgroundTask.finish({ taskId }); } catch (e) {}
+        try { BackgroundTask.finish({ taskId }); } catch (e) { }
         taskId = null;
       }
     }
@@ -2108,14 +2337,16 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     const data = await translatePromise;
 
     paperTranslations.set(effectiveId, data.markdown);
-    persistTranslation(effectiveId, paperUrl, data.markdown);
+    persistTranslation(effectiveId, paperUrl, data.markdown, data.document_id);
+    S.readerDocId = data.document_id || null;
+    updateReaderExportButtons();
     if (paper) {
       paper.translatedMarkdown = data.markdown;
       paper.isAutomatic = true;
       updatePaperAutomaticBadges(paper);
     }
     if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-    
+
     if (typeof saveProcessedArticle === 'function') {
       saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || 'Documento PDF', data.pdf_url, paper, data.markdown);
     }
@@ -2156,9 +2387,11 @@ function closeReaderModal() {
   el.readerContent.innerHTML = '';
   S.readerPaperId = null;
   S.readerPdfUrl = null;
+  S.readerDocId = null;
   if (el.btnReaderViewPdf) {
     el.btnReaderViewPdf.style.display = 'none';
   }
+  updateReaderExportButtons();
   // Solo restaurar scroll si el modal del paper no está abierto debajo
   if (el.modalOverlay.classList.contains('hidden')) {
     document.body.style.overflow = '';
@@ -2174,6 +2407,8 @@ async function handleReaderFileUpload(file) {
   const paper = S.currentPaper;
   const effectiveId = paper?.id || file.name;
   S.readerPaperId = effectiveId;
+  S.readerDocId = null;
+  updateReaderExportButtons();
 
   el.readerLoading.style.display = 'flex';
   startReaderLoadingProgress(true);
@@ -2196,6 +2431,9 @@ async function handleReaderFileUpload(file) {
       if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
 
       paperTranslations.set(effectiveId, data.markdown);
+      persistTranslation(effectiveId, file.name, data.markdown, data.document_id);
+      S.readerDocId = data.document_id || null;
+      updateReaderExportButtons();
       if (paper) paper.translatedMarkdown = data.markdown;
       if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
       if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = S.readerPdfUrl ? 'flex' : 'none';
@@ -2245,7 +2483,7 @@ async function handleReaderFileUpload(file) {
   const translatePromise = (async () => {
     let taskId = null;
     const { BackgroundTask, LocalNotifications } = window.Capacitor?.Plugins || {};
-    
+
     if (BackgroundTask) {
       try {
         taskId = await BackgroundTask.beforeExit(async () => {
@@ -2269,7 +2507,7 @@ async function handleReaderFileUpload(file) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || data.error || 'Error procesando el archivo PDF');
-      
+
       if (LocalNotifications) {
         try {
           await LocalNotifications.requestPermissions();
@@ -2303,7 +2541,7 @@ async function handleReaderFileUpload(file) {
     } finally {
       activeTranslations.delete(effectiveId);
       if (BackgroundTask && taskId !== null) {
-        try { BackgroundTask.finish({ taskId }); } catch (e) {}
+        try { BackgroundTask.finish({ taskId }); } catch (e) { }
       }
     }
   })();
@@ -2315,9 +2553,12 @@ async function handleReaderFileUpload(file) {
 
     // GUARDAR SIEMPRE EN MEMORIA AUNQUE EL USUARIO HAYA SALIDO
     paperTranslations.set(effectiveId, data.markdown);
+    persistTranslation(effectiveId, file.name, data.markdown, data.document_id);
+    S.readerDocId = data.document_id || null;
+    updateReaderExportButtons();
     if (paper) paper.translatedMarkdown = data.markdown;
     if (data.pdf_url) S.readerPdfUrl = data.pdf_url;
-    
+
     if (typeof saveProcessedArticle === 'function') {
       const fileName = file.name ? file.name.replace(/\.pdf$/i, '') : 'Documento PDF';
       saveProcessedArticle(effectiveId, paper?.titleEs || paper?.title || fileName, data.pdf_url, paper);
@@ -2410,6 +2651,12 @@ function toggleBookmark(paper) {
       year: paper.year || null,
       citations: numCites,
       oaUrl: paper.oaUrl || null,
+      pdfUrl: paper.pdfUrl || null,
+      isOa: paper.isOa ?? null,
+      oaStatus: paper.oaStatus || null,
+      isAutoDownloadable: paper.isAutoDownloadable ?? null,
+      isAutomatic: paper.isAutomatic ?? null,
+      pdfChecked: paper.pdfChecked === true,
       doi: paper.doi || null,
       abstract: paper.abstract || null,
       abstractEs: paper.abstractEs || null,
@@ -2770,32 +3017,20 @@ function setupEventListeners() {
     }
   }
 
-  let lastSearchOpenClick = 0;
-  el.btnSearchOpen.addEventListener('click', (e) => {
+  el.btnSearchOpen?.addEventListener('click', (e) => {
     e.stopPropagation();
-    const now = Date.now();
-    if (now - lastSearchOpenClick < 600) {
-      lastSearchOpenClick = 0;
-      resetInlineSearch();
-      resetSearchToInitial();
-      showToast('Búsqueda reiniciada');
-      return;
-    }
-    lastSearchOpenClick = now;
-
-    const isActive = el.searchInlineWrapper.classList.contains('active');
-    if (isActive) {
-      // Si hay texto, buscar; si no, resetear y cerrar
-      if (el.searchInput.value.trim()) {
-        triggerSearch();
-      } else {
-        resetInlineSearch();
-      }
-    } else {
-      el.searchInlineWrapper.classList.add('active');
-      setTimeout(() => el.searchInput.focus(), 250);
-    }
+    el.searchInlineWrapper?.classList.add('active');
+    el.searchInput?.focus();
   });
+
+  // "Ver todas" → página de búsqueda
+  const btnAllTopics = $('btn-all-topics');
+  if (btnAllTopics) {
+    btnAllTopics.addEventListener('click', () => {
+      navigateTo('search');
+      setTimeout(() => el.searchPageInput?.focus(), 250);
+    });
+  }
 
   document.addEventListener('click', e => {
     if (el.searchInlineWrapper && el.searchInlineWrapper.classList.contains('active') &&
@@ -2950,6 +3185,23 @@ function setupEventListeners() {
       }
     });
   }
+  const wireReaderDownload = (button, endpoint) => {
+    if (!button) return;
+    button.addEventListener('click', () => {
+      if (!S.readerDocId) {
+        showToast('La descarga no está disponible todavía');
+        return;
+      }
+      const link = document.createElement('a');
+      link.href = `${HF_SPACE_URL}/api/${endpoint}/${S.readerDocId}`;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    });
+  };
+  wireReaderDownload(el.btnReaderDownloadMd, 'download-md');
+  wireReaderDownload(el.btnReaderDownloadPdf, 'download-pdf');
   if (el.btnReaderFontToggle) {
     el.btnReaderFontToggle.addEventListener('click', () => {
       if (el.readerModal) {
@@ -3014,9 +3266,15 @@ function setupEventListeners() {
     if (btnPsihubOptions && S.currentPaper) {
       e.stopPropagation();
       if (el.psihubOptionsOverlay && el.psihubOptionsSheet) {
+        const isFree = S.currentPaper.isAutomatic === true;
+        const isManual = S.currentPaper.pdfChecked === true && !isFree;
         const badgeEs = document.getElementById('btn-psihub-read-es-badge');
         if (badgeEs) {
-          badgeEs.style.display = S.currentPaper.isAutomatic ? 'inline-block' : 'none';
+          badgeEs.style.display = isFree ? 'inline-block' : 'none';
+        }
+        const legacyLabel = document.getElementById('btn-psihub-read-es-label');
+        if (legacyLabel) {
+          legacyLabel.textContent = isManual ? 'Traducir PDF descargado' : 'Leer artículo en español';
         }
         el.psihubOptionsOverlay.classList.remove('hidden');
         el.psihubOptionsSheet.classList.remove('closing');
@@ -3319,6 +3577,10 @@ function setupEventListeners() {
     });
   }
 
+  // Recalcular el fundido del panel al cambiar de tamaño u orientación
+  window.addEventListener('resize', updateStoryOverflow);
+  window.addEventListener('orientationchange', () => setTimeout(updateStoryOverflow, 150));
+
   // Perfil: nombre y rol
   if (el.profileName) {
     el.profileName.addEventListener('input', () => {
@@ -3522,7 +3784,7 @@ function renderCurrentStory(index) {
 
   if (el.exploreTagsRow) {
     el.exploreTagsRow.innerHTML = (story.tags || [story.topicName]).map(t =>
-      `<span style="display:inline-block; margin-right:6px; font-size:10px; padding:4px 10px; background:rgba(255,255,255,0.15); border-radius:100px; font-weight:700; color:var(--txt);">${esc(t)}</span>`
+      `<span style="display:inline-block; margin-right:6px; font-size:9px; padding:3px 8px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.09); border-radius:4px; font-weight:500; letter-spacing:0.08em; text-transform:uppercase; color:var(--txt-2);">${esc(t)}</span>`
     ).join('');
   }
 
@@ -3550,8 +3812,17 @@ function renderCurrentStory(index) {
   // 6. Botón guardar
   updateStorySaveBtnState(story);
 
+  // 7. Fundido inferior del panel si el contenido necesita scroll
+  requestAnimationFrame(updateStoryOverflow);
+
   // Iniciar temporizador
   startStoryTimer();
+}
+
+function updateStoryOverflow() {
+  const body = document.querySelector('.explore-story-body');
+  if (!body) return;
+  body.classList.toggle('has-overflow', body.scrollHeight > body.clientHeight + 2);
 }
 
 function updateStorySaveBtnState(story) {
@@ -3782,18 +4053,31 @@ function refreshProcessedArticles() {
   S.processed.forEach((p, idx) => {
     const li = document.createElement('li');
     li.className = 'paper-card';
+
+    const paperData = p.paperData || null;
+    const tags = paperData ? classifyPaper(paperData).slice(0, 1) : [];
+    const authors = Array.isArray(paperData?.authors) && paperData.authors.length
+      ? `${paperData.authors[0]}${paperData.authors.length > 1 ? ` +${paperData.authors.length - 1}` : ''}`
+      : '';
+    const dateLabel = new Date(p.date).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' });
+
     li.innerHTML = `
-      <div class="paper-card-body" style="padding-left: 0;">
-        <div class="paper-card-top">
-          <h3 class="paper-card-title">${esc(p.title)}</h3>
-          <button class="btn-card-bk saved-card-remove-processed" data-index="${idx}" aria-label="Eliminar" style="background:transparent; border:none; color:var(--txt-3); cursor:pointer;">
-            <i class="ph-bold ph-trash"></i>
-          </button>
+      <div class="paper-card-body">
+        <div class="paper-card-tags">
+          <span class="tag-pill tag-traducido"><span>Traducido</span></span>
+          ${tags.map(tagBadge).join('')}
         </div>
-        <p class="paper-card-authors" style="font-size: 11px; color: var(--txt-3);">
-          Procesado el ${new Date(p.date).toLocaleDateString()}
-        </p>
+        <h3 class="paper-card-title">${esc(p.title)}</h3>
+        ${authors ? `<p class="paper-card-authors">${esc(authors)}</p>` : ''}
+        <div class="paper-card-meta">
+          <span><i class="ph-bold ph-calendar-blank"></i>${esc(dateLabel)}</span>
+          ${paperData?.year ? `<span class="meta-dot">·</span><span>${paperData.year}</span>` : ''}
+        </div>
       </div>
+      <button class="btn-card-bk saved-card-remove-processed" data-index="${idx}" aria-label="Eliminar" title="Eliminar de recientes">
+        <i class="ph-bold ph-trash"></i>
+      </button>
+      <span class="paper-card-arrow"><i class="ph-bold ph-caret-right"></i></span>
     `;
     li.addEventListener('click', (e) => {
       if (e.target.closest('.saved-card-remove-processed')) {
@@ -3821,7 +4105,7 @@ function openInternalPdfViewer(url) {
     const base = S.readerPdfUrl.split('#')[0];
     fullUrl = `${base}${fullUrl}`;
   }
-  if (fullUrl.startsWith('/files/')) {
+  if (fullUrl.startsWith('/files/') || fullUrl.startsWith('/api/')) {
     fullUrl = HF_SPACE_URL + fullUrl;
   }
   const overlay = document.getElementById('pdf-viewer-overlay');

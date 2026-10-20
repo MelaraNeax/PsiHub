@@ -33,6 +33,15 @@ def _md_inline(text: str) -> str:
     return re.sub(r'[ \t]+', ' ', (text or '').strip())
 
 
+_LIST_NUMBER_RE = re.compile(r'^\s*(?:[-–—•]\s*)?\(?\d{1,4}[.)]\s*')
+
+
+def _list_item_text(item: str, ordered: bool) -> str:
+    """Quita el numero impreso antes de que el exportador numere la lista."""
+    text = (item or '').strip()
+    return _LIST_NUMBER_RE.sub('', text).strip() if ordered else text
+
+
 def document_to_markdown(doc: dict) -> str:
     """Convierte el documento estructurado en Markdown editorial."""
     meta = doc.get('document', {})
@@ -88,7 +97,9 @@ def document_to_markdown(doc: dict) -> str:
             ordered = bool(block.get('ordered'))
             for i, item in enumerate(block.get('items') or [], 1):
                 prefix = f'{i}.' if ordered else '-'
-                lines.append(f'{prefix} {_md_inline(item)}')
+                text = _list_item_text(item, ordered)
+                if text:
+                    lines.append(f'{prefix} {_md_inline(text)}')
             lines.append('')
         elif btype == 'table':
             caption = block.get('caption')
@@ -503,8 +514,11 @@ def document_to_pdf(doc: dict, output_path: str | Path, images_dir: str | Path) 
         elif btype == 'list':
             ordered = bool(block.get('ordered'))
             for i, item in enumerate(block.get('items') or [], 1):
+                text = _list_item_text(item, ordered)
+                if not text:
+                    continue
                 bullet = f'{i}.' if ordered else '•'
-                story.append(Paragraph(_inline_markup(item), styles['bullet'], bulletText=bullet))
+                story.append(Paragraph(_inline_markup(text), styles['bullet'], bulletText=bullet))
             story.append(Spacer(1, 5))
         elif btype == 'table':
             caption = block.get('caption')
