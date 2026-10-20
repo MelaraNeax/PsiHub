@@ -1838,9 +1838,33 @@ input[type="search"]::-webkit-search-cancel-button {
   transform: scale(0.96);
 }
 
-/* Botón cargar más (fallback / compatibilidad) */
+/* Botón cargar más: respaldo táctil cuando el scroll no dispara la carga */
 .btn-load-more {
-  display: none !important;
+  display: none; /* El JS lo muestra solo si quedan páginas */
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 2px auto 30px;
+  padding: 9px 20px;
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: var(--txt-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.btn-load-more:hover {
+  background: var(--surface);
+  color: var(--txt);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.btn-load-more:active {
+  transform: scale(0.96);
 }
 
 /* ═══════════════════════════════════════════════════

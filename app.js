@@ -331,6 +331,8 @@ const S = {
   page: 1,
   perPage: 10,
   total: 0,
+  hasMore: false,
+  loadMoreError: null, // 'network' | 'empty' | null: cómo reintentar la próxima página
   papers: [],     // papers actuales en la vista de resultados
   loading: false,
   searchTimeout: null,
@@ -651,6 +653,7 @@ function openCorriente(corriente) {
   if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
   if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
   if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
   if (el.searchPageInput) {
     el.searchPageInput.value = '';
     if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
@@ -702,6 +705,7 @@ async function doSearch(query) {
   if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
   if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
   if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
 
   if (el.resultsSort) el.resultsSort.value = '';
 
@@ -791,7 +795,7 @@ function closeResults(animated = true) {
 
 let currentFetchController = null;
 
-async function doFetch() {
+async function doFetch({ nextPage = false } = {}) {
   if (!S.baseQuery || !S.baseQuery.trim()) {
     resetSearchToInitial();
     return;
@@ -803,8 +807,13 @@ async function doFetch() {
   currentFetchController = new AbortController();
   const signal = currentFetchController.signal;
 
+  // La página pedida no se da por cargada hasta que la respuesta llega bien.
+  // Así, un fallo de red o una página vacía se reintenta sin saltear resultados.
+  const requestedPage = nextPage ? S.page + 1 : S.page;
+  const isFirstPage = requestedPage === 1;
+
   S.loading = true;
-  const isFirstPage = S.page === 1;
+  S.loadMoreError = null;
 
   if (isFirstPage) {
     showResultsState('loading');
@@ -814,10 +823,13 @@ async function doFetch() {
     if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
     if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
     if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+    if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
   } else {
     // Al scrollear hacia abajo, mostramos el círculo de carga elegante al pie
     if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'flex';
     if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+    if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+    if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
   }
 
   try {
@@ -826,7 +838,7 @@ async function doFetch() {
       subtype: S.activeSubtype,
       sort: S.sort || null,
       perPage: S.perPage,
-      page: S.page,
+      page: requestedPage,
       signal
     });
 
@@ -843,8 +855,24 @@ async function doFetch() {
 
     if (signal.aborted) return;
 
-    S.total = meta.count;
-    S.papers = isFirstPage ? finalResults : [...S.papers, ...finalResults];
+    const reportedTotal = Number(meta?.count);
+    const apiTotal = Number.isFinite(reportedTotal) && reportedTotal >= 0 ? reportedTotal : 0;
+
+    // Evitar duplicados si una página se repite (caché o reintento).
+    const knownIds = new Set(S.papers.map(p => p.id).filter(Boolean));
+    const newResults = isFirstPage
+      ? finalResults
+      : finalResults.filter(p => !p.id || !knownIds.has(p.id));
+
+    S.papers = isFirstPage ? finalResults : [...S.papers, ...newResults];
+
+    // El total nunca puede ser menor que lo que ya hay en pantalla, y una
+    // página posterior no puede achicarlo: eso cortaba el scroll infinito y
+    // mostraba "fin de resultados" después de la primera página.
+    S.total = isFirstPage
+      ? Math.max(apiTotal, S.papers.length)
+      : Math.max(S.total || 0, apiTotal, S.papers.length);
+    S.page = requestedPage;
 
     if (el.resultsCount && !signal.aborted) {
       el.resultsCount.textContent = `${S.total.toLocaleString('es')} resultados`;
@@ -856,36 +884,51 @@ async function doFetch() {
         S.loading = false;
         S.hasMore = false;
         if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+        if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
       }
       return;
     }
 
     // Render inmediato con los datos de OpenAlex. La traducción llega después
     // y actualiza las tarjetas en segundo plano, sin bloquear la búsqueda.
-    renderPapers(finalResults, !isFirstPage);
+    renderPapers(newResults, !isFirstPage);
     showResultsState('results');
 
-    const hasMore = S.papers.length < S.total && results.length === S.perPage;
+    const hasMore = results.length > 0 && S.papers.length < S.total;
+    const reachedEnd = S.papers.length >= S.total;
     S.hasMore = hasMore;
 
     if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+
+    // Solo es "fin de resultados" si realmente cubrimos el total informado.
     if (el.resultsEndNotice) {
-      el.resultsEndNotice.style.display = (!hasMore && S.papers.length >= 10) ? 'flex' : 'none';
+      el.resultsEndNotice.style.display = (reachedEnd && S.papers.length > 0) ? 'flex' : 'none';
     }
 
-    const titles = finalResults.map(p => p.title);
-    const abstracts = finalResults.map(p => p.abstract ? p.abstract.slice(0, 150) : '');
+    // Página vacía inesperada con total pendiente: no es el final, se puede
+    // reintentar la misma página sin saltear resultados.
+    const stalled = !isFirstPage && results.length === 0 && !reachedEnd;
+    if (stalled) S.loadMoreError = 'empty';
+    if (el.scrollRetryContainer) {
+      el.scrollRetryContainer.style.display = stalled ? 'flex' : 'none';
+    }
+    if (el.btnLoadMore) {
+      el.btnLoadMore.style.display = hasMore ? 'inline-flex' : 'none';
+    }
+
+    const titles = newResults.map(p => p.title);
+    const abstracts = newResults.map(p => p.abstract ? p.abstract.slice(0, 150) : '');
 
     Promise.all([
       translateBatch(titles),
       translateBatch(abstracts)
     ]).then(([translatedTitles, translatedAbstracts]) => {
       if (signal.aborted) return;
-      finalResults.forEach((p, i) => {
+      newResults.forEach((p, i) => {
         p.titleEs = translatedTitles[i];
         if (abstracts[i] && translatedAbstracts[i]) p.abstractEs = translatedAbstracts[i] + '...';
       });
-      updateCardTranslations(finalResults);
+      updateCardTranslations(newResults);
     }).catch(() => { });
 
   } catch (err) {
@@ -898,7 +941,10 @@ async function doFetch() {
         : (err.message || 'Error de conexión con OpenAlex.');
       showResultsState('error');
     } else {
+      // La página no se dio por cargada: "Reintentar" vuelve a pedir la misma.
+      S.loadMoreError = 'network';
       if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+      if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
       if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'flex';
     }
   } finally {
@@ -910,8 +956,14 @@ async function doFetch() {
 
 async function loadMore() {
   if (S.loading || !S.hasMore || !S.baseQuery) return;
-  S.page++;
-  await doFetch();
+  await doFetch({ nextPage: true });
+}
+
+async function retryLoadMore() {
+  if (S.loading || !S.baseQuery || !S.loadMoreError) return;
+  // Si la página vino vacía, se reintenta la misma; si falló la red, se pide
+  // la siguiente (S.page todavía apunta a la última página cargada con éxito).
+  await doFetch({ nextPage: S.loadMoreError === 'network' });
 }
 
 function showResultsState(state) {
@@ -948,7 +1000,7 @@ function initInfiniteScroll() {
   if (el.btnLoadMoreRetry) {
     el.btnLoadMoreRetry.addEventListener('click', (e) => {
       e.stopPropagation();
-      loadMore();
+      retryLoadMore();
     });
   }
 
@@ -3186,6 +3238,7 @@ function setupEventListeners() {
       if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
       if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
       if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+      if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
 
       // El filtro de orden (S.sort) se mantiene independiente de la etiqueta seleccionada
       updateGlow();
@@ -3208,6 +3261,7 @@ function setupEventListeners() {
       if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
       if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
       if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+      if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
       doFetch();
     });
   }

@@ -263,10 +263,15 @@ async function fetchWorksPage(params, signal) {
 
   const data = await res.json();
   if (!signal?.aborted) {
-    if (responseCache.size > 40) {
-      responseCache.delete(responseCache.keys().next().value);
+    // No cachear páginas vacías: un hipo temporal de OpenAlex quedaría
+    // pegado 3 minutos y "Reintentar" devolvería lo mismo sin ir a la red.
+    const hasResults = Array.isArray(data?.results) && data.results.length > 0;
+    if (hasResults) {
+      if (responseCache.size > 40) {
+        responseCache.delete(responseCache.keys().next().value);
+      }
+      responseCache.set(url, { at: Date.now(), data });
     }
-    responseCache.set(url, { at: Date.now(), data });
   }
   return data;
 }
