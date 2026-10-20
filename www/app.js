@@ -3,7 +3,7 @@
  * Spotify aesthetic · OpenAlex · Traducción MyMemory
  */
 
-import { fetchPapers, fetchWorkById } from './src/services/openalex.js';
+import { fetchPapers, fetchWorkById } from './src/services/openalex.js?v=38';
 import { translateToSpanish, translateBatch, translateToEnglish } from './src/services/translate.js';
 
 // ═══════════════════════════════════════════════════
@@ -892,7 +892,10 @@ async function doFetch() {
     if (err.name === 'AbortError' || signal.aborted) return;
     console.error('[PsiHub fetch]', err);
     if (isFirstPage) {
-      el.resultsErrorMsg.textContent = err.message || 'Error de conexión con OpenAlex.';
+      const timedOut = err.name === 'TimeoutError' || /timed out|timeout/i.test(err.message || '');
+      el.resultsErrorMsg.textContent = timedOut
+        ? 'OpenAlex tardó demasiado en responder. Probá de nuevo en unos segundos.'
+        : (err.message || 'Error de conexión con OpenAlex.');
       showResultsState('error');
     } else {
       if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';

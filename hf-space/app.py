@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -57,6 +57,13 @@ for directory in (CACHE_DIR, SOURCE_PDF_DIR, IMAGES_STORE_DIR, MD_STORE_DIR,
 
 REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '300'))
 LOG_BUFFER: deque = deque(maxlen=3000)
+
+# Proxy de OpenAlex: la IP del backend tiene su propia cuota y las respuestas
+# se cachean para no gastar créditos en búsquedas repetidas.
+OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
+OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
+OPENALEX_CACHE_TTL = int(os.getenv('OPENALEX_CACHE_TTL', '600'))
+_openalex_cache: dict[str, tuple[float, dict]] = {}
 
 
 def log(message: str) -> None:
@@ -560,6 +567,46 @@ async def api_translate(request: TranslateRequest):
     except Exception as exc:  # noqa: BLE001
         log(f'[ERROR] {type(exc).__name__}: {exc}')
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get('/api/openalex')
+async def api_openalex(request: Request):
+    allowed = {'filter', 'search', 'sort', 'page', 'per-page', 'select', 'api_key'}
+    params = {k: v for k, v in request.query_params.items() if k in allowed}
+    if not params.get('api_key'):
+        params.setdefault('mailto', OPENALEX_MAILTO)
+
+    cache_key = json.dumps({k: v for k, v in params.items() if k != 'api_key'}, sort_keys=True)
+    now = time.time()
+    cached = _openalex_cache.get(cache_key)
+    if cached and cached[0] > now:
+        return JSONResponse(content=cached[1])
+
+    headers = {'User-Agent': f'PsiHub/10 (+https://melaraneax.github.io/PsiHub/; {OPENALEX_MAILTO})'}
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=8.0),
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            response = await client.get(OPENALEX_WORKS_URL, params=params)
+            if response.status_code == 503:
+                await asyncio.sleep(1.0)
+                response = await client.get(OPENALEX_WORKS_URL, params=params)
+    except httpx.HTTPError as exc:
+        log(f'[OPENALEX] {type(exc).__name__}: {exc}')
+        raise HTTPException(status_code=502, detail='No se pudo contactar a OpenAlex.') from exc
+
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail='Respuesta inválida de OpenAlex.')
+
+    if response.status_code == 200 and isinstance(payload, dict):
+        if len(_openalex_cache) > 500:
+            _openalex_cache.clear()
+        _openalex_cache[cache_key] = (now + OPENALEX_CACHE_TTL, payload)
+    return JSONResponse(content=payload, status_code=response.status_code)
 
 
 @app.get('/api/check-pdf')

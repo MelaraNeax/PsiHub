@@ -3,6 +3,12 @@
  */
 
 const BASE = 'https://api.openalex.org/works';
+// Proxy propio: usa la IP del backend (con su propia cuota de OpenAlex) y
+// cachea las respuestas para no gastar créditos en búsquedas repetidas.
+const PROXY = 'https://mi-servidor-api-42204102300.southamerica-east1.run.app/api/openalex';
+const REQUEST_TIMEOUT_MS = 15000;
+// OpenAlex puede responder Retry-After con horas; nunca se espera tanto.
+const MAX_RETRY_WAIT_MS = 3000;
 
 // Términos adicionales por subtipo para modificar la query
 const SUBTYPE_TERMS = {
@@ -68,13 +74,24 @@ function getFallbackFilterForQuery(query) {
 /**
  * Fetch con reintentos automáticos para evitar errores 429 de límite de frecuencia.
  */
+function withTimeout(signal) {
+  if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) return signal;
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  if (!signal) return timeout;
+  return AbortSignal.any ? AbortSignal.any([signal, timeout]) : signal;
+}
+
 async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 1000) {
+  const opts = { ...options, signal: withTimeout(options.signal) };
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, options);
+      const res = await fetch(url, opts);
       if (res.status === 429 && attempt < retries) {
         const retryAfter = parseInt(res.headers.get('Retry-After'), 10);
-        const wait = !isNaN(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : delayMs * (attempt + 1);
+        const suggested = !isNaN(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : delayMs * (attempt + 1);
+        const wait = Math.min(suggested, MAX_RETRY_WAIT_MS);
         console.warn(`[OpenAlex 429] Rate limit temporal. Reintentando en ${wait}ms (intento ${attempt + 1}/${retries})...`);
         await new Promise(r => setTimeout(r, wait));
         continue;
@@ -199,12 +216,24 @@ function buildWorksParams({ query, subtype, sort, perPage, page, precise, apiKey
   return params;
 }
 
+// Intenta primero por el proxy; si no está disponible, va directo a OpenAlex.
+async function fetchOpenAlex(params, signal) {
+  try {
+    const res = await fetchWithRetry(`${PROXY}?${params}`, { signal });
+    // 200/429/503 son respuestas válidas de OpenAlex: no se reintenta directo.
+    if (res.ok || res.status === 429 || res.status === 503) return res;
+  } catch (err) {
+    if (err?.name === 'AbortError' || err?.name === 'TimeoutError') throw err;
+  }
+  return fetchWithRetry(`${BASE}?${params}`, { signal });
+}
+
 async function fetchWorksPage(params, signal) {
   const url = `${BASE}?${params}`;
   const cached = responseCache.get(url);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.data;
 
-  let res = await fetchWithRetry(url, { signal });
+  let res = await fetchOpenAlex(params, signal);
 
   // Contingencia: si la búsqueda anónima devuelve 503, caemos a topics.
   if (res && res.status === 503) {
@@ -219,12 +248,12 @@ async function fetchWorksPage(params, signal) {
     fallbackParams.set('filter', `${cleanFilter},${topicFilter}`);
     fallbackParams.delete('search');
     if (!fallbackParams.get('sort')) fallbackParams.set('sort', 'cited_by_count:desc');
-    res = await fetchWithRetry(`${BASE}?${fallbackParams}`, { signal });
+    res = await fetchOpenAlex(fallbackParams, signal);
   }
 
   if (!res.ok) {
     if (res.status === 429) {
-      throw new Error('Límite temporal alcanzado en OpenAlex. Por favor esperá unos segundos y reintentá.');
+      throw new Error('OpenAlex alcanzó su límite de solicitudes. Reintentá más tarde o configurá una API key en tu perfil.');
     }
     if (res.status === 503) {
       throw new Error('OpenAlex está momentáneamente en mantenimiento. Por favor reintentá en unos momentos.');
