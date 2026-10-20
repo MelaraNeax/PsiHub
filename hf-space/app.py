@@ -606,9 +606,16 @@ async def api_openalex(request: Request):
         raise HTTPException(status_code=502, detail='Respuesta inválida de OpenAlex.')
 
     if response.status_code == 200 and isinstance(payload, dict):
-        if len(_openalex_cache) > 500:
-            _openalex_cache.clear()
-        _openalex_cache[cache_key] = (now + OPENALEX_CACHE_TTL, payload)
+        # No cachear páginas vacías ni respuestas con total 0: un hipo
+        # temporal de OpenAlex quedaría pegado 10 minutos y los reintentos
+        # del cliente devolverían siempre lo mismo.
+        results = payload.get('results')
+        meta = payload.get('meta') or {}
+        count = meta.get('count')
+        if isinstance(results, list) and results and isinstance(count, int) and count > 0:
+            if len(_openalex_cache) > 500:
+                _openalex_cache.clear()
+            _openalex_cache[cache_key] = (now + OPENALEX_CACHE_TTL, payload)
     return JSONResponse(content=payload, status_code=response.status_code)
 
 
