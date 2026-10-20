@@ -1098,6 +1098,15 @@ function handleReaderTranslationError(error, paper) {
     || msg.includes('captcha');
 
   if (isDirectUploadRequired) {
+    // La verificación previa dijo "Libre" pero el editor bloqueó la descarga:
+    // se corrige el estado para que la tarjeta deje de prometerlo.
+    if (paper) {
+      paper.pdfChecked = true;
+      paper.isAutomatic = false;
+      paper.isFree = false;
+      paper.pdfCheckStatus = 'blocked';
+      updatePaperAutomaticBadges(paper);
+    }
     showReaderRequisiteScreen(paper);
   } else {
     el.readerError.style.display = 'flex';
@@ -1169,11 +1178,13 @@ function updateModalPaperAction(paper) {
 }
 
 // --- Verificación de descarga en un clic ---------------------------------
-// El PDF es "libre" cuando se puede bajar directo, sin login ni pasos extra.
-// Primero se verifica con una petición real (HEAD/GET con Range). Si el
-// servidor no expone CORS, se usa la metadata de OpenAlex (acceso abierto +
-// URL directa a PDF) como señal de confianza.
-const PDF_CHECK_TIMEOUT_MS = 4500;
+// El PDF es "libre" solo cuando se puede bajar directo, sin login ni pasos
+// extra. La metadata de OpenAlex NO basta: muchos editores publican una URL
+// que parece de PDF pero responde 403 o una página de aterrizaje. Por eso la
+// verificación real la hace el backend (sin las restricciones de CORS del
+// navegador): descarga una muestra y confirma que el contenido es un PDF.
+const PDF_CHECK_TIMEOUT_MS = 20000;
+const PDF_CHECK_BATCH_SIZE = 12;
 // Editores que casi siempre exigen login/aceptación aunque la URL parezca PDF.
 const PDF_CHECK_GATED_HOST_RE = /(^|\.)(sciencedirect\.com|link\.springer\.com|onlinelibrary\.wiley\.com|tandfonline\.com|sagepub\.com|jstor\.org|researchgate\.net|academia\.edu|psycnet\.apa\.org|proquest\.com|ssrn\.com)$/i;
 
@@ -1243,14 +1254,97 @@ async function probePdfUrl(url) {
   }
 }
 
+// Consulta por lotes al backend: verifica varias URLs en una sola petición.
+async function fetchPdfChecks(urls) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PDF_CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${HF_SPACE_URL}/api/check-pdfs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls }),
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`check-pdfs ${res.status}`);
+    const data = await res.json();
+    return data.results || {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function applyPdfResult(paper, isAuto, status) {
+  paper.pdfChecking = false;
+  paper.pdfChecked = true;
+  paper.isAutomatic = isAuto;
+  paper.isFree = isAuto;
+  paper.pdfCheckStatus = status;
+  updatePaperAutomaticBadges(paper);
+}
+
+// Cola: agrupa los papers pendientes y los verifica juntos. Sin esto se
+// dispararían decenas de peticiones simultáneas al cargar el inicio.
+const pdfCheckQueue = new Map(); // url -> Set<paper>
+let pdfCheckTimer = null;
+let pdfCheckRunning = false;
+
+function queuePdfCheck(paper, url) {
+  if (!pdfCheckQueue.has(url)) pdfCheckQueue.set(url, new Set());
+  pdfCheckQueue.get(url).add(paper);
+  if (!pdfCheckTimer) pdfCheckTimer = setTimeout(flushPdfChecks, 80);
+}
+
+async function flushPdfChecks() {
+  pdfCheckTimer = null;
+  if (pdfCheckRunning) {
+    pdfCheckTimer = setTimeout(flushPdfChecks, 150);
+    return;
+  }
+  const urls = [...pdfCheckQueue.keys()].slice(0, PDF_CHECK_BATCH_SIZE);
+  if (!urls.length) return;
+
+  pdfCheckRunning = true;
+  const papersByUrl = new Map();
+  urls.forEach(u => {
+    papersByUrl.set(u, [...pdfCheckQueue.get(u)]);
+    pdfCheckQueue.delete(u);
+  });
+
+  let results = null;
+  try {
+    results = await fetchPdfChecks(urls);
+  } catch (err) {
+    // Backend caído: se intenta la comprobación directa desde el navegador,
+    // que solo acepta un PDF cuando el servidor lo confirma de verdad.
+    results = null;
+  }
+
+  try {
+    for (const url of urls) {
+      let isAuto = false;
+      let status = 'unverified';
+      if (results && results[url]) {
+        isAuto = results[url].ok === true;
+        status = results[url].reason || (isAuto ? 'verified' : 'not-free');
+      } else {
+        const probe = await probePdfUrl(url);
+        isAuto = probe.result === true;
+        status = probe.reason || 'unverified';
+      }
+      checkedPdfUrls.set(url, { isAutomatic: isAuto, status, pending: false });
+      (papersByUrl.get(url) || []).forEach(paper => applyPdfResult(paper, isAuto, status));
+    }
+  } finally {
+    pdfCheckRunning = false;
+    if (pdfCheckQueue.size) pdfCheckTimer = setTimeout(flushPdfChecks, 60);
+  }
+}
+
 async function checkPaperPdf(paper) {
   if (!paper || paper.pdfChecking) return;
   const url = paper.pdfUrl || paper.oaUrl;
   if (!url) {
-    paper.pdfChecked = true;
-    paper.isAutomatic = false;
-    paper.isFree = false;
-    updatePaperAutomaticBadges(paper);
+    applyPdfResult(paper, false, 'no-url');
     return;
   }
 
@@ -1264,48 +1358,26 @@ async function checkPaperPdf(paper) {
   if (checkedPdfUrls.has(url)) {
     const cached = checkedPdfUrls.get(url);
     if (!cached.pending) {
-      paper.isAutomatic = cached.isAutomatic;
-      paper.isFree = cached.isAutomatic;
-      paper.pdfChecked = true;
-      updatePaperAutomaticBadges(paper);
+      applyPdfResult(paper, cached.isAutomatic, cached.status);
+    } else {
+      paper.pdfChecking = true;
+      queuePdfCheck(paper, url);
     }
     return;
   }
 
-  // Marcar como pendiente para no duplicar peticiones de la misma URL
-  checkedPdfUrls.set(url, { isAutomatic: false, status: 'checking', pending: true });
-  paper.pdfChecking = true;
-
-  let isAuto = false;
-  let status = 'not-free';
-
-  try {
-    const metadataFree = metadataSaysFree(paper, url);
-    if (metadataFree) {
-      const probe = await probePdfUrl(url);
-      if (probe.result === true) {
-        isAuto = true;
-        status = 'verified';
-      } else if (probe.result === false) {
-        isAuto = false;
-        status = probe.reason; // auth, landing, missing
-      } else {
-        // Sin CORS o timeout: la metadata de OpenAlex es la mejor señal.
-        isAuto = true;
-        status = `metadata-${probe.reason}`;
-      }
-    }
-  } catch (err) {
-    isAuto = false;
-    status = 'error';
+  // Filtro barato con metadata: si OpenAlex ya dice que no es acceso
+  // abierto, no se gasta una petición. Pero la metadata nunca basta para
+  // marcar "Libre" por sí sola.
+  if (!metadataSaysFree(paper, url)) {
+    checkedPdfUrls.set(url, { isAutomatic: false, status: 'metadata-gated', pending: false });
+    applyPdfResult(paper, false, 'metadata-gated');
+    return;
   }
 
-  checkedPdfUrls.set(url, { isAutomatic: isAuto, status, pending: false });
-  paper.pdfChecking = false;
-  paper.pdfChecked = true;
-  paper.isAutomatic = isAuto;
-  paper.isFree = isAuto;
-  updatePaperAutomaticBadges(paper);
+  checkedPdfUrls.set(url, { isAutomatic: false, status: 'checking', pending: true });
+  paper.pdfChecking = true;
+  queuePdfCheck(paper, url);
 }
 
 function validatePdfUrls(papers) {

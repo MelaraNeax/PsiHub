@@ -9,12 +9,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html as html_lib
+import ipaddress
 import json
 import os
 import time
 from collections import deque
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 import uvicorn
@@ -26,7 +28,8 @@ from pydantic import BaseModel
 import gradio as gr
 
 import storage
-from costs import admin_token_matches, estimate_cost, list_costs, record_cost, summarize
+from costs import (PRICE_INPUT, PRICE_OUTPUT, admin_token_matches, estimate_cost,
+                   list_costs, record_cost, summarize)
 from exporters import document_to_markdown, document_to_pdf
 from vision_extract import extract_document
 
@@ -377,6 +380,94 @@ async def process_url(url: str, model: Optional[str] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Verificacion de PDFs descargables
+# ---------------------------------------------------------------------------
+# El navegador no puede confirmar una descarga directa cuando el servidor del
+# editor no expone CORS. Aqui se descarga una muestra real del PDF desde el
+# backend, que si puede seguir redirecciones y leer el Content-Type. Solo los
+# PDFs confirmados se marcan como "Libre" (traduccion automatica).
+PDF_PROBE_TIMEOUT = 10.0
+PDF_PROBE_MAX_BYTES = 8192
+PDF_PROBE_CACHE_TTL = 900
+PDF_PROBE_MAX_URLS = 20
+_pdf_probe_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _pdf_url_is_safe(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host == 'localhost' or host.endswith(('.local', '.internal')):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast)
+
+
+async def probe_pdf(url: str) -> dict:
+    """Confirma que la URL entrega un PDF descargable sin login."""
+    verdict = {'ok': False, 'reason': 'error', 'status': None, 'content_type': ''}
+    if not _pdf_url_is_safe(url):
+        verdict['reason'] = 'invalid-url'
+        return verdict
+
+    now = time.time()
+    cached = _pdf_probe_cache.get(url)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    headers = {
+        'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36'),
+        'Accept': 'application/pdf,application/octet-stream,*/*;q=0.8',
+        'Range': f'bytes=0-{PDF_PROBE_MAX_BYTES - 1}',
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(PDF_PROBE_TIMEOUT, connect=6.0),
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            async with client.stream('GET', url) as response:
+                content_type = (response.headers.get('content-type') or '').lower()
+                verdict['status'] = response.status_code
+                verdict['content_type'] = content_type
+                if response.status_code in (401, 403):
+                    verdict['reason'] = 'auth'
+                elif response.status_code in (404, 410):
+                    verdict['reason'] = 'missing'
+                elif response.status_code >= 400:
+                    verdict['reason'] = f'http-{response.status_code}'
+                else:
+                    head = b''
+                    async for chunk in response.aiter_bytes():
+                        head += chunk
+                        if len(head) >= PDF_PROBE_MAX_BYTES:
+                            break
+                    if b'%PDF' in head[:4096] or 'application/pdf' in content_type:
+                        verdict['ok'] = True
+                        verdict['reason'] = 'verified'
+                    elif 'html' in content_type or head.lstrip()[:1] == b'<':
+                        verdict['reason'] = 'landing'
+                    else:
+                        verdict['reason'] = 'not-pdf'
+    except httpx.TimeoutException:
+        verdict['reason'] = 'timeout'
+    except Exception as exc:  # noqa: BLE001
+        log(f'[CHECK-PDF] {type(exc).__name__}: {exc}')
+        verdict['reason'] = 'error'
+    _pdf_probe_cache[url] = (now + PDF_PROBE_CACHE_TTL, verdict)
+    return verdict
+
+
+# ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
 
@@ -393,6 +484,10 @@ app.add_middleware(
 class TranslateRequest(BaseModel):
     url: str
     model: Optional[str] = None
+
+
+class CheckPdfsRequest(BaseModel):
+    urls: list[str] = []
 
 
 @app.get('/api/document/{document_id}/image/{image_filename}')
@@ -462,6 +557,23 @@ async def api_translate(request: TranslateRequest):
     except Exception as exc:  # noqa: BLE001
         log(f'[ERROR] {type(exc).__name__}: {exc}')
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post('/api/check-pdfs')
+async def api_check_pdfs(request: CheckPdfsRequest):
+    urls: list[str] = []
+    for raw in request.urls[:PDF_PROBE_MAX_URLS]:
+        url = (raw or '').strip()
+        if url and url not in urls:
+            urls.append(url)
+    semaphore = asyncio.Semaphore(8)
+
+    async def run(url: str):
+        async with semaphore:
+            return url, await probe_pdf(url)
+
+    results = dict(await asyncio.gather(*(run(u) for u in urls))) if urls else {}
+    return JSONResponse(content={'results': results})
 
 
 @app.post('/api/translate-file')
@@ -576,7 +688,7 @@ async def costs_page(token: str = Query(''), x_admin_token: str = Header('')):
 </head>
 <body><main>
   <h1>Costos de traducción</h1>
-  <p class="sub">Estimado con precios configurables de DeepSeek · solo documentos procesados (no caché).</p>
+  <p class="sub">DeepSeek V4.1 Flash · ${PRICE_INPUT:.2f} entrada / ${PRICE_OUTPUT:.2f} salida por millón de tokens · solo documentos procesados (no caché).</p>
   <div class="cards">
     <div class="card"><div class="label">Gasto total</div><div class="value">${totals['cost_usd']:.4f}</div></div>
     <div class="card"><div class="label">Documentos</div><div class="value">{totals['documents']}</div></div>

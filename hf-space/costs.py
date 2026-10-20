@@ -19,8 +19,9 @@ import httpx
 
 COST_BUCKET = os.getenv('COST_BUCKET', '').strip()
 COST_PREFIX = os.getenv('COST_PREFIX', 'costs').strip('/')
-PRICE_INPUT = float(os.getenv('DEEPSEEK_PRICE_INPUT', '0.28'))
-PRICE_OUTPUT = float(os.getenv('DEEPSEEK_PRICE_OUTPUT', '0.42'))
+# DeepSeek V4.1 Flash: USD por millon de tokens (tarifa estandar).
+PRICE_INPUT = float(os.getenv('DEEPSEEK_PRICE_INPUT', '0.15'))
+PRICE_OUTPUT = float(os.getenv('DEEPSEEK_PRICE_OUTPUT', '0.60'))
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '').strip()
 ADMIN_TOKEN_OBJECT = os.getenv('ADMIN_TOKEN_OBJECT', 'admin/token.txt').strip('/')
 # Hash SHA-256 de la frase de acceso; permite abrir /costos sin guardar el texto.
