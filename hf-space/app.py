@@ -62,6 +62,7 @@ LOG_BUFFER: deque = deque(maxlen=3000)
 # se cachean para no gastar créditos en búsquedas repetidas.
 OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
 OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
+OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 OPENALEX_CACHE_TTL = int(os.getenv('OPENALEX_CACHE_TTL', '600'))
 _openalex_cache: dict[str, tuple[float, dict]] = {}
 
@@ -573,6 +574,8 @@ async def api_translate(request: TranslateRequest):
 async def api_openalex(request: Request):
     allowed = {'filter', 'search', 'sort', 'page', 'per-page', 'select', 'api_key'}
     params = {k: v for k, v in request.query_params.items() if k in allowed}
+    if not params.get('api_key') and OPENALEX_API_KEY:
+        params['api_key'] = OPENALEX_API_KEY
     if not params.get('api_key'):
         params.setdefault('mailto', OPENALEX_MAILTO)
 
