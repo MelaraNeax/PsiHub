@@ -27,7 +27,8 @@ VISION_CONCURRENCY = max(1, int(os.getenv('VISION_CONCURRENCY', '6')))
 VISION_MAX_ATTEMPTS = max(2, int(os.getenv('VISION_MAX_ATTEMPTS', '4')))
 FIGURE_DPI = int(os.getenv('FIGURE_DPI', '200'))
 
-DEFAULT_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-v4-flash')
+# ID canonico de DeepSeek-V4.1-Flash (soporta texto e imagen).
+DEFAULT_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
 DEFAULT_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
 
 PAGE_PROMPT = """Eres un sistema experto en digitalizacion y traduccion de articulos cientificos.

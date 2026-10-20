@@ -33,7 +33,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description='Procesa un PDF con vision y exporta JSON/MD/PDF.')
     parser.add_argument('pdf')
     parser.add_argument('--out', default='salida')
-    parser.add_argument('--model', default=os.getenv('DEEPSEEK_MODEL', 'deepseek-v4-flash'))
+    parser.add_argument('--model', default=os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
     args = parser.parse_args()
 
     pdf_path = Path(args.pdf).resolve()

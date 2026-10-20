@@ -3561,12 +3561,16 @@ input[type="search"]::-webkit-search-cancel-button {
    PULIDO FINAL — accesibilidad y movimiento
    ═══════════════════════════════════════════════════ */
 
-/* Respeta la preferencia del sistema: nada de movimiento ornamental */
+/* Respeta la preferencia del sistema reduciendo el movimiento, no
+   eliminándolo. En Android, "Quitar animaciones" (Accesibilidad) activa
+   esta media query; con duraciones de 0.001ms la app quedaba totalmente
+   estática en el celular. Ahora las transiciones se acortan y los bucles
+   decorativos se detienen, siguiendo la recomendación de accesibilidad. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.001ms !important;
+    animation-duration: 0.16s !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+    transition-duration: 0.16s !important;
     scroll-behavior: auto !important;
   }
 }
@@ -5239,7 +5243,7 @@ body::after { opacity: 0.016; }
 
 @media (prefers-reduced-motion: reduce) {
   .app-splash-wordmark .app-splash-fill {
-    animation-duration: 0.01s;
+    animation-duration: 0.3s;
   }
 }
 

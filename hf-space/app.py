@@ -41,7 +41,8 @@ if not any(DEEPSEEK_API_KEYS) and _legacy_key:
     DEEPSEEK_API_KEYS = [_legacy_key]
 DEEPSEEK_API_KEYS = [k for k in DEEPSEEK_API_KEYS if k]
 
-DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-v4-flash')
+# ID canonico de DeepSeek-V4.1-Flash (el alias deepseek-v4-flash apunta aqui).
+DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
 PIPELINE_VERSION = '2026-10-19-vision-json-v1'
 
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
