@@ -86,16 +86,18 @@ actualiza la que pasás en `--update-env-vars`.
 | Variable | Default | Para qué sirve |
 |---|---|---|
 | `CHAT_MODEL` | `deepseek-flash` | Modelo de chat |
-| `CHAT_MAX_SOURCES` | `16` | Papers enviados al modelo por respuesta |
-| `CHAT_ABSTRACT_CHARS` | `1000` | Recorte de cada abstract |
-| `CHAT_MAX_OUTPUT_TOKENS` | `2000` | Largo máximo de la respuesta de investigación |
-| `CHAT_DIRECT_TOKENS` | `600` | Tope de las respuestas de charla y acompañamiento |
+| `CHAT_MAX_SOURCES` | `18` | Papers enviados al modelo por respuesta |
+| `CHAT_ABSTRACT_CHARS` | `1700` | Recorte de cada abstract (conserva inicio y resultados finales) |
+| `CHAT_MAX_OUTPUT_TOKENS` | `4200` | Largo máximo de la respuesta de investigación |
+| `CHAT_DIRECT_TOKENS` | `800` | Tope de las respuestas de charla y acompañamiento |
 | `CHAT_HISTORY_MESSAGES` | `6` | Turnos de historial que se reenvían |
 | `CHAT_SEARCH_CACHE_TTL` | `1800` | Segundos de caché de búsquedas OpenAlex |
-| `CHAT_SEARCH_RESULTS` | `25` | Papers que se piden por cada consulta |
+| `CHAT_SEARCH_RESULTS` | `30` | Papers que se piden por cada consulta |
 | `CHAT_MIN_RELEVANCE` | `0.14` | Umbral de relevancia para descartar papers |
 | `CHAT_SEARCH_CONCURRENCY` | `4` | Consultas simultáneas contra OpenAlex |
-| `CHAT_PLANNER_TOKENS` | `320` | Tope de tokens del router/planificador |
+| `CHAT_PLANNER_TOKENS` | `800` | Tope de tokens del router/planificador |
+| `CHAT_SNOWBALL_SEEDS` | `3` | Trabajos semilla cuyas referencias se expanden (`0` desactiva) |
+| `CHAT_SNOWBALL_IDS` | `80` | Máximo de referencias recuperadas por búsqueda |
 
 ### Cómo decide y cómo busca
 
@@ -112,24 +114,36 @@ La detección de riesgo es deliberadamente conservadora: solo se activa cuando
 el mensaje es personal y actual. Una pregunta académica sobre suicidio
 ("¿qué factores de riesgo predicen la ideación suicida?") se investiga normal.
 
-**Paso 1 — descomposición.** El mismo router devuelve 4-5 consultas en inglés,
-palabras clave, 2-4 ejes que la respuesta debe cubrir (`outline`) y el alcance
-(`psy`, o `broad` si la pregunta cruza disciplinas ajenas a psicología/medicina).
+**Paso 1 — descomposición.** El mismo router devuelve entre 1 y 3 conceptos con
+su vocabulario propio en inglés (y los conceptos vecinos con los que no deben
+confundirse), 1 consulta de puente entre conceptos, 1 consulta de revisiones o
+meta-análisis, palabras clave, 3-5 ejes que la respuesta debe cubrir (`outline`)
+y el alcance (`psy`, o `broad` si la pregunta cruza disciplinas ajenas a
+psicología/medicina).
 
 **Paso 2 — recuperación.** Cada consulta se lanza dos veces en paralelo contra
-OpenAlex (título+resumen y buscador general); se deduplican por id/DOI/título
-(~120-165 papers únicos por pregunta).
+OpenAlex (título+resumen y buscador general) y la primera consulta de cada
+concepto suma una pasada ordenada por citas. Los conceptos teóricos se buscan
+sin filtro de campo para que entre la fenomenología. Después se expande por
+referencias: se toman hasta 3 trabajos semilla (uno por concepto, más revisiones)
+y se recuperan sus referencias, que es donde suelen estar los clásicos
+fundacionales (~200-250 papers únicos por pregunta).
 
 **Paso 3 — ranking.** Cada paper se puntúa por coincidencia de términos en
-título, resumen y tópicos, más citas, vigencia, tipo (revisión) y disponibilidad
-de resumen. Se descartan los que no superan `CHAT_MIN_RELEVANCE` y se envían al
-modelo los `CHAT_MAX_SOURCES` mejores, con tipo de estudio y citas en el digest.
+título, resumen y tópicos, trato directo de los constructos, citas, citas por
+año, vigencia, diseño y penalización de revistas ajenas al dominio. Se reservan
+cupos por concepto, por papers que unen conceptos y por revisiones, para que un
+constructo abundante no desplace a otro minoritario. Se envían al modelo los
+`CHAT_MAX_SOURCES` mejores, con autor, año, diseño, muestra y citas.
 
 **Paso 4 — redacción.** El texto se transmite en streaming y las fuentes viajan
-al final. La respuesta sigue una plantilla estable (respuesta breve, 2-4
-secciones con títulos propios, tablas Markdown para comparar marcos/fases,
-distinción explícita entre evidencia experimental, correlacional y analogía, y
-un cierre de límites de la evidencia).
+al final. La respuesta abre con un párrafo sustantivo (sin la etiqueta "respuesta
+breve"), sigue con 3-6 secciones con títulos propios y 2-4 párrafos cada una,
+usa tablas Markdown para comparar marcos/fases, distingue explícitamente entre
+evidencia experimental, correlacional y analogía, y cierra con límites de la
+evidencia. Extensión objetivo: 900-1400 palabras. El servidor añade además un
+bloque de cobertura y distinciones conceptuales para que el modelo declare las
+brechas en vez de rellenarlas.
 
 ---
 
@@ -232,6 +246,6 @@ npm run sync
 |---|---|
 | `503 No hay API key de DeepSeek configurada` | Falta `DEEPSEEK_API_CHAT` o `DEEPSEEK_API_KEY_1` en Cloud Run |
 | La respuesta llega de golpe, sin streaming | Un proxy intermedio está buffereando; Cloud Run ya envía `X-Accel-Buffering: no`. Evitá proxys propios |
-| `No pude buscar en OpenAlex` | Cuota de OpenAlex agotada; configurá `OPENALEX_API_KEY` |
+| `OpenAlex alcanzó su límite de consultas por hoy` | Cuota diaria compartida por IP agotada; configurá `OPENALEX_API_KEY` (gratuita) para usar tu propio presupuesto |
 | El chat responde pero no cita papers | Pregunta demasiado específica; probá términos más amplios o `access: all` |
 | `chat_keys: 0` en `/health` | La variable no llegó al servicio; revisá el deploy |

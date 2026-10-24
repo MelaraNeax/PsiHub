@@ -34,10 +34,10 @@ OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
 OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
 OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
-MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '16')))
-ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1000')))
-MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '2000')))
-DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '600')))
+MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '18')))
+ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1700')))
+MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '4200')))
+DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '6')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '900')))
 # Mensajes de historial que ve el router para saber a que se refiere la charla.
@@ -45,24 +45,33 @@ ROUTER_HISTORY_MESSAGES = 4
 ROUTER_HISTORY_CHARS = 400
 SEARCH_CACHE_TTL = int(os.getenv('CHAT_SEARCH_CACHE_TTL', '1800'))
 # Papers que se piden por cada consulta generada (el pool final se recorta).
-SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '25')))
+SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '30')))
 ONECLICK_CANDIDATES = max(1, int(os.getenv('CHAT_ONECLICK_CANDIDATES', '20')))
 # Relevancia minima (0-1) para considerar que un paper tiene relacion real.
 MIN_RELEVANCE = float(os.getenv('CHAT_MIN_RELEVANCE', '0.14'))
 # Consultas simultaneas contra OpenAlex (limite comodo del polite pool).
 SEARCH_CONCURRENCY = max(1, int(os.getenv('CHAT_SEARCH_CONCURRENCY', '4')))
-PLANNER_MAX_OUTPUT = max(120, int(os.getenv('CHAT_PLANNER_TOKENS', '320')))
+PLANNER_MAX_OUTPUT = max(120, int(os.getenv('CHAT_PLANNER_TOKENS', '800')))
+# Consultas maximas por pregunta (conceptos + puente + revision).
+MAX_QUERIES = 8
+# Relevancia (0-1) desde la cual un paper "trata directamente" un constructo.
+DIRECT_REL = 0.7
+# Expansion por referencias: cuantos IDs de trabajos semilla se recuperan y
+# cuantos semillas aportan sus referencias (los papers fundacionales suelen no
+# aparecer en la busqueda por palabras clave).
+SNOWBALL_SEEDS = max(0, int(os.getenv('CHAT_SNOWBALL_SEEDS', '3')))
+SNOWBALL_IDS = max(0, int(os.getenv('CHAT_SNOWBALL_IDS', '80')))
 
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
 ABSTRACT_DIR = CACHE_DIR / 'abstracts'
 ABSTRACT_DIR.mkdir(parents=True, exist_ok=True)
 
-PSY_FIELDS = 'primary_topic.field.id:32|27'
+PSY_FIELDS = 'primary_topic.field.id:32|27|28'
 WORK_TYPES = 'type:article|review'
 SELECT_FIELDS = ','.join([
     'id', 'doi', 'title', 'publication_year', 'cited_by_count', 'authorships',
     'primary_location', 'best_oa_location', 'locations', 'open_access',
-    'abstract_inverted_index', 'primary_topic', 'topics', 'type',
+    'abstract_inverted_index', 'primary_topic', 'topics', 'type', 'referenced_works',
 ])
 
 # Dominios que casi siempre piden login/aceptacion aunque la URL parezca un PDF.
@@ -80,32 +89,67 @@ ortografía correcta: tildes, eñes y signos de apertura (¿, ¡).
 ## Cómo pensar antes de escribir
 1. Descomponé la pregunta: identificá qué concepto, qué relación, qué población y qué
    tipo de respuesta se pide. Respondé cada parte, no solo la primera.
-2. Si la pregunta cruza disciplinas o marcos (p. ej. neurociencia y psicoanálisis, o
-   clínica y filosofía de la mente), exponé primero cada marco por separado con sus
-   fuentes y recién después contrastalos y concluí. No mezcles vocabularios sin avisar.
-3. Distinguí siempre tres niveles de respaldo: evidencia experimental directa (ensayos,
-   mediciones, meta-análisis), evidencia observacional o correlacional, y analogía,
-   modelo teórico o hipótesis mecanística. Marcá con palabras explícitas cuál es cuál.
-   Una analogía útil no es prueba de nada: decilo.
-4. Si la pregunta admite fases, etapas, subtipos, clasificaciones o comparaciones entre
+2. Fidelidad conceptual (la regla más importante). Si un término es un constructo técnico de
+   una tradición concreta (psicopatología fenomenológica, psicoanálisis, neurociencia
+   cognitiva, filosofía de la mente), definilo SOLO como lo definen las fuentes que lo tratan
+   directamente, nombrando la tradición y los autores que figuren en ellas. Nunca lo
+   reemplaces por un concepto vecino que "se le parece" (hiperreflexividad ≠ rumiación;
+   mindfulness ≠ relajación; disociación ≠ desrealización). Si recibís "DISTINCIONES
+   CONCEPTUALES", explicá en qué difieren. Si ninguna fuente trata el constructo
+   directamente, decilo al principio y no lo reinterpretes ni lo rellenes.
+3. Puentes entre conceptos o niveles (neural ↔ fenomenológico, teoría ↔ clínica). Indicá
+   si alguna fuente examina el vínculo directamente. Si no, presentalo como "puente teórico
+   no puesto a prueba", atribuyéndolo a quien lo propone cuando conste. Prohibido afirmar
+   identidades o causas ("es precisamente", "se debe a") sin evidencia directa.
+4. Si la pregunta cruza disciplinas o marcos, exponé primero cada marco por separado con
+   sus fuentes y recién después contrastalos y concluí. No mezcles vocabularios sin avisar.
+5. Distinguí siempre tres niveles de respaldo: evidencia experimental directa (ensayos,
+   mediciones, meta-análisis), evidencia observacional o correlacional, y analogía, modelo
+   teórico o hipótesis mecanística. Calibrá el verbo: "muestra/demuestra" solo para
+   experimentos y meta-análisis; "se asocia" para lo correlacional; "sugiere/propone" para
+   teoría, analogía o muestras pequeñas. Una analogía útil no es prueba de nada: decilo.
+6. Si la pregunta admite fases, etapas, subtipos, clasificaciones o comparaciones entre
    opciones, resumilas en una tabla Markdown con una cita por fila.
-5. Cuando las fuentes discrepen, mostrá la discrepancia y qué la explica (muestra,
-   método, población); no la escondas ni la promedies.
+7. Cuando las fuentes discrepen, mostrá la discrepancia y qué la explica (muestra,
+   método, población, tipo de práctica); no la escondas ni la promedies. Incluí las
+   excepciones relevantes que aparezcan en las fuentes.
+8. Usá "COBERTURA DE LA BÚSQUEDA" si la recibís: reconocé en el texto los conceptos con
+   pocas o cero fuentes directas en lugar de cubrirlos con fuentes tangenciales.
 
-## Formato (para que se pueda estudiar de un vistazo)
-- Empezá con "## Respuesta breve": 2 a 4 líneas que contesten la pregunta de frente.
-- Seguí con 2 a 4 secciones "## " (y "### " si hace falta). Títulos cortos y descriptivos,
-  no genéricos: "## Qué muestra la evidencia experimental", "## El marco psicoanalítico".
+## Formato (para que se pueda estudiar y citar)
+- NO empieces con un encabezado ni con la etiqueta "Respuesta breve". Abrí con un párrafo
+  de 3 a 5 frases, sin título, que conteste la pregunta de frente, nombre los conceptos
+  centrales y anuncie la salvedad principal.
+- Seguí con 3 a 6 secciones "## " (y "### " cuando una sección tenga dos o más
+  subpreguntas). Títulos cortos y descriptivos, no genéricos: "## Qué muestra la evidencia
+  experimental", "## El marco fenomenológico".
+- Desarrollá cada sección en 2 a 4 párrafos: primero el hallazgo, después quién lo muestra
+  y con qué diseño, y por último cómo se interpreta o qué lo matiza. No entregues una
+  idea por viñeta: explicá el razonamiento que une las fuentes.
+- Si hay dos o más conceptos, incluí "## Cómo se relacionan y en qué se distinguen".
 - Usá tablas cuando compares marcos, fases o estudios; viñetas cortas para listas;
   negrita para el término técnico que el lector debería retener.
-- Cerrá con "## Límites de la evidencia" en 1 a 3 líneas cuando corresponda.
-- Extensión objetivo: 350 a 600 palabras. Densidad antes que relleno.
+- Cerrá con "## Límites de la evidencia" en 3 a 5 líneas: qué parte de la pregunta no
+  tiene respaldo directo, qué sesgos o tamaños de muestra limitan las conclusiones, y que
+  se trabaja con resúmenes (no con el texto completo).
+- Extensión objetivo: 900 a 1400 palabras. Desarrollá cada eje con lo que dicen las
+  fuentes; no rellenes con generalidades, pero tampoco telegrafíes: cada afirmación
+  central merece su explicación, su respaldo y, si corresponde, su matiz.
 
 ## Reglas de contenido
 - Usá ÚNICAMENTE las FUENTES numeradas que recibís. Son muchas: apoyate en las que de
-  verdad tratan el tema y descartá sin citar las que solo lo rozan.
+  verdad tratan el tema y descartá sin citar las que solo lo rozan o provienen de revistas
+  ajenas al tema.
 - Cada afirmación relevante lleva su cita: [1], [2], [1][3]. En tablas, citá dentro de la celda.
-- Si varias fuentes coinciden, citá las más sólidas (revisiones, meta-análisis, mayor muestra).
+- En los hallazgos centrales nombrá el estudio en la prosa con el autor y el año que figuran
+  en la fuente, y la cita: "Hasenkamp et al. (2012) [3] identificaron…". Mencioná el diseño
+  y la muestra solo si la fuente los declara.
+- Priorizá meta-análisis y revisiones sistemáticas, luego estudios de mayor muestra; los
+  trabajos muy citados y antiguos sirven para afirmaciones fundacionales.
+- Cubrí cada eje de "EJES QUE LA RESPUESTA DEBE CUBRIR" en alguna sección; no los repitas
+  como lista, integralos. Si un eje no tiene fuentes, decilo en vez de omitirlo.
+- No repitas la misma idea en dos secciones: cada sección debe agregar evidencia, mecanismo
+  o matiz nuevo. La extensión se gana con contenido, no con redundancia.
 - Sintetizá: no copies el abstract ni parafrasees frase por frase. Extraé hallazgos y conclusión.
 - No inventes datos, autores, años, tamaños de muestra ni resultados que no estén en las fuentes.
 - No incluyas URLs, DOIs ni enlaces: el lector abre cada fuente desde la interfaz.
@@ -118,7 +162,7 @@ DIRECT_PROMPT = """Eres el asistente de PsiHub, una app de psicología basada en
 La persona te escribió algo conversacional (un saludo, una pregunta sobre la app, una
 aclaración o un comentario) que NO requiere buscar papers.
 
-Respondé en español, cálido y directo, en 1 a 4 frases (máximo 90 palabras).
+Respondé en español, cálido y directo, en 2 a 5 frases (máximo 120 palabras).
 - No inventes citas, papers ni datos.
 - Si la persona pide evidencia o una pregunta de investigación, invitála a formularla
   así: «¿Qué dice la evidencia sobre …?», y explicá en una línea que ahí sí buscás papers.
@@ -168,7 +212,7 @@ la busqueda en OpenAlex.
 Respondes SIEMPRE con un objeto JSON valido, sin texto adicional ni bloques de codigo.
 
 FORMATO:
-{"mode": "research", "queries": ["..."], "keywords": ["..."], "outline": ["..."], "scope": "psy"}
+{"mode": "research", "concepts": [{"name": "...", "kind": "theory", "terms": ["..."], "not": ["..."], "queries": ["..."]}], "bridge": ["..."], "review": ["..."], "keywords": ["..."], "outline": ["..."], "scope": "psy"}
 {"mode": "chat"}
 {"mode": "support"}
 
@@ -178,6 +222,9 @@ MODO "support": cuando la persona habla en primera persona de su propio dolor ac
 desesperanza, aislamiento o ideacion suicida. Es acompanamiento emocional, no investigacion.
 MODO "research": TODO lo demas. Ante la duda entre "chat" y "research", elegi "research".
 
+EJEMPLO (pregunta: "¿La hiperreflexividad se explica por la red neuronal por defecto?"):
+{"mode": "research", "concepts": [{"name": "hyperreflexivity", "kind": "theory", "terms": ["hyperreflexivity", "self-disorder", "ipseity disturbance"], "not": ["rumination", "self-focused attention"], "queries": ["hyperreflexivity schizophrenia"]}, {"name": "default mode network", "kind": "empirical", "terms": ["default mode network", "DMN", "resting-state functional connectivity"], "not": [], "queries": ["default mode network self-referential processing"]}], "bridge": ["default mode network hyperreflexivity schizophrenia"], "review": ["default mode network schizophrenia systematic review"], "keywords": ["hyperreflexivity", "default mode network", "self-disorder", "self-referential processing", "schizophrenia"], "outline": ["Definir hiperreflexividad", "Que mide la DMN", "Vinculo teorico y evidencia", "Brechas y limites"], "scope": "psy"}
+
 Deteccion de riesgo (modo "support"): solo cuando el mensaje es personal y actual, por ejemplo
 "ultimamente siento que no vale la pena seguir", "estoy muy solo y no le veo salida",
 "pienso en lastimarme". NO marques "support" cuando se pregunta por el tema en general:
@@ -185,18 +232,34 @@ Deteccion de riesgo (modo "support"): solo cuando el mensaje es personal y actua
 Si hay riesgo personal y a la vez una pregunta academica, elegi "support".
 
 Cuando el modo sea "research":
-- "queries": entre 4 y 5 consultas EN INGLES de 2 a 7 palabras cada una.
-- Usa vocabulario academico: expande siglas y conceptos tecnicos (TCC -> cognitive behavioral
-  therapy; red neuronal por defecto -> default mode network; DMN -> default mode network).
-- Cada consulta ataca un angulo distinto: concepto central, relacion entre conceptos,
-  poblacion o metodo, y limite o critica del concepto.
-- Si la pregunta cruza disciplinas, dedica una consulta a cada tradicion (p. ej. una a
-  neurociencia y otra a psicodinamica) y otra a revisiones o meta-analisis.
-- No uses comillas, comodines, parentesis, operadores booleanos ni signos de puntuacion.
+- "concepts": entre 1 y 3, uno por cada constructo distinto de la pregunta.
+  - "kind": "theory" si es un constructo de una tradicion teorica, fenomenologica o
+    clinico-conceptual (hiperreflexividad, trastorno de ipseidad, transferencia, self-disorder,
+    mentalizacion, apego); "empirical" si se mide o se interviene (default mode network,
+    mindfulness, terapia cognitivo conductual, rumination).
+  - "terms": 2 a 4 terminos EN INGLES con el vocabulario propio de la literatura de ESE
+    constructo: el nombre canonico, sinonimos y el nombre del modelo (hiperreflexividad ->
+    hyperreflexivity, self-disorder, ipseity disturbance). Expandi siglas. Evita terminos
+    genericos que aparecen en cualquier paper (study, effect, brain, treatment). NUNCA
+    sustituyas el constructo por un concepto vecino que se le parezca (hiperreflexividad
+    no es rumination).
+  - "not": 0 a 2 conceptos vecinos que suelen confundirse con este y NO son equivalentes
+    (lista vacia si no hay).
+  - "queries": 1 a 2 consultas EN INGLES de 2 a 7 palabras con el vocabulario del propio
+    constructo. La primera es el nombre canonico solo o con su marco (hyperreflexivity
+    schizophrenia). La segunda agrega el metodo, la poblacion o el modelo si ayuda a
+    desambiguar, no la pregunta completa.
+- "bridge": si hay 2 o mas conceptos, 1 consulta que los une (default mode network
+  self-referential processing schizophrenia); si hay uno solo, [].
+- "review": 1 consulta para meta-analisis o revisiones sistematicas del tema central
+  (incluye "systematic review" o "meta-analysis").
+- Total de consultas (concepts + bridge + review) entre 3 y 8. No uses comillas, comodines,
+  parentesis, operadores booleanos ni signos de puntuacion.
 - "keywords": entre 4 y 8 conceptos sueltos EN INGLES que deberian aparecer en el titulo o
-  el resumen de un articulo realmente relevante.
-- "outline": entre 2 y 4 ejes o subpreguntas EN ESPANOL que la respuesta debe cubrir para
-  ser completa, en frases de 3 a 8 palabras.
+  el resumen de un articulo realmente relevante. Incluye el nombre canonico de cada concepto.
+- "outline": entre 3 y 5 ejes o subpreguntas EN ESPANOL que la respuesta debe cubrir para
+  ser completa, en frases de 3 a 8 palabras. Si hay 2 o mas conceptos, incluye un eje sobre
+  la relacion o la brecha entre ellos.
 - "scope": "psy" si el tema es psicologico, clinico o medico; "broad" si de verdad cruza
   campos ajenos a la psicologia y la medicina (filosofia, linguistica, educacion, economia,
   ciencias de la computacion). Ante la duda, "psy".
@@ -245,13 +308,13 @@ def _hits(terms: list[str], stems: set[str]) -> int:
 
 def _clean_query(text: str) -> str:
     # OpenAlex trata "*" y "?" como wildcards y exige busqueda exacta si aparecen;
-    # por eso se quitan junto con el resto de la puntuacion.
-    clean = re.sub(r'[,|"\'()?*¿¡!;:\[\]{}]', ' ', str(text or ''))
+    # por eso se quitan junto con el resto de la puntuacion que rompe el filtro.
+    clean = re.sub(r'[,|"\'()?*¿¡!;:\[\]{}&+=–—]', ' ', text or '')
     return re.sub(r'\s+', ' ', clean).strip()
 
 
 def _parse_json_object(raw: str) -> Optional[dict]:
-    text = str(raw or '').strip()
+    text = (raw or '').strip()
     if text.startswith('```'):
         text = re.sub(r'^```[a-zA-Z]*\s*', '', text)
         text = re.sub(r'```\s*$', '', text).strip()
@@ -279,6 +342,15 @@ def _fallback_plan(question: str, query: str) -> dict:
         queries.append(' '.join(words[:3]))
     return {
         'mode': 'research',
+        'concepts': [{
+            'name': key_query or base,
+            'kind': 'empirical',
+            'terms': keywords[:4] or [key_query or base],
+            'not': [],
+            'queries': [q for q in queries[:2] if q],
+        }],
+        'bridge': [],
+        'review': [],
         'queries': [q for q in queries if q],
         'keywords': keywords,
         'outline': [],
@@ -286,34 +358,117 @@ def _fallback_plan(question: str, query: str) -> dict:
     }
 
 
+def _str_list(value: object, limit: int, size: int) -> list[str]:
+    out: list[str] = []
+    if not isinstance(value, list):
+        return out
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        clean = _clean_query(item)[:size]
+        if clean and clean.lower() not in (o.lower() for o in out):
+            out.append(clean)
+    return out[:limit]
+
+
+def _plan_concepts(plan: Optional[dict]) -> list[dict]:
+    """Constructos de la pregunta con su vocabulario propio y sus vecinos confundibles."""
+    concepts: list[dict] = []
+    raw = (plan or {}).get('concepts')
+    if not isinstance(raw, list):
+        return concepts
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        terms = _str_list(item.get('terms'), 4, 60)
+        name = _clean_query(str(item.get('name') or ''))[:80] or (terms[0] if terms else '')
+        if not name:
+            continue
+        if not terms:
+            terms = [name]
+        kind = 'theory' if str(item.get('kind') or '').lower().startswith('theor') else 'empirical'
+        concepts.append({
+            'name': name,
+            'kind': kind,
+            'terms': terms,
+            'not': _str_list(item.get('not'), 2, 60),
+            'queries': _str_list(item.get('queries'), 2, 160),
+        })
+    return concepts[:3]
+
+
+def _plan_query_specs(plan: Optional[dict], question: str, query: str) -> list[dict]:
+    """Consultas con su rol: concepto, puente entre conceptos o revision."""
+    specs: list[dict] = []
+    seen: set[str] = set()
+
+    def add(text: str, role: str, kind: str, first: bool = False) -> None:
+        value = _clean_query(text)[:160]
+        key = value.lower()
+        if not value or key in seen:
+            return
+        seen.add(key)
+        specs.append({'q': value, 'role': role, 'kind': kind, 'first': first})
+
+    for concept in _plan_concepts(plan):
+        for i, text in enumerate(concept['queries']):
+            add(text, 'concept', concept['kind'], first=(i == 0))
+    for text in _str_list((plan or {}).get('bridge'), 1, 160):
+        add(text, 'bridge', 'empirical')
+    for text in _str_list((plan or {}).get('review'), 1, 160):
+        add(text, 'review', 'empirical')
+    legacy = (plan or {}).get('queries')
+    if isinstance(legacy, list):
+        for i, text in enumerate(legacy):
+            if isinstance(text, str):
+                add(text, 'concept', 'empirical', first=(i == 0 and not specs))
+    if not specs:
+        for i, text in enumerate(_fallback_plan(question, query)['queries']):
+            add(text, 'concept', 'empirical', first=(i == 0))
+    return specs[:MAX_QUERIES]
+
+
+def _plan_queries(plan: Optional[dict], question: str, query: str) -> list[str]:
+    return [spec['q'] for spec in _plan_query_specs(plan, question, query)]
+
+
 def _plan_terms(plan: Optional[dict], question: str, query: str) -> list[str]:
     """Terminos con los que se puntua la relevancia de cada paper."""
     terms: list[str] = []
+    for concept in _plan_concepts(plan):
+        for term in concept['terms']:
+            terms.extend(_word_set(term))
     for keyword in (plan or {}).get('keywords') or []:
         terms.extend(_word_set(keyword))
     terms.extend(_word_set(query))
     terms.extend(_word_set(question))
     ordered = [t for t in dict.fromkeys(terms) if t not in _STOPWORDS and len(t) >= 4]
-    return ordered[:24]
+    return ordered[:28]
 
 
-def _plan_queries(plan: Optional[dict], question: str, query: str) -> list[str]:
-    candidates: list[str] = []
-    for item in (plan or {}).get('queries') or []:
-        if isinstance(item, str):
-            candidates.append(item)
-    if not candidates:
-        candidates = _fallback_plan(question, query)['queries']
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for item in candidates:
-        value = _clean_query(item)[:160]
-        key = value.lower()
-        if not value or key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(value)
-    return cleaned[:5]
+def _plan_anchor_terms(plan: Optional[dict]) -> list[str]:
+    """Palabras clave que NO pertenecen a ningun concepto: el contexto de la pregunta.
+
+    Solo aplica a preguntas con dos o mas conceptos. Si los conceptos son
+    "hiperreflexividad" y "default mode network" y las palabras clave incluyen
+    "schizophrenia", un paper sobre DMN en Alzheimer coincide con un concepto
+    pero no con el contexto; las anclas permiten penalizarlo sin excluir los
+    clasicos teoricos, que si nombran el contexto.
+    """
+    concepts = _plan_concepts(plan)
+    if len(concepts) < 2:
+        return []
+    concept_words: set[str] = set()
+    for concept in concepts:
+        for term in concept['terms']:
+            concept_words |= _word_set(term)
+    anchors: list[str] = []
+    for keyword in (plan or {}).get('keywords') or []:
+        for word in _word_set(keyword):
+            if word not in concept_words and word not in _STOPWORDS and len(word) >= 4:
+                if word not in anchors:
+                    anchors.append(word)
+    return anchors[:12]
 
 
 def _plan_mode(plan: Optional[dict]) -> str:
@@ -486,25 +641,52 @@ def _params(
     return params
 
 
-_search_cache: dict[str, tuple[float, list[dict]]] = {}
+# Valor: (instante de vencimiento, fuentes, metadatos de cobertura).
+_SearchCacheEntry = tuple[float, list[dict], dict]
+_search_cache: dict[str, _SearchCacheEntry] = {}
 
 
-async def _openalex_get(params: dict) -> dict:
-    headers = {'User-Agent': f'PsiHub/10 (+https://melaraneax.github.io/PsiHub/; {OPENALEX_MAILTO})'}
-    async with httpx.AsyncClient(
+def _openalex_client() -> httpx.AsyncClient:
+    """Cliente compartido por toda la busqueda: reusa TLS y respeta al polite pool."""
+    return httpx.AsyncClient(
         timeout=httpx.Timeout(25.0, connect=8.0),
         follow_redirects=True,
-        headers=headers,
-    ) as client:
+        headers={'User-Agent': f'PsiHub/10 (+https://melaraneax.github.io/PsiHub/; {OPENALEX_MAILTO})'},
+    )
+
+
+async def _openalex_get(
+    params: dict,
+    client: Optional[httpx.AsyncClient] = None,
+) -> dict:
+    owned = client is None
+    if client is None:
+        client = _openalex_client()
+    try:
         response = await client.get(OPENALEX_WORKS_URL, params=params)
-        if response.status_code in (429, 503):
-            await asyncio.sleep(1.0)
+        # Reintentos con espera creciente ante saturacion o errores transitorios.
+        for attempt in range(4):
+            if response.status_code not in (429, 500, 502, 503, 504):
+                break
+            retry_after = (response.headers.get('retry-after') or '').strip()
+            cooldown = float(retry_after) if retry_after.replace('.', '', 1).isdigit() else 0.0
+            # Una espera larga significa presupuesto diario agotado (OpenAlex
+            # comparte un cupo por IP): reintentar solo suma latencia.
+            if cooldown > 60:
+                break
+            delay = 1.5 * (2 ** attempt)
+            if cooldown:
+                delay = max(delay, min(cooldown, 8.0))
+            await asyncio.sleep(min(delay, 8.0))
             response = await client.get(OPENALEX_WORKS_URL, params=params)
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise ValueError('Respuesta invalida de OpenAlex.')
-    return payload
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError('Respuesta invalida de OpenAlex.')
+        return payload
+    finally:
+        if owned:
+            await client.aclose()
 
 
 async def _probe_oneclick(sources: list[dict], probe_fn) -> list[dict]:
@@ -543,9 +725,142 @@ def _work_key(work: dict) -> str:
     return _normalize(work.get('title'))[:120]
 
 
-def _score_source(source: dict, terms: list[str]) -> tuple[float, float]:
+_WEAK_VENUE_RE = re.compile(
+    r'(performing arts|visual arts|fine arts|shodh|tourism|marketing|business|management|'
+    r'engineering|computer science|civil|mechanical|agricultur)',
+    re.I,
+)
+
+
+def _study_design(source: dict) -> tuple[list[str], str]:
+    """Etiquetas de diseno y tamano muestral extraidos del resumen (heuristica).
+
+    Sirven para que el modelo calibre el nivel de evidencia sin inventar nada:
+    solo se reporta lo que el propio resumen declara.
+    """
+    text = _normalize(f"{source.get('title') or ''} {source.get('abstract') or ''}")
+    tags: list[str] = []
+    if re.search(r'meta-?analy', text):
+        tags.append('meta-análisis')
+    elif re.search(r'systematic review|scoping review|umbrella review|systematic literature', text):
+        tags.append('revisión sistemática')
+    elif source.get('type') == 'review':
+        tags.append('revisión narrativa')
+    if re.search(r'randomi[sz]ed (?:controlled )?trial|randomi[sz]ed controlled|\brct\b', text):
+        tags.append('ECA')
+    elif re.search(r'clinical trial|pilot study|open-label|quasi-experiment', text):
+        tags.append('ensayo/piloto')
+    if re.search(r'fmri|functional magnetic|resting.state|neuroimag|\bpet\b', text):
+        tags.append('neuroimagen')
+    elif re.search(r'\beeg\b|\bmeg\b|electroenceph|magnetoenceph', text):
+        tags.append('EEG/MEG')
+    if re.search(r'case (study|report|series)', text):
+        tags.append('caso')
+    if re.search(r'qualitative|thematic analysis|interpretative phenomenological|semi-structured', text):
+        tags.append('cualitativo')
+    if re.search(r'cross-sectional', text):
+        tags.append('transversal')
+    elif re.search(r'longitudinal|cohort|follow-up', text):
+        tags.append('longitudinal')
+    empirical = re.search(r'participants|patients|sample of|\bn\s*=|subjects|respondents', text)
+    review_like = any(t.startswith(('meta', 'revisi')) for t in tags)
+    if not empirical and not review_like and re.search(
+        r'theoretical|conceptual|phenomenolog|we argue|'
+        r'this (paper|article|essay|chapter) (argues|proposes|discusses|examines|explores)|philosoph',
+        text,
+    ):
+        tags.append('teórico/conceptual')
+
+    sample = ''
+    m = re.search(r'\bn\s*=\s*(\d{1,3}(?:,\d{3})+|\d{1,6})\b', text)
+    if m:
+        value = m.group(1)
+        # "n=1" casi siempre es un fragmento de "n=1.024" o un indice, no una muestra.
+        if value != '1':
+            sample = f'n={value}'
+    else:
+        m = re.search(
+            r'\b(\d{1,3}(?:,\d{3})+|\d{2,6})\s+(?:[a-z-]+\s+){0,2}?'
+            r'(participants|patients|subjects|adults|children|adolescents|students|veterans|'
+            r'meditators|monks|individuals|volunteers|controls|studies|trials)\b',
+            text,
+        )
+        if m:
+            unit = 'estudios' if m.group(2) in ('studies', 'trials') else 'participantes'
+            sample = f'{m.group(1)} {unit}'
+    return tags[:3], sample
+
+
+def _phrase_in(tokens: list[str], phrase_tokens: list[str]) -> bool:
+    """El termino aparece como secuencia consecutiva (tolera variantes: prefijo de 6-9)."""
+    n = len(phrase_tokens)
+    if not n or len(tokens) < n:
+        return False
+    keys = [p[: 9 if n == 1 else 6] for p in phrase_tokens]
+    for i in range(len(tokens) - n + 1):
+        if all(tokens[i + j].startswith(keys[j]) for j in range(n)):
+            return True
+    return False
+
+
+def _concept_relevance(source: dict, concept: dict) -> float:
+    """0-1: cuan directamente trata el paper ESE constructo (no uno vecino).
+
+    1.0 si algun termino canonico del constructo aparece (como frase) en el
+    titulo, 0.7 si aparece en el resumen o los topicos; +0.2 si coinciden
+    varios terminos. Las palabras sueltas de un termino compuesto no cuentan:
+    "self-disorder" no debe activarse con "self" y "disorder" por separado.
+    """
+    title = re.findall(r'[a-z0-9]+', _normalize(source.get('title')))
+    body = re.findall(
+        r'[a-z0-9]+',
+        _normalize(f"{source.get('abstract') or ''} {' '.join(source.get('topics') or [])}"),
+    )
+    best = 0.0
+    matched = 0
+    for term in concept.get('terms') or []:
+        phrase = re.findall(r'[a-z0-9]+', _normalize(term))
+        if not phrase:
+            continue
+        if _phrase_in(title, phrase):
+            hit = 1.0
+        elif _phrase_in(body, phrase):
+            hit = 0.7
+        else:
+            continue
+        matched += 1
+        best = max(best, hit)
+    if matched >= 2:
+        best = min(1.0, best + 0.2)
+    return best
+
+
+def _anchor_hits(source: dict, anchors: Optional[list[str]]) -> int:
+    """Cuantas palabras del contexto de la pregunta aparece en el paper."""
+    if not anchors:
+        return 0
+    text = ' '.join([
+        str(source.get('title') or ''),
+        str(source.get('abstract') or ''),
+        ' '.join(source.get('topics') or []),
+    ])
+    return _hits(anchors, _stems(_word_set(text)))
+
+
+def _score_source(
+    source: dict,
+    terms: list[str],
+    scope: str = 'psy',
+    crel: Optional[list[float]] = None,
+    consensus: int = 0,
+    anchors: Optional[list[str]] = None,
+) -> tuple[float, float]:
     """Devuelve (puntaje, relevancia). La relevancia es la fraccion de terminos
-    de la pregunta presentes en titulo, resumen y topicos del paper."""
+    de la pregunta presentes en titulo, resumen y topicos del paper.
+
+    `consensus` cuenta cuantas consultas distintas devolvieron el mismo paper:
+    aparecer por varios angulos es una senal barata de centralidad tematica.
+    """
     title_stems = _stems(_word_set(source.get('title')))
     abstract_stems = _stems(_word_set(source.get('abstract')))
     topic_stems = _stems(_word_set(' '.join(source.get('topics') or [])))
@@ -562,30 +877,247 @@ def _score_source(source: dict, terms: list[str]) -> tuple[float, float]:
         )
 
     score = relevance * 10.0
-    # Sin resumen no se puede sintetizar: penaliza fuerte frente a uno con texto.
-    score += 0.6 if source.get('abstract') else -1.2
-    # Senales de calidad: citas (en escala log) y vigencia.
-    score += min(math.log1p(max(0, int(source.get('citations') or 0))), 4.0) * 0.30
+    # Trato directo del constructo nombrado en la pregunta.
+    if crel:
+        score += 2.0 * max(crel)
+        # Papers que tratan a la vez dos constructos de la pregunta: valen mas,
+        # porque son los unicos que permiten hablar del vinculo sin analogias.
+        extra = sum(1 for c in crel if c >= DIRECT_REL) - 1
+        if extra > 0:
+            score += 0.9 * min(extra, 2)
+    # Coincidencia desde varias consultas: paper central para el tema.
+    if consensus > 1:
+        score += min(consensus - 1, 3) * 0.15
+    # Anclas tematicas: un paper puede tratar un concepto y no la pregunta. Si no
+    # toca ninguna palabra del contexto (p. ej. DMN en Alzheimer cuando se
+    # pregunta por esquizofrenia), pierde posiciones frente a los que si.
+    if anchors:
+        anchor_hits = _anchor_hits(source, anchors)
+        if anchor_hits == 0:
+            score -= 2.5
+        else:
+            score += min(anchor_hits, 3) * 0.25
+    abstract = source.get('abstract') or ''
+    # Sin resumen no se puede sintetizar; uno muy corto casi no aporta.
+    if not abstract:
+        score -= 1.2
+    elif len(abstract) < 300:
+        score += 0.1
+    else:
+        score += 0.6
+    # Senales de calidad: citas (log), citas por ano (clasicos), vigencia, diseno.
+    citations = max(0, int(source.get('citations') or 0))
+    now_year = time.gmtime().tm_year
     year = int(source.get('year') or 0)
-    if year >= time.gmtime().tm_year - 6:
+    score += min(math.log1p(citations), 4.0) * 0.30
+    if year:
+        per_year = citations / max(1, now_year - year + 1)
+        score += min(math.log1p(per_year), 3.0) * 0.25
+    if year >= now_year - 6:
         score += 0.30
-    if source.get('type') == 'review':
-        score += 0.20
+    design = source.get('design') or []
+    if 'meta-análisis' in design:
+        score += 0.6
+    elif 'revisión sistemática' in design:
+        score += 0.45
+    elif source.get('type') == 'review':
+        score += 0.2
+    if 'ECA' in design:
+        score += 0.3
+    # Revistas ajenas al dominio (artes, ingenieria, negocios) en temas psi.
+    if scope == 'psy' and _WEAK_VENUE_RE.search(str(source.get('journal') or '')):
+        score -= 1.5
     return score, relevance
+
+
+def _select_sources(items: list[dict], n_concepts: int, limit: int) -> list[dict]:
+    """Seleccion con cupos: puente > un cupo por concepto > revisiones > resto.
+
+    `items` llega ordenado por puntaje. Garantiza que cada constructo de la
+    pregunta tenga sus mejores papers directos aunque otro domine el ranking.
+    """
+    pool = [
+        it for it in items
+        if it['rel'] >= MIN_RELEVANCE or any(c >= DIRECT_REL for c in it['crel'])
+    ]
+    # Si hay contexto suficiente, fuera los papers que tratan un concepto pero
+    # no la pregunta (DMN en Alzheimer cuando se pregunta por esquizofrenia).
+    anchored = [it for it in pool if not it.get('offtopic')]
+    if len(anchored) >= 4:
+        pool = anchored
+    if len(pool) < 4:
+        pool = list(items)
+    chosen: list[dict] = []
+    taken: set[int] = set()
+
+    def take(candidates: list[dict], k: int) -> None:
+        for it in candidates:
+            if k <= 0 or len(chosen) >= limit:
+                break
+            if id(it) in taken:
+                continue
+            chosen.append(it)
+            taken.add(id(it))
+            k -= 1
+
+    if n_concepts >= 2:
+        take([it for it in pool if sum(c >= DIRECT_REL for c in it['crel']) >= 2], 3)
+    quota = max(3, limit // (n_concepts + 1)) if n_concepts else 0
+    for i in range(n_concepts):
+        have = sum(1 for it in chosen if it['crel'][i] >= DIRECT_REL)
+        take([it for it in pool if it['crel'][i] >= DIRECT_REL], quota - have)
+    strong = ('meta-análisis', 'revisión sistemática', 'revisión narrativa')
+    take([it for it in pool if any(t in strong for t in (it['source'].get('design') or []))], 3)
+    take(pool, limit)
+    chosen.sort(key=lambda it: it['score'], reverse=True)
+    return chosen
+
+
+def _coverage(sources: list[dict], concepts: list[dict]) -> tuple[list[dict], Optional[int]]:
+    """Cuantas fuentes finales tratan directamente cada concepto y su vinculo."""
+    if not concepts:
+        return [], None
+    rels = [[_concept_relevance(s, c) for c in concepts] for s in sources]
+    coverage = [
+        {
+            'name': c['name'],
+            'kind': c['kind'],
+            'direct': sum(1 for r in rels if r[i] >= DIRECT_REL),
+        }
+        for i, c in enumerate(concepts)
+    ]
+    bridge = None
+    if len(concepts) >= 2:
+        bridge = sum(1 for r in rels if sum(1 for v in r if v >= DIRECT_REL) >= 2)
+    return coverage, bridge
 
 
 async def _collect(
     params: dict,
     semaphore: asyncio.Semaphore,
     log_fn: Callable[[str], None],
-) -> list[dict]:
+    client: Optional[httpx.AsyncClient] = None,
+) -> Optional[list[dict]]:
+    """None si la consulta fallo (para distinguir caida de OpenAlex de cero resultados)."""
     async with semaphore:
         try:
-            payload = await _openalex_get(params)
+            payload = await _openalex_get(params, client)
         except Exception as exc:  # noqa: BLE001 - una consulta caida no invalida el resto
             log_fn(f'[chat-search] consulta fallo: {type(exc).__name__}: {_redact(exc)}')
-            return []
+            return None
     return [w for w in (payload.get('results') or []) if isinstance(w, dict)]
+
+
+def _title_source(work: dict) -> dict:
+    """Vista minima de un work para puntuar relevancia por titulo sin reconstruir abstract."""
+    topic = (work.get('primary_topic') or {}).get('display_name')
+    return {
+        'title': work.get('title'),
+        'abstract': '',
+        'topics': [topic] if topic else [],
+    }
+
+
+def _seed_reference_ids(
+    works: list[dict],
+    limit: int,
+    concepts: Optional[list[dict]] = None,
+) -> list[str]:
+    """IDs que citan los trabajos semilla (revisiones y clasicos primero).
+
+    Los papers fundacionales de un constructo suelen no contener las palabras
+    clave de la pregunta, pero si aparecen en las referencias de las revisiones
+    del tema. Se elige al menos un semilla por concepto, para que la expansion
+    no quede dominada por el constructo mas abundante en la literatura.
+    """
+    if limit <= 0 or SNOWBALL_SEEDS <= 0:
+        return []
+
+    seeds: list[dict] = []
+    seen_seeds: set[str] = set()
+
+    def add(work: dict) -> None:
+        key = _work_key(work)
+        refs = work.get('referenced_works')
+        if not key or key in seen_seeds or not isinstance(refs, list) or not refs:
+            return
+        seen_seeds.add(key)
+        seeds.append(work)
+
+    for concept in concepts or []:
+        candidates = [
+            work for work in works
+            if _concept_relevance(_title_source(work), concept) >= DIRECT_REL
+        ]
+        if candidates:
+            add(max(candidates, key=lambda w: int(w.get('cited_by_count') or 0)))
+            if len(seeds) >= SNOWBALL_SEEDS:
+                break
+
+    ordered = sorted(
+        works,
+        key=lambda w: (str(w.get('type') or '') == 'review',
+                       int(w.get('cited_by_count') or 0)),
+        reverse=True,
+    )
+    for work in ordered:
+        if len(seeds) >= SNOWBALL_SEEDS:
+            break
+        add(work)
+    if not seeds:
+        return []
+
+    # Cupo parejo por semilla: una revision muy citada no debe acaparar la expansion.
+    per_seed = max(8, limit // len(seeds))
+    ids: list[str] = []
+    seen: set[str] = set()
+    for work in seeds:
+        taken = 0
+        for ref in work.get('referenced_works') or []:
+            rid = str(ref or '').rstrip('/').rsplit('/', 1)[-1]
+            if not rid.startswith('W') or rid in seen:
+                continue
+            seen.add(rid)
+            ids.append(rid)
+            taken += 1
+            if taken >= per_seed or len(ids) >= limit:
+                break
+        if len(ids) >= limit:
+            break
+    return ids
+
+
+async def _fetch_works_by_id(
+    ids: list[str],
+    semaphore: asyncio.Semaphore,
+    log_fn: Callable[[str], None],
+    client: Optional[httpx.AsyncClient] = None,
+) -> list[dict]:
+    """Recupera trabajos concretos por ID, sin filtro de campo ni de tipo.
+
+    Sin restriccion de disciplina: los clasicos de fenomenologia o filosofia de
+    la mente quedan fuera de los campos de psicologia y medicina.
+    """
+    works: list[dict] = []
+    for start in range(0, len(ids), 50):
+        batch = ids[start:start + 50]
+        params: dict = {
+            'filter': 'openalex_id:' + '|'.join(batch),
+            'per-page': str(len(batch)),
+            'select': SELECT_FIELDS,
+        }
+        if OPENALEX_API_KEY:
+            params['api_key'] = OPENALEX_API_KEY
+        else:
+            params['mailto'] = OPENALEX_MAILTO
+        async with semaphore:
+            try:
+                payload = await _openalex_get(params, client)
+            except Exception as exc:  # noqa: BLE001 - expansion opcional
+                log_fn(f'[chat-search] expansion fallo: {type(exc).__name__}: {_redact(exc)}')
+                continue
+        works.extend(w for w in (payload.get('results') or []) if isinstance(w, dict))
+    return works
 
 
 async def search_sources(
@@ -597,69 +1129,133 @@ async def search_sources(
     question: str = '',
     scope: str = 'psy',
 ) -> tuple[list[dict], dict]:
-    """Busca papers con varias consultas y devuelve solo los realmente afines."""
+    """Busca papers por concepto, puente y revision; devuelve los mas afines.
+
+    Cada consulta nace de un rol (concepto, puente entre conceptos, revision) y
+    la seleccion final garantiza cupos por concepto para que un constructo
+    abundante en la literatura no desplace a otro minoritario pero central.
+    """
     query = (query or '').strip()
     question = (question or '').strip()
     if not query and not question:
         return [], {'count': 0, 'query': '', 'candidates': 0}
 
-    queries = _plan_queries(plan, question, query)
-    if not queries:
+    specs = _plan_query_specs(plan, question, query)
+    if not specs:
         return [], {'count': 0, 'query': query, 'candidates': 0}
+    queries = [s['q'] for s in specs]
+    concepts = _plan_concepts(plan)
 
-    cache_key = f'{access}|{scope}|' + '|'.join(sorted(q.lower() for q in queries))
+    cache_key = (
+        f'{access}|{scope}|' + '|'.join(sorted(q.lower() for q in queries))
+        + '#' + '|'.join(c['name'].lower() for c in concepts)
+    )
     cached = _search_cache.get(cache_key)
     if cached and cached[0] > time.time():
+        extra = cached[2]
         return cached[1], {
             'count': len(cached[1]),
             'query': query,
-            'candidates': len(cached[1]),
+            'candidates': extra.get('candidates', len(cached[1])),
             'queries': queries,
             'cached': True,
+            'coverage': extra.get('coverage', []),
+            'bridge_direct': extra.get('bridge_direct'),
         }
 
-    # Cada consulta se lanza dos veces: restringida a titulo+resumen y en el
-    # buscador general. Se solapan en paralelo para ganar cobertura sin sumar
-    # latencia, y luego se deduplica por id/doi/titulo.
+    # Una sola conexion HTTP para todas las consultas: menos handshakes, menos
+    # picos de tasa y mejor latencia cuando OpenAlex esta saturado.
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY)
-    tasks = []
-    for item in queries[:5]:
-        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='precise', scope=scope), semaphore, log_fn))
-        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='broad', scope=scope), semaphore, log_fn))
-    groups = await asyncio.gather(*tasks)
-
     pool: dict[str, dict] = {}
-    for works in groups:
-        for work in works:
-            key = _work_key(work)
-            if key and key not in pool:
-                pool[key] = work
+    consensus: dict[str, int] = {}
+    async with _openalex_client() as client:
+        # Por consulta: titulo+resumen y buscador general. La primera de cada
+        # concepto suma una pasada por citas, y los conceptos teoricos se buscan
+        # sin filtro de campo para que entre la fenomenologia.
+        tasks = []
+        for spec in specs:
+            sc = 'broad' if spec['kind'] == 'theory' else scope
+            tasks.append(_collect(
+                _params(spec['q'], access, SEARCH_RESULTS, mode='precise', scope=sc),
+                semaphore, log_fn, client,
+            ))
+            # El buscador general solo donde aporta cobertura: consulta canonica,
+            # puente y revision. Asi se evitan pasadas redundantes.
+            if spec['first'] or spec['role'] in ('bridge', 'review'):
+                tasks.append(_collect(
+                    _params(spec['q'], access, SEARCH_RESULTS, mode='broad', scope=sc),
+                    semaphore, log_fn, client,
+                ))
+            if spec['first']:
+                tasks.append(_collect(
+                    _params(spec['q'], access, 12, sort='cited_by_count:desc', mode='precise', scope=sc),
+                    semaphore, log_fn, client,
+                ))
+        groups = await asyncio.gather(*tasks)
+        failed = sum(1 for g in groups if g is None)
+        if failed and all(g is None for g in groups):
+            raise RuntimeError('OpenAlex no respondió a ninguna consulta.')
+        if failed:
+            log_fn(f'[chat-search] {failed}/{len(groups)} consultas fallaron')
 
-    sources = [_work_to_source(work) for work in pool.values()]
-    candidates = len(sources)
-    log_fn(f'[chat-search] {len(queries)} consultas | {candidates} papers unicos')
+        for works in groups:
+            for work in works or []:
+                key = _work_key(work)
+                if not key:
+                    continue
+                consensus[key] = consensus.get(key, 0) + 1
+                if key not in pool:
+                    pool[key] = work
+
+        # Segunda pasada: referencias de los mejores candidatos. Trae los papers
+        # fundacionales (Sass & Parnas, Brewer, Raichle…) que las palabras clave
+        # de la pregunta no alcanzan y que suelen citar las revisiones del tema.
+        seed_ids = _seed_reference_ids(list(pool.values()), SNOWBALL_IDS, concepts)
+        if seed_ids:
+            ref_works = await _fetch_works_by_id(seed_ids, semaphore, log_fn, client)
+            added = 0
+            for work in ref_works:
+                key = _work_key(work)
+                if key and key not in pool:
+                    pool[key] = work
+                    added += 1
+            log_fn(f'[chat-search] expansion por referencias: {len(seed_ids)} ids | {added} nuevos')
+
+    source_items = [(work, _work_to_source(work)) for work in pool.values()]
+    candidates = len(source_items)
+    log_fn(f'[chat-search] {len(queries)} consultas | {len(tasks)} pasadas | {candidates} papers unicos')
 
     terms = _plan_terms(plan, question, query)
-    scored: list[tuple[float, float, dict]] = []
-    for source in sources:
-        score, relevance = _score_source(source, terms)
-        scored.append((score, relevance, source))
-    scored.sort(key=lambda item: item[0], reverse=True)
+    anchors = _plan_anchor_terms(plan)
+    items: list[dict] = []
+    for work, source in source_items:
+        source['design'], source['sample'] = _study_design(source)
+        crel = [_concept_relevance(source, c) for c in concepts]
+        score, relevance = _score_source(
+            source, terms, scope, crel, consensus.get(_work_key(work), 0), anchors,
+        )
+        items.append({
+            'score': score, 'rel': relevance, 'crel': crel, 'source': source,
+            'offtopic': bool(anchors) and _anchor_hits(source, anchors) == 0,
+        })
+    items.sort(key=lambda it: it['score'], reverse=True)
 
-    related = [source for _, relevance, source in scored if relevance >= MIN_RELEVANCE]
-    if len(related) < 4:
-        # Muy pocos papers superan el umbral: nos quedamos con los mejores por
-        # puntaje para no dejar la respuesta sin evidencia.
-        related = [source for _, _, source in scored][:MAX_SOURCES]
-    else:
-        related = related[:MAX_SOURCES]
+    related = [it['source'] for it in _select_sources(items, len(concepts), MAX_SOURCES)]
 
     if access == 'oneclick' and probe_fn is not None:
         related = await _probe_oneclick(related, probe_fn)
 
+    coverage, bridge_direct = _coverage(related, concepts)
+    if coverage:
+        log_fn('[chat-coverage] ' + ' | '.join(f'{c["name"]}={c["direct"]}' for c in coverage)
+               + (f' | puente={bridge_direct}' if bridge_direct is not None else ''))
+
     # Los abstracts se cachean en paralelo para no sumar latencia a la busqueda.
     await asyncio.gather(*(_remember_abstract(source) for source in related))
-    _search_cache[cache_key] = (time.time() + SEARCH_CACHE_TTL, related)
+    _search_cache[cache_key] = (
+        time.time() + SEARCH_CACHE_TTL, related,
+        {'candidates': candidates, 'coverage': coverage, 'bridge_direct': bridge_direct},
+    )
     if len(_search_cache) > 300:
         _search_cache.clear()
     return related, {
@@ -668,6 +1264,8 @@ async def search_sources(
         'candidates': candidates,
         'queries': queries,
         'cached': False,
+        'coverage': coverage,
+        'bridge_direct': bridge_direct,
     }
 
 
@@ -715,6 +1313,46 @@ async def _remember_abstract(source: dict) -> None:
 # Prompt
 # ---------------------------------------------------------------------------
 
+def _author_label(source: dict) -> str:
+    """Apellido del primer autor + et al.: permite citar en prosa (Autor, año)."""
+    authors = [a for a in (source.get('authors') or []) if isinstance(a, str) and a.strip()]
+    if not authors:
+        return ''
+
+    def last(name: str) -> str:
+        name = name.strip().rstrip('.')
+        # OpenAlex usa "Apellido, Nombre" en una minoria de casos.
+        if ',' in name:
+            return name.split(',', 1)[0].strip()
+        parts = [p for p in name.split() if p]
+        if not parts:
+            return ''
+        # "Parnas J" (apellido primero + inicial) no debe citarse como "J".
+        tail = parts[-1].rstrip('.')
+        if len(parts) >= 2 and tail.isupper() and len(tail) <= 3:
+            return parts[0]
+        return parts[-1]
+
+    if len(authors) == 1:
+        return last(authors[0])
+    if len(authors) == 2:
+        return f'{last(authors[0])} & {last(authors[1])}'
+    return f'{last(authors[0])} et al.'
+
+
+def _clip_abstract(abstract: str) -> str:
+    """Recorta conservando inicio (objetivo) y final (resultados/conclusion)."""
+    if len(abstract) <= ABSTRACT_CHARS:
+        return abstract
+    head_len = int(ABSTRACT_CHARS * 0.4)
+    tail_len = ABSTRACT_CHARS - head_len
+    head = abstract[:head_len].rstrip()
+    tail = abstract[-tail_len:]
+    if ' ' in tail:
+        tail = tail[tail.find(' ') + 1:]
+    return f'{head} [...] {tail.lstrip()}'
+
+
 def _digest(sources: list[dict]) -> str:
     blocks: list[str] = []
     for index, source in enumerate(sources, start=1):
@@ -724,16 +1362,64 @@ def _digest(sources: list[dict]) -> str:
         abstract = (source.get('abstract') or '').strip()
         if not abstract:
             abstract = 'OpenAlex no incluye el resumen de este artículo.'
-        elif len(abstract) > ABSTRACT_CHARS:
-            abstract = abstract[:ABSTRACT_CHARS].rstrip() + ' [...]'
+        else:
+            abstract = _clip_abstract(abstract)
         access = 'acceso abierto' if source.get('isOa') else 'de pago'
-        kind = 'revisión' if source.get('type') == 'review' else 'estudio'
         citations = int(source.get('citations') or 0)
+        author = _author_label(source)
+        who = f'{author} ({year})' if author else f'({year})'
+        design = list(source.get('design') or [])
+        if not design:
+            design = ['revisión'] if source.get('type') == 'review' else ['estudio']
+        tags = ', '.join(design)
+        if source.get('sample'):
+            tags += f' · {source["sample"]}'
         blocks.append(
-            f'[{index}] {title} ({year}) · {journal} · {access} · {kind} · {citations} citas\n'
+            f'[{index}] {who} · {title} · {journal} · {access} · {tags} · {citations} citas\n'
             f'Resumen: {abstract}'
         )
     return '\n\n'.join(blocks)
+
+
+def _concept_notes(plan: Optional[dict], meta: Optional[dict]) -> str:
+    """Distinciones y cobertura calculadas por el servidor (sin costo de LLM).
+
+    Le dicen al modelo que constructos NO debe asimilar entre si y cuales
+    quedaron sin fuentes directas, para que declare la brecha en vez de
+    rellenarla con un concepto vecino.
+    """
+    concepts = _plan_concepts(plan)
+    if not concepts:
+        return ''
+    out: list[str] = []
+    distinctions = [
+        f'- «{c["name"]}» NO equivale a: {", ".join(c["not"])}. '
+        'Solo igualalos si una fuente lo hace explícitamente.'
+        for c in concepts if c['not']
+    ]
+    if distinctions:
+        out.append('DISTINCIONES CONCEPTUALES A RESPETAR:\n' + '\n'.join(distinctions))
+
+    coverage = (meta or {}).get('coverage') or []
+    if coverage:
+        rows: list[str] = []
+        for item in coverage:
+            direct = int(item.get('direct') or 0)
+            kind = 'constructo teórico' if item.get('kind') == 'theory' else 'constructo empírico'
+            row = f'- {item["name"]} ({kind}): {direct} fuente(s) que lo tratan directamente'
+            if direct == 0:
+                row += ' → SIN FUENTES DIRECTAS: no lo definas ni lo expliques con otras fuentes; declará la brecha'
+            elif direct <= 2:
+                row += ' → respaldo escaso: matizá'
+            rows.append(row)
+        bridge = (meta or {}).get('bridge_direct')
+        if bridge is not None:
+            row = f'- Vínculo entre los conceptos: {bridge} fuente(s) que los examinan a la vez'
+            if bridge == 0:
+                row += ' → el puente es teórico/no probado: decilo explícitamente'
+            rows.append(row)
+        out.append('COBERTURA DE LA BÚSQUEDA (calculada sobre las fuentes recuperadas):\n' + '\n'.join(rows))
+    return '\n\n'.join(out) + '\n\n' if out else ''
 
 
 def _history_messages(history: Optional[list[dict]]) -> list[dict]:
@@ -754,6 +1440,8 @@ def _build_messages(
     sources: list[dict],
     history: Optional[list[dict]],
     outline: Optional[list[str]] = None,
+    plan: Optional[dict] = None,
+    meta: Optional[dict] = None,
 ) -> list[dict]:
     messages: list[dict] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
     messages.extend(_history_messages(history))
@@ -768,8 +1456,10 @@ def _build_messages(
         'content': (
             f'PREGUNTA DEL USUARIO:\n{question.strip()}\n\n'
             f'{axes}'
+            f'{_concept_notes(plan, meta)}'
             f'FUENTES DISPONIBLES:\n{_digest(sources)}\n\n'
-            'Redactá la respuesta en español con la estructura y las citas [n] indicadas.'
+            'Redactá en español una respuesta desarrollada (900-1400 palabras) con el'
+            ' párrafo de apertura, las secciones y las citas [n] indicadas.'
         ),
     })
     return messages
@@ -883,22 +1573,24 @@ async def _route(
         log_fn(f'[chat-route] modo {mode}: sin busqueda')
         return {'mode': mode, 'queries': [], 'keywords': [], 'outline': [], 'scope': 'psy'}
 
-    queries = [q.strip() for q in (parsed.get('queries') or []) if isinstance(q, str) and q.strip()]
+    legacy = [q.strip() for q in (parsed.get('queries') or []) if isinstance(q, str) and q.strip()]
     keywords = [k.strip() for k in (parsed.get('keywords') or []) if isinstance(k, str) and k.strip()]
-    if not queries:
-        queries = fallback['queries']
     if not keywords:
         keywords = fallback['keywords']
     plan = {
         'mode': 'research',
-        'queries': queries[:5],
+        'concepts': _plan_concepts(parsed),
+        'bridge': _str_list(parsed.get('bridge'), 1, 160),
+        'review': _str_list(parsed.get('review'), 1, 160),
+        'queries': legacy[:5],
         'keywords': keywords[:10],
         'outline': _plan_outline(parsed),
         'scope': _plan_scope(parsed),
     }
+    specs = _plan_query_specs(plan, question, query)
     log_fn(
-        f'[chat-plan] {len(plan["queries"])} consultas ({plan["scope"]}): '
-        + ' | '.join(plan['queries'])
+        f'[chat-plan] {len(specs)} consultas ({plan["scope"]}, '
+        f'{len(plan["concepts"])} conceptos): ' + ' | '.join(s['q'] for s in specs)
     )
     return plan
 
@@ -1114,7 +1806,15 @@ async def stream_chat(
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] busqueda fallo: {type(exc).__name__}: {_redact(exc)}')
-        yield _sse({'type': 'error', 'message': 'No se pudo buscar en OpenAlex. Intenta de nuevo.'})
+        text = str(exc)
+        if '429' in text or 'no respondió' in text:
+            message = (
+                'OpenAlex alcanzó su límite de consultas por hoy. Probá más tarde '
+                'o configurá OPENALEX_API_KEY en el servidor.'
+            )
+        else:
+            message = 'No se pudo buscar en OpenAlex. Intenta de nuevo.'
+        yield _sse({'type': 'error', 'message': message})
         return
 
     if not sources:
@@ -1137,7 +1837,9 @@ async def stream_chat(
         'text': f'{candidates} papers revisados, {len(sources)} relevantes. Redactando…',
     })
 
-    messages = _build_messages(question, sources, history, _plan_outline(plan))
+    messages = _build_messages(
+        question, sources, history, _plan_outline(plan), plan=plan, meta=search_meta,
+    )
     usage: dict = {}
 
     try:
