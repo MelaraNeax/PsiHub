@@ -345,7 +345,7 @@ const S = {
   readerDocId: null,
 
   // Chat
-  chats: loadData('psyhub_chats_v1', []),
+  chats: loadMigratedChats(),
   activeChatId: null,
   chatStreaming: false,
   chatController: null,
@@ -4415,9 +4415,29 @@ document.addEventListener('DOMContentLoaded', () => {
 // CHAT — INVESTIGACIÓN CON IA (OpenAlex + DeepSeek)
 // ═══════════════════════════════════════════════════
 
-const CHAT_STORE_KEY = 'psyhub_chats_v1';
+const CHAT_STORE_KEY = 'psyhub_chats_v2';
 const CHAT_ACCESS_KEY = 'psyhub_chat_access';
 const CHAT_MAX_STORED = 40;
+
+// Migración de la caché local de conversaciones: descarta las respuestas del
+// formato viejo ("## Respuesta breve") para que no se sigan mostrando al
+// reabrir un chat. Conserva el resto del historial.
+function loadMigratedChats() {
+  const current = loadData('psyhub_chats_v2', null);
+  if (Array.isArray(current)) return current;
+  const legacy = loadData('psyhub_chats_v1', []);
+  if (!Array.isArray(legacy)) return [];
+  const isOldAnswer = m => m && m.role === 'assistant'
+    && /^\s*(?:#+\s*)?respuesta breve\b/i.test(String(m.content || ''));
+  const cleaned = legacy
+    .map(chat => ({ ...chat, messages: (chat.messages || []).filter(m => !isOldAnswer(m)) }))
+    .filter(chat => (chat.messages || []).length > 0);
+  try {
+    localStorage.setItem('psyhub_chats_v2', JSON.stringify(cleaned));
+    localStorage.removeItem('psyhub_chats_v1');
+  } catch { }
+  return cleaned;
+}
 let chatRenderRaf = null;
 let chatAutoScroll = true;
 
