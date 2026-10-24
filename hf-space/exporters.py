@@ -583,3 +583,158 @@ def document_to_pdf(doc: dict, output_path: str | Path, images_dir: str | Path) 
 
     template.build(story)
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Respuestas del chat (Markdown) -> PDF
+# ---------------------------------------------------------------------------
+
+_MD_TABLE_SEP = re.compile(r'^\s*\|?\s*:?-{3,}')
+_MD_HEADING = re.compile(r'^(#{1,4})\s+(.*)$')
+_MD_UL = re.compile(r'^\s*[-*•]\s+')
+_MD_OL = re.compile(r'^\s*\d{1,2}[.)]\s+')
+_MD_BLOCK_START = re.compile(r'^(#{1,4}\s|[-*•]\s|\d{1,2}[.)]\s|>|\||-{3,}\s*$|\*{3,}\s*$)')
+
+
+def _md_blocks(text: str) -> list[tuple[str, object]]:
+    """Parser mínimo del Markdown que produce el chat (encabezados, listas,
+    tablas GFM, citas, reglas y párrafos)."""
+    lines = (text or '').replace('\r\n', '\n').split('\n')
+    blocks: list[tuple[str, object]] = []
+    i, n = 0, len(lines)
+
+    while i < n:
+        raw = lines[i]
+        line = raw.strip()
+        if not line:
+            i += 1
+            continue
+        if re.fullmatch(r'-{3,}|\*{3,}|_{3,}', line):
+            blocks.append(('hr', None))
+            i += 1
+            continue
+
+        match = _MD_HEADING.match(line)
+        if match:
+            blocks.append(('h', (len(match.group(1)), match.group(2).strip())))
+            i += 1
+            continue
+
+        if line.startswith('|') and i + 1 < n and _MD_TABLE_SEP.match(lines[i + 1].strip()):
+            headers = [c.strip() for c in line.strip('|').split('|')]
+            i += 2
+            rows = []
+            while i < n and lines[i].strip().startswith('|'):
+                cells = [c.strip() for c in lines[i].strip().strip('|').split('|')]
+                rows.append(cells)
+                i += 1
+            blocks.append(('table', {'headers': headers, 'rows': rows}))
+            continue
+
+        if _MD_UL.match(raw):
+            items = []
+            while i < n and _MD_UL.match(lines[i]):
+                items.append(_MD_UL.sub('', lines[i]).strip())
+                i += 1
+            blocks.append(('ul', items))
+            continue
+
+        if _MD_OL.match(raw):
+            items = []
+            while i < n and _MD_OL.match(lines[i]):
+                items.append(_MD_OL.sub('', lines[i]).strip())
+                i += 1
+            blocks.append(('ol', items))
+            continue
+
+        if line.startswith('>'):
+            quoted = []
+            while i < n and lines[i].strip().startswith('>'):
+                quoted.append(lines[i].strip().lstrip('>').strip())
+                i += 1
+            blocks.append(('quote', ' '.join(q for q in quoted if q)))
+            continue
+
+        para = [line]
+        i += 1
+        while i < n and lines[i].strip() and not _MD_BLOCK_START.match(lines[i].strip()):
+            para.append(lines[i].strip())
+            i += 1
+        blocks.append(('p', ' '.join(para)))
+
+    return blocks
+
+
+def markdown_to_pdf(markdown_text: str, output_path, title: str = 'Respuesta de PsiHub',
+                    sources: Optional[list[dict]] = None) -> object:
+    """Convierte una respuesta del chat (Markdown) en un PDF legible.
+
+    Reutiliza las fuentes, estilos y plantilla del exportador de documentos,
+    así el PDF del chat se ve igual que el del lector.
+    """
+    register_fonts()
+    styles = _styles()
+    doc = _PsiDocTemplate(output_path, title=title or 'Respuesta de PsiHub')
+    width = doc.width
+    story: list = []
+
+    if title:
+        story.append(Paragraph(_inline_markup(title), styles['title']))
+        story.append(HRFlowable(width='100%', thickness=0.6,
+                                color=colors.HexColor('#d6d3cb'),
+                                spaceBefore=2, spaceAfter=10))
+
+    for kind, payload in _md_blocks(markdown_text):
+        if kind == 'h':
+            level, text = payload
+            style = styles['h1'] if level <= 2 else styles['h2'] if level == 3 else styles['h3']
+            story.append(Paragraph(_inline_markup(text), style))
+        elif kind == 'p':
+            story.append(Paragraph(_inline_markup(payload), styles['body']))
+        elif kind == 'ul':
+            for item in payload:
+                story.append(Paragraph(_inline_markup(item), styles['bullet'], bulletText='•'))
+            story.append(Spacer(1, 4))
+        elif kind == 'ol':
+            for num, item in enumerate(payload, 1):
+                story.append(Paragraph(_inline_markup(item), styles['bullet'], bulletText=f'{num}.'))
+            story.append(Spacer(1, 4))
+        elif kind == 'quote':
+            story.append(Paragraph(_inline_markup(payload), styles['quote']))
+            story.append(Spacer(1, 6))
+        elif kind == 'hr':
+            story.append(HRFlowable(width='100%', thickness=0.4,
+                                    color=colors.HexColor('#d8d5cd'),
+                                    spaceBefore=4, spaceAfter=8))
+        elif kind == 'table':
+            table = _table_flowable(payload, styles, width)
+            if table is not None:
+                story.append(table)
+                story.append(Spacer(1, 8))
+
+    if sources:
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width='100%', thickness=0.4,
+                                color=colors.HexColor('#d8d5cd'),
+                                spaceBefore=4, spaceAfter=8))
+        story.append(Paragraph('Fuentes consultadas', styles['h1']))
+        for index, source in enumerate(sources, 1):
+            name = source.get('title') or 'Sin título'
+            year = source.get('year') or 's. f.'
+            journal = source.get('journal') or ''
+            doi = source.get('doi') or ''
+            line = f'[{index}] {name} ({year}).'
+            if journal:
+                line += f' {journal}.'
+            if doi:
+                line += f' https://doi.org/{doi}'
+            story.append(Paragraph(_inline_markup(line), styles['ref']))
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        _inline_markup('Generado con PsiHub a partir de abstracts de OpenAlex. '
+                       'Puede contener errores; verificá las fuentes originales.'),
+        styles['meta']))
+
+    doc.build(story)
+    return output_path

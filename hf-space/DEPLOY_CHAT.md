@@ -7,6 +7,8 @@ OpenAlex, y las mismas API keys de DeepSeek que ya tenés configuradas.
 - Servicio: `mi-servidor-api` (región `southamerica-east1`)
 - URL: `https://mi-servidor-api-42204102300.southamerica-east1.run.app`
 - Endpoint nuevo: `POST /api/chat` (streaming SSE)
+- Endpoint de exportación: `POST /api/chat/pdf` (respuesta en Markdown → PDF,
+  sin llamadas al modelo, costo cero)
 
 ---
 
@@ -158,6 +160,23 @@ curl -N -X POST https://mi-servidor-api-42204102300.southamerica-east1.run.app/a
 Vas a ver eventos `data: {"type":"status"...}`, luego varios
 `data: {"type":"delta"...}`, después `data: {"type":"sources"...}` y al final
 `data: {"type":"done"...}`.
+
+### Exportar una respuesta a PDF
+
+El botón de descarga del chat llama a este endpoint (no usa el modelo, así que
+no suma costo):
+
+```bash
+curl -X POST https://mi-servidor-api-42204102300.southamerica-east1.run.app/api/chat/pdf \
+  -H "Content-Type: application/json" \
+  -d '{"question":"¿TCC o fármacos?","answer":"## Respuesta breve\n\nTexto…","sources":[{"title":"Cuijpers et al.","year":2020,"journal":"JAMA Psychiatry","doi":"10.1001/..."}]}' \
+  -o respuesta.pdf
+```
+
+El PDF se arma con `markdown_to_pdf()` de `exporters.py`: mismos tipos y
+plantilla que el lector, respetando encabezados, listas, citas, tablas GFM y
+la lista de fuentes al final. El frontend también ofrece Markdown, copiar y
+compartir (Web Share API con fallback al portapapeles).
 
 ---
 

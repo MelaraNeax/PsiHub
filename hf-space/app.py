@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html as html_lib
+import io
 import ipaddress
 import json
 import os
@@ -23,14 +24,14 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 import gradio as gr
 
 import storage
 from costs import (PRICE_INPUT, PRICE_OUTPUT, admin_token_matches, estimate_cost,
                    list_costs, record_cost, summarize)
-from exporters import document_to_markdown, document_to_pdf
+from exporters import document_to_markdown, document_to_pdf, markdown_to_pdf
 from vision_extract import extract_document
 import chat as chat_service
 
@@ -518,6 +519,12 @@ class ChatRequest(BaseModel):
     client_id: str = ''
 
 
+class ChatPdfRequest(BaseModel):
+    question: str = ''
+    answer: str
+    sources: list[dict] = []
+
+
 @app.get('/api/document/{document_id}/image/{image_filename}')
 async def api_get_image(document_id: str, image_filename: str):
     safe_name = Path(image_filename).name
@@ -689,6 +696,41 @@ async def api_chat(request: ChatRequest):
             'X-Accel-Buffering': 'no',
             'Connection': 'keep-alive',
         },
+    )
+
+
+@app.post('/api/chat/pdf')
+async def api_chat_pdf(request: ChatPdfRequest):
+    """Exporta una respuesta del chat a PDF (sin costo de modelo)."""
+    answer = (request.answer or '').strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail='Falta la respuesta.')
+    question = (request.question or '').strip()[:400]
+    sources = [
+        {
+            'title': str(s.get('title') or '')[:300],
+            'year': s.get('year'),
+            'journal': str(s.get('journal') or '')[:180],
+            'doi': str(s.get('doi') or '')[:200],
+        }
+        for s in (request.sources or [])[:60]
+        if isinstance(s, dict)
+    ]
+    buffer = io.BytesIO()
+    try:
+        markdown_to_pdf(
+            answer[:80000],
+            buffer,
+            title=question or 'Respuesta de PsiHub',
+            sources=sources,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f'[ERROR] chat-pdf {type(exc).__name__}: {exc}')
+        raise HTTPException(status_code=500, detail='No se pudo generar el PDF.')
+    return Response(
+        content=buffer.getvalue(),
+        media_type='application/pdf',
+        headers={'Content-Disposition': 'attachment; filename="psihub-respuesta.pdf"'},
     )
 
 

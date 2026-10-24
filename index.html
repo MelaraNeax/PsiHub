@@ -422,11 +422,7 @@
 
     <div class="chat-scroll" id="chat-scroll">
       <div class="chat-empty" id="chat-empty">
-        <div class="chat-empty-icon"><i class="ph-bold ph-sparkle"></i></div>
-        <h3 class="chat-empty-title">¿Qué querés investigar?</h3>
-        <p class="chat-empty-desc">
-          Preguntá en español: busco papers, leo sus resúmenes y sintetizo la evidencia.
-        </p>
+        <p class="chat-empty-title">¿Qué querés investigar?</p>
         <div class="chat-suggestions" id="chat-suggestions">
           <button class="chat-suggestion" data-q="¿Qué dice la evidencia sobre la TCC para los trastornos de ansiedad?">TCC y ansiedad</button>
           <button class="chat-suggestion" data-q="¿Qué estrategias mejoran la alianza terapéutica?">Alianza terapéutica</button>
@@ -438,23 +434,27 @@
     </div>
 
     <div class="chat-composer-wrap">
-      <div class="chat-access-row">
-        <div class="chat-access-seg" id="chat-access-seg" role="group" aria-label="Tipo de acceso">
-          <button type="button" class="chat-access-option is-active" data-access="all" aria-pressed="true">
-            <i class="ph-bold ph-books"></i><span>Todas</span>
-          </button>
-          <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
-            <i class="ph-bold ph-lock-open"></i><span>Gratis</span>
-          </button>
-          <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
-            <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span>
-          </button>
-        </div>
-        <span class="chat-access-hint" id="chat-access-hint"></span>
-      </div>
       <form class="chat-composer" id="chat-form">
         <textarea id="chat-input" rows="1" placeholder="Preguntá sobre psicoterapia, ansiedad, TCC…"
           autocomplete="off" enterkeyhint="send"></textarea>
+        <div class="chat-filter" id="chat-filter">
+          <button type="button" class="chat-filter-btn" id="btn-chat-filter" aria-haspopup="true"
+            aria-expanded="false" aria-controls="chat-access-seg" title="Tipo de acceso">
+            <i class="ph-bold ph-books" id="chat-filter-icon"></i>
+            <span id="chat-filter-label">Todas</span>
+          </button>
+          <div class="chat-filter-menu" id="chat-access-seg" role="group" aria-label="Tipo de acceso" hidden>
+            <button type="button" class="chat-access-option is-active" data-access="all" aria-pressed="true">
+              <i class="ph-bold ph-books"></i><span>Todas</span><i class="ph-bold ph-check chat-check"></i>
+            </button>
+            <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
+              <i class="ph-bold ph-lock-open"></i><span>Gratis</span><i class="ph-bold ph-check chat-check"></i>
+            </button>
+            <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
+              <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span><i class="ph-bold ph-check chat-check"></i>
+            </button>
+          </div>
+        </div>
         <button type="submit" class="chat-send-btn" id="btn-chat-send" aria-label="Enviar">
           <i class="ph-bold ph-arrow-up"></i>
         </button>

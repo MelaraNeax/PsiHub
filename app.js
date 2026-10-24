@@ -444,7 +444,9 @@ function initDOMRefs() {
     chatInput: $('chat-input'),
     btnChatSend: $('btn-chat-send'),
     chatAccessSeg: $('chat-access-seg'),
-    chatAccessHint: $('chat-access-hint'),
+    btnChatFilter: $('btn-chat-filter'),
+    chatFilterLabel: $('chat-filter-label'),
+    chatFilterIcon: $('chat-filter-icon'),
     chatSuggestions: $('chat-suggestions'),
     btnChatNew: $('btn-chat-new'),
     btnChatHistory: $('btn-chat-history'),
@@ -4448,6 +4450,12 @@ function persistChats() {
     if (Array.isArray(chat.messages) && chat.messages.length > 60) {
       chat.messages = chat.messages.slice(-60);
     }
+    // El estado de render (nodos DOM) es de esta sesión, no se guarda.
+    (chat.messages || []).forEach(m => {
+      delete m._render;
+      delete m._revealAt;
+      delete m._dirty;
+    });
   });
   saveData(CHAT_STORE_KEY, S.chats);
 }
@@ -4546,6 +4554,12 @@ function getChatAccess() {
   return value === 'free' || value === 'oneclick' ? value : 'all';
 }
 
+const CHAT_ACCESS_META = {
+  all: { label: 'Todas', icon: 'ph-books' },
+  free: { label: 'Gratis', icon: 'ph-lock-open' },
+  oneclick: { label: '1 clic', icon: 'ph-hand-pointing' }
+};
+
 function setChatAccess(access, { persist = true } = {}) {
   const value = access === 'free' || access === 'oneclick' ? access : 'all';
   if (el.chatAccessSeg) {
@@ -4555,21 +4569,21 @@ function setChatAccess(access, { persist = true } = {}) {
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
   }
+  const meta = CHAT_ACCESS_META[value];
+  if (el.chatFilterLabel) el.chatFilterLabel.textContent = meta.label;
+  if (el.chatFilterIcon) el.chatFilterIcon.className = `ph-bold ${meta.icon}`;
+  if (el.btnChatFilter) el.btnChatFilter.title = `Acceso: ${meta.label}`;
   if (persist) {
     try { localStorage.setItem(CHAT_ACCESS_KEY, value); } catch { }
   }
-  updateChatAccessHint();
   return value;
 }
 
-function updateChatAccessHint() {
-  if (!el.chatAccessHint) return;
-  const access = getChatAccess();
-  el.chatAccessHint.textContent = access === 'free'
-    ? 'Solo acceso abierto'
-    : access === 'oneclick'
-      ? 'Solo PDF verificados en 1 clic'
-      : 'Incluye papers de pago';
+function toggleChatFilter(open) {
+  if (!el.chatAccessSeg || !el.btnChatFilter) return;
+  const next = typeof open === 'boolean' ? open : el.chatAccessSeg.hasAttribute('hidden');
+  el.chatAccessSeg.toggleAttribute('hidden', !next);
+  el.btnChatFilter.setAttribute('aria-expanded', next ? 'true' : 'false');
 }
 
 function initChat() {
@@ -4620,10 +4634,185 @@ function buildChatMessage(msg) {
   bubble.innerHTML = `
     <div class="chat-answer"></div>
     <div class="chat-sources-wrap"></div>
-    <div class="chat-meta"></div>`;
+    <div class="chat-foot">
+      <div class="chat-meta"></div>
+      <div class="chat-actions" hidden>
+        <button type="button" class="chat-action" data-act="copy" aria-label="Copiar respuesta" title="Copiar">
+          <i class="ph-bold ph-copy"></i>
+        </button>
+        <button type="button" class="chat-action" data-act="share" aria-label="Compartir respuesta" title="Compartir">
+          <i class="ph-bold ph-share-network"></i>
+        </button>
+        <span class="chat-download">
+          <button type="button" class="chat-action" data-act="download" aria-label="Descargar respuesta"
+            aria-haspopup="true" aria-expanded="false" title="Descargar">
+            <i class="ph-bold ph-download-simple"></i>
+          </button>
+          <div class="chat-download-menu" hidden>
+            <button type="button" data-dl="md"><i class="ph-bold ph-file-text"></i>Markdown</button>
+            <button type="button" data-dl="pdf"><i class="ph-bold ph-file-pdf"></i>PDF</button>
+          </div>
+        </span>
+      </div>
+    </div>`;
   wrap.appendChild(bubble);
   updateChatBubble(wrap, msg);
   return wrap;
+}
+
+// ─── Acciones: copiar / compartir / descargar ───
+function chatQuestionFor(msg) {
+  const chat = getActiveChat();
+  if (!chat) return '';
+  const idx = chat.messages.indexOf(msg);
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    if (chat.messages[i].role === 'user') return String(chat.messages[i].content || '');
+  }
+  return chat.title || '';
+}
+
+function buildChatExportMarkdown(msg) {
+  const question = chatQuestionFor(msg);
+  const parts = [];
+  if (question) parts.push(`# ${question}`);
+  parts.push(String(msg.content || '').trim());
+  const sources = msg.sources || [];
+  if (sources.length) {
+    const lines = sources.map((s, i) => {
+      const meta = [s.year, s.journal].filter(Boolean).join(' · ');
+      const doi = s.doi ? ` https://doi.org/${s.doi}` : '';
+      return `${i + 1}. ${s.title || 'Sin título'}${meta ? ` (${meta})` : ''}${doi}`;
+    });
+    parts.push(`## Fuentes consultadas\n\n${lines.join('\n')}`);
+  }
+  parts.push('_Generado con PsiHub — basado en abstracts de OpenAlex. Puede contener errores._');
+  return parts.join('\n\n') + '\n';
+}
+
+function slugifyChat(text) {
+  return String(text || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 52) || 'psihub';
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch { } }, 4000);
+}
+
+function flashChatAction(btn, iconClass) {
+  if (!btn) return;
+  const icon = btn.querySelector('i');
+  if (!icon) return;
+  btn.classList.add('is-done');
+  icon.className = `ph-bold ${iconClass}`;
+  setTimeout(() => {
+    btn.classList.remove('is-done');
+    icon.className = 'ph-bold ph-copy';
+  }, 1400);
+}
+
+async function copyChatAnswer(msg, btn) {
+  try {
+    await navigator.clipboard.writeText(String(msg.content || '').trim());
+    flashChatAction(btn, 'ph-check');
+  } catch {
+    // Fallback para contextos sin permiso de portapapeles.
+    const area = document.createElement('textarea');
+    area.value = String(msg.content || '').trim();
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand('copy'); flashChatAction(btn, 'ph-check'); } catch { }
+    area.remove();
+  }
+}
+
+async function shareChatAnswer(msg) {
+  const text = buildChatExportMarkdown(msg);
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Respuesta de PsiHub', text });
+      return;
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch { }
+}
+
+async function downloadChatAnswer(msg, kind, btn) {
+  const question = chatQuestionFor(msg);
+  const filename = slugifyChat(question);
+
+  if (kind === 'md') {
+    const md = buildChatExportMarkdown(msg);
+    downloadBlob(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `${filename}.md`);
+    return;
+  }
+
+  if (!HF_SPACE_URL) return;
+  const previous = btn?.innerHTML;
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="ph-bold ph-circle-notch chat-spin"></i>';
+  }
+  try {
+    const res = await fetch(`${HF_SPACE_URL}/api/chat/pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        answer: String(msg.content || ''),
+        sources: msg.sources || []
+      })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    downloadBlob(blob, `${filename}.pdf`);
+  } catch (err) {
+    console.warn('[chat] PDF', err);
+    // Sin PDF, al menos no se pierde la respuesta.
+    const md = buildChatExportMarkdown(msg);
+    downloadBlob(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `${filename}.md`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = previous || '<i class="ph-bold ph-download-simple"></i>';
+    }
+  }
+}
+
+function chatMessageFrom(node, trigger) {
+  const holder = (trigger || node).closest('[data-mid]');
+  const msgId = holder?.dataset.mid;
+  if (!msgId) return null;
+  return getActiveChat()?.messages?.find(m => m.id === msgId) || null;
+}
+
+function handleChatAction(action, msg, btn) {
+  if (!msg) return;
+  if (action === 'copy') copyChatAnswer(msg, btn);
+  else if (action === 'share') shareChatAnswer(msg);
+  else if (action === 'download') {
+    const menu = btn?.parentElement?.querySelector('.chat-download-menu');
+    if (!menu) return;
+    const open = menu.hasAttribute('hidden');
+    menu.toggleAttribute('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
 }
 
 function updateChatBubble(wrap, msg) {
@@ -4631,6 +4820,7 @@ function updateChatBubble(wrap, msg) {
   const answerEl = wrap.querySelector('.chat-answer');
   const sourcesEl = wrap.querySelector('.chat-sources-wrap');
   const metaEl = wrap.querySelector('.chat-meta');
+  const actionsEl = wrap.querySelector('.chat-actions');
   if (!answerEl) return;
 
   const fullContent = msg.content || '';
@@ -4640,25 +4830,28 @@ function updateChatBubble(wrap, msg) {
     ? fullContent.slice(0, msg.shownChars)
     : fullContent;
   if (content) {
-    answerEl.innerHTML = renderChatMarkdown(content, msg.sources || []);
+    if (msg.streaming) {
+      updateStreamingAnswer(answerEl, msg, content);
+    } else {
+      answerEl.innerHTML = renderChatMarkdown(content, msg.sources || []);
+      msg._render = null;
+    }
   } else if (msg.streaming) {
     const status = msg.status
       ? `<span class="chat-status">${esc(msg.status)}</span>`
       : '';
     answerEl.innerHTML = `${status}<span class="chat-thinking"><i></i><i></i><i></i></span>`;
+    msg._render = null;
   } else {
     answerEl.innerHTML = '<p class="chat-empty-answer">No se generó respuesta.</p>';
-  }
-
-  if (msg.streaming && content) {
-    const cursor = document.createElement('span');
-    cursor.className = 'chat-cursor';
-    answerEl.appendChild(cursor);
+    msg._render = null;
   }
 
   if (sourcesEl) {
     sourcesEl.innerHTML = renderChatSourcesHtml(msg.sources || [], msg.id);
   }
+
+  if (actionsEl) actionsEl.hidden = !!msg.streaming || !fullContent;
 
   if (metaEl) {
     if (!msg.streaming && msg.costUsd != null) {
@@ -4670,6 +4863,44 @@ function updateChatBubble(wrap, msg) {
       metaEl.textContent = '';
     }
   }
+}
+
+// Los tramos nuevos se agregan al final del último bloque en un span que entra
+// difuminado, en vez de re-renderizar todo el Markdown en cada frame.
+const CHAT_PLAIN_DELTA = /^[^\n\\*_`#|>\[\]{}<&~$]+$/;
+
+function chatLastBlock(answerEl) {
+  const last = answerEl.lastElementChild;
+  if (!last) return null;
+  if (last.tagName === 'UL' || last.tagName === 'OL') return last.lastElementChild;
+  if (last.classList.contains('chat-table-wrap')) return null;
+  return last;
+}
+
+function updateStreamingAnswer(answerEl, msg, visible) {
+  let state = msg._render;
+  if (!state || state.el !== answerEl) {
+    state = msg._render = { el: answerEl, text: '', block: null };
+  }
+  const canAppend = state.text
+    && visible.length > state.text.length
+    && visible.startsWith(state.text)
+    && state.block
+    && state.block.isConnected;
+  if (canAppend) {
+    const delta = visible.slice(state.text.length);
+    if (CHAT_PLAIN_DELTA.test(delta)) {
+      const span = document.createElement('span');
+      span.className = 'chat-fade';
+      span.textContent = delta;
+      state.block.appendChild(span);
+      state.text = visible;
+      return;
+    }
+  }
+  answerEl.innerHTML = renderChatMarkdown(visible, msg.sources || []);
+  state.text = visible;
+  state.block = chatLastBlock(answerEl);
 }
 
 function renderChatSourcesHtml(sources, msgId) {
@@ -4804,25 +5035,43 @@ function advanceChatReveal(msg) {
   const total = (msg.content || '').length;
   const shown = typeof msg.shownChars === 'number' ? msg.shownChars : total;
   if (shown >= total) return false;
+  // ~30 fps: suficiente para que el difuminado se lea como continuo y no
+  // dispara una animación por carácter.
+  const now = performance.now();
+  if (msg._revealAt && now - msg._revealAt < 34) return false;
+  msg._revealAt = now;
+
   const backlog = total - shown;
-  // Ritmo en caracteres por frame (~60fps): siempre avanza a velocidad de
-  // lectura y acelera si el modelo entregó mucho texto de una vez, para no
-  // quedar nunca atrás pero sin mostrar bloques enteros.
-  const step = Math.max(2, Math.min(26, Math.ceil(backlog / 10) + 2));
-  msg.shownChars = Math.min(total, shown + step);
-  return msg.shownChars < total;
+  // Ritmo en caracteres por frame: siempre avanza a velocidad de lectura y
+  // acelera si el modelo entregó mucho texto de una vez, para no quedar nunca
+  // atrás pero sin mostrar bloques enteros.
+  const step = Math.max(2, Math.min(30, Math.ceil(backlog / 8) + 2));
+  let next = Math.min(total, shown + step);
+  // Corta en el próximo espacio para que el tramo nuevo entre como palabra
+  // completa y no a mitad de palabra.
+  if (next < total) {
+    const space = msg.content.indexOf(' ', next);
+    if (space !== -1 && space - next <= 12) next = space + 1;
+  }
+  msg.shownChars = next;
+  return true;
 }
 
 function scheduleChatBubbleUpdate(wrap, msg) {
   if (chatRenderRaf) return;
   chatRenderRaf = requestAnimationFrame(() => {
     chatRenderRaf = null;
-    const pending = !!msg && msg.streaming && advanceChatReveal(msg);
-    updateChatBubble(wrap, msg);
-    if (chatAutoScroll) scrollChatToBottom();
+    const changed = advanceChatReveal(msg);
+    if (changed || msg?._dirty) {
+      if (msg) msg._dirty = false;
+      updateChatBubble(wrap, msg);
+      if (chatAutoScroll) scrollChatToBottom();
+    }
     // Sigue revelando mientras quede texto en cola; se detiene solo cuando
     // el mensaje ya mostró todo lo recibido.
-    if (pending) scheduleChatBubbleUpdate(wrap, msg);
+    if (msg?.streaming && (msg.shownChars || 0) < (msg.content || '').length) {
+      scheduleChatBubbleUpdate(wrap, msg);
+    }
   });
 }
 
@@ -4850,10 +5099,12 @@ function handleChatEvent(payload, msg, wrap) {
   if (payload.type === 'status') {
     // Fase de la búsqueda: se muestra mientras todavía no hay texto.
     msg.status = payload.text || '';
+    msg._dirty = true;
     if (!msg.content) scheduleChatBubbleUpdate(wrap, msg);
   } else if (payload.type === 'sources') {
     // Llegan al final del stream, cuando la respuesta ya está redactada.
     msg.sources = Array.isArray(payload.sources) ? payload.sources : [];
+    msg._dirty = true;
     scheduleChatBubbleUpdate(wrap, msg);
   } else if (payload.type === 'delta') {
     msg.content = (msg.content || '') + (payload.text || '');
@@ -5058,6 +5309,32 @@ function setupChatEventListeners() {
     document.body.classList.remove('chat-input-focused');
   });
 
+  el.btnChatFilter?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleChatFilter();
+  });
+
+  // Cerrar los menús al tocar afuera o con Escape.
+  document.addEventListener('click', (e) => {
+    if (el.chatAccessSeg && !el.chatAccessSeg.hasAttribute('hidden') && !e.target.closest('.chat-filter')) {
+      toggleChatFilter(false);
+    }
+    if (!e.target.closest('.chat-download')) {
+      el.chatMessages?.querySelectorAll('.chat-download-menu:not([hidden])').forEach(menu => {
+        menu.setAttribute('hidden', '');
+        menu.parentElement?.querySelector('[data-act="download"]')?.setAttribute('aria-expanded', 'false');
+      });
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    toggleChatFilter(false);
+    el.chatMessages?.querySelectorAll('.chat-download-menu:not([hidden])').forEach(menu => {
+      menu.setAttribute('hidden', '');
+      menu.parentElement?.querySelector('[data-act="download"]')?.setAttribute('aria-expanded', 'false');
+    });
+  });
+
   el.chatAccessSeg?.addEventListener('click', (e) => {
     const btn = e.target.closest('.chat-access-option');
     if (!btn) return;
@@ -5068,9 +5345,27 @@ function setupChatEventListeners() {
       chat.updatedAt = Date.now();
       persistChats();
     }
+    toggleChatFilter(false);
   });
 
   el.chatMessages?.addEventListener('click', (e) => {
+    const actionBtn = e.target.closest('.chat-action');
+    if (actionBtn) {
+      const msg = chatMessageFrom(e.target, actionBtn);
+      if (msg) handleChatAction(actionBtn.dataset.act, msg, actionBtn);
+      return;
+    }
+
+    const dlBtn = e.target.closest('[data-dl]');
+    if (dlBtn) {
+      const msg = chatMessageFrom(e.target, dlBtn);
+      const download = dlBtn.closest('.chat-download');
+      download?.querySelector('.chat-download-menu')?.setAttribute('hidden', '');
+      download?.querySelector('[data-act="download"]')?.setAttribute('aria-expanded', 'false');
+      if (msg) downloadChatAnswer(msg, dlBtn.dataset.dl, download?.querySelector('[data-act="download"]'));
+      return;
+    }
+
     const cite = e.target.closest('.chat-cite');
     const sourceBtn = e.target.closest('.chat-source');
     const trigger = cite || sourceBtn;
