@@ -34,11 +34,15 @@ OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
 OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
 OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
-MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '14')))
-ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1100')))
-MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '1400')))
+MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '16')))
+ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1000')))
+MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '2000')))
+DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '600')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '6')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '900')))
+# Mensajes de historial que ve el router para saber a que se refiere la charla.
+ROUTER_HISTORY_MESSAGES = 4
+ROUTER_HISTORY_CHARS = 400
 SEARCH_CACHE_TTL = int(os.getenv('CHAT_SEARCH_CACHE_TTL', '1800'))
 # Papers que se piden por cada consulta generada (el pool final se recorta).
 SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '25')))
@@ -69,49 +73,135 @@ GATED_HOST_RE = re.compile(
     re.I,
 )
 
-SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado en psicología y psicoterapia.
+SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado en psicología, psiquiatría y psicoterapia.
 Respondes SIEMPRE en español, con un tono claro, académico y directo. Escribí con
 ortografía correcta: tildes, eñes y signos de apertura (¿, ¡).
 
-Reglas:
-1. Respondé la pregunta usando ÚNICAMENTE las FUENTES numeradas que recibís. Son muchas: apoyate en
-   las que de verdad tratan el tema y descartá sin citar las que solo lo rozan.
-2. Cada afirmación relevante debe llevar su cita en el formato [1], [2], etc. Podés citar varias: [1][3].
-   Si varias fuentes coinciden, citá las más sólidas (revisiones, meta-análisis, mayor muestra).
-3. Sintetizá: no copies párrafos enteros ni el abstract. Extraé objetivo, hallazgos y conclusión.
-4. Cuando las fuentes discrepen o sean limitadas, decilo explícitamente.
-5. No inventes datos, autores, años ni resultados que no aparezcan en las fuentes.
-6. No incluyas URLs, DOIs ni enlaces: el lector puede abrir cada fuente desde la interfaz.
-7. Estructura sugerida cuando aporte claridad: una respuesta breve al inicio, luego los hallazgos
-   principales en párrafos o viñetas, y al final una línea de "Límites" si corresponde.
-8. Si las fuentes no alcanzan para responder, decilo y sugerí reformular la búsqueda.
+## Cómo pensar antes de escribir
+1. Descomponé la pregunta: identificá qué concepto, qué relación, qué población y qué
+   tipo de respuesta se pide. Respondé cada parte, no solo la primera.
+2. Si la pregunta cruza disciplinas o marcos (p. ej. neurociencia y psicoanálisis, o
+   clínica y filosofía de la mente), exponé primero cada marco por separado con sus
+   fuentes y recién después contrastalos y concluí. No mezcles vocabularios sin avisar.
+3. Distinguí siempre tres niveles de respaldo: evidencia experimental directa (ensayos,
+   mediciones, meta-análisis), evidencia observacional o correlacional, y analogía,
+   modelo teórico o hipótesis mecanística. Marcá con palabras explícitas cuál es cuál.
+   Una analogía útil no es prueba de nada: decilo.
+4. Si la pregunta admite fases, etapas, subtipos, clasificaciones o comparaciones entre
+   opciones, resumilas en una tabla Markdown con una cita por fila.
+5. Cuando las fuentes discrepen, mostrá la discrepancia y qué la explica (muestra,
+   método, población); no la escondas ni la promedies.
 
-No agregues una lista de referencias al final: la interfaz ya muestra las fuentes."""
+## Formato (para que se pueda estudiar de un vistazo)
+- Empezá con "## Respuesta breve": 2 a 4 líneas que contesten la pregunta de frente.
+- Seguí con 2 a 4 secciones "## " (y "### " si hace falta). Títulos cortos y descriptivos,
+  no genéricos: "## Qué muestra la evidencia experimental", "## El marco psicoanalítico".
+- Usá tablas cuando compares marcos, fases o estudios; viñetas cortas para listas;
+  negrita para el término técnico que el lector debería retener.
+- Cerrá con "## Límites de la evidencia" en 1 a 3 líneas cuando corresponda.
+- Extensión objetivo: 350 a 600 palabras. Densidad antes que relleno.
+
+## Reglas de contenido
+- Usá ÚNICAMENTE las FUENTES numeradas que recibís. Son muchas: apoyate en las que de
+  verdad tratan el tema y descartá sin citar las que solo lo rozan.
+- Cada afirmación relevante lleva su cita: [1], [2], [1][3]. En tablas, citá dentro de la celda.
+- Si varias fuentes coinciden, citá las más sólidas (revisiones, meta-análisis, mayor muestra).
+- Sintetizá: no copies el abstract ni parafrasees frase por frase. Extraé hallazgos y conclusión.
+- No inventes datos, autores, años, tamaños de muestra ni resultados que no estén en las fuentes.
+- No incluyas URLs, DOIs ni enlaces: el lector abre cada fuente desde la interfaz.
+- No agregues una lista de referencias al final: la interfaz ya muestra las fuentes.
+- Si las fuentes no alcanzan para responder con rigor, decilo en "## Límites de la evidencia"
+  y sugerí cómo reformular la búsqueda."""
+
+# Respuestas conversacionales: sin búsqueda bibliográfica ni fuentes.
+DIRECT_PROMPT = """Eres el asistente de PsiHub, una app de psicología basada en evidencia.
+La persona te escribió algo conversacional (un saludo, una pregunta sobre la app, una
+aclaración o un comentario) que NO requiere buscar papers.
+
+Respondé en español, cálido y directo, en 1 a 4 frases (máximo 90 palabras).
+- No inventes citas, papers ni datos.
+- Si la persona pide evidencia o una pregunta de investigación, invitála a formularla
+  así: «¿Qué dice la evidencia sobre …?», y explicá en una línea que ahí sí buscás papers.
+- Si pregunta cómo usar PsiHub, respondé con lo que sabés de la app: se puede preguntar
+  por evidencia, cambiar el filtro de acceso (todos / gratis / 1 clic) y abrir cada fuente.
+- No uses encabezados ni tablas; es una charla breve."""
+
+# Acompañamiento ante malestar personal o riesgo. No es una respuesta académica.
+SUPPORT_PROMPT = """Eres el acompañante de PsiHub. La persona escribió algo que sugiere
+malestar emocional, angustia o riesgo, y no una consulta académica.
+
+Respondé en español, con calidez y sin dramatismo, en 120 a 180 palabras.
+- Validá lo que siente sin minimizar, sin diagnosticar y sin sermonear.
+- Hablá como alguien que escucha, no como un manual: frases cortas, en segunda persona.
+- Hacé una o dos preguntas abiertas y suaves (desde cuándo, cómo viene siendo, si hay
+  alguien con quien pueda hablar hoy).
+- Mencioná con cuidado que hablar con un profesional puede ayudar, y ofrecé un paso
+  concreto y pequeño para hoy.
+- Si menciona querer morir o lastimarse, preguntá de forma directa y cuidadosa si tiene
+  un plan o medios, y alentá a buscar ayuda inmediata.
+- No cites papers, no des estadísticas, no prometas confidencialidad absoluta y no
+  reemplaces la atención de emergencia."""
+
+# Bloque fijo de recursos: lo agrega el servidor, no el modelo, para que los
+# números no se inventen ni se deformen.
+SUPPORT_FOOTER = """
+
+---
+
+**Si sentís que estás en peligro o tenés pensamientos de hacerte daño, hay ayuda disponible ahora.**
+
+- **Argentina:** 135 (CABA) · 0800 345 1435 (Centro de Asistencia al Suicida) · 911 emergencias
+- **España:** 024 · **México:** 800 911 2000 · **Chile:** *4141 · **Colombia:** 106 · **Perú:** 113 opción 5
+- **Cualquier país:** [findahelpline.com](https://findahelpline.com) · si hay peligro inmediato, llamá a tu número de emergencias local.
+"""
+
 
 
 # ---------------------------------------------------------------------------
-# Planificacion de la busqueda
+# Router + planificacion de la busqueda (una sola llamada)
 # ---------------------------------------------------------------------------
 
-PLANNER_PROMPT = """Eres un bibliotecario cientifico especializado en psicologia. Conviertes la pregunta
-de un usuario en consultas de busqueda para OpenAlex, una base de articulos academicos.
+ROUTER_PROMPT = """Eres el router y bibliotecario cientifico de PsiHub, una app de psicologia
+basada en evidencia. Decidis QUE necesita el mensaje y, si necesita investigacion, preparas
+la busqueda en OpenAlex.
 
-Respondes SIEMPRE con un objeto JSON valido, sin texto adicional ni bloques de codigo:
-{"queries": ["...", "..."], "keywords": ["...", "..."]}
+Respondes SIEMPRE con un objeto JSON valido, sin texto adicional ni bloques de codigo.
 
-Reglas:
-- "queries": entre 3 y 5 consultas EN INGLES de 2 a 7 palabras cada una.
+FORMATO:
+{"mode": "research", "queries": ["..."], "keywords": ["..."], "outline": ["..."], "scope": "psy"}
+{"mode": "chat"}
+{"mode": "support"}
+
+MODO "chat": saludos, agradecimientos, charla, preguntas sobre como usar PsiHub, opiniones
+sin respaldo empirico, o aclaraciones que se responden con la conversacion. No se busca nada.
+MODO "support": cuando la persona habla en primera persona de su propio dolor actual, angustia,
+desesperanza, aislamiento o ideacion suicida. Es acompanamiento emocional, no investigacion.
+MODO "research": TODO lo demas. Ante la duda entre "chat" y "research", elegi "research".
+
+Deteccion de riesgo (modo "support"): solo cuando el mensaje es personal y actual, por ejemplo
+"ultimamente siento que no vale la pena seguir", "estoy muy solo y no le veo salida",
+"pienso en lastimarme". NO marques "support" cuando se pregunta por el tema en general:
+"que factores de riesgo predicen la ideacion suicida en adolescentes" es "research".
+Si hay riesgo personal y a la vez una pregunta academica, elegi "support".
+
+Cuando el modo sea "research":
+- "queries": entre 4 y 5 consultas EN INGLES de 2 a 7 palabras cada una.
 - Usa vocabulario academico: expande siglas y conceptos tecnicos (TCC -> cognitive behavioral
   therapy; red neuronal por defecto -> default mode network; DMN -> default mode network).
-- Cada consulta debe atacar un angulo distinto: el concepto central, la relacion entre los
-  conceptos de la pregunta, la poblacion o el metodo (p. ej. resting-state functional
-  connectivity depression).
-- Si la pregunta es amplia o conceptual, dedica una consulta a revisiones y meta-analisis
-  (agregando review o meta-analysis a los conceptos centrales).
+- Cada consulta ataca un angulo distinto: concepto central, relacion entre conceptos,
+  poblacion o metodo, y limite o critica del concepto.
+- Si la pregunta cruza disciplinas, dedica una consulta a cada tradicion (p. ej. una a
+  neurociencia y otra a psicodinamica) y otra a revisiones o meta-analisis.
 - No uses comillas, comodines, parentesis, operadores booleanos ni signos de puntuacion.
-- "keywords": entre 4 y 8 conceptos sueltos EN INGLES (una o dos palabras) que deberian
-  aparecer en el titulo o el resumen de un articulo realmente relevante.
+- "keywords": entre 4 y 8 conceptos sueltos EN INGLES que deberian aparecer en el titulo o
+  el resumen de un articulo realmente relevante.
+- "outline": entre 2 y 4 ejes o subpreguntas EN ESPANOL que la respuesta debe cubrir para
+  ser completa, en frases de 3 a 8 palabras.
+- "scope": "psy" si el tema es psicologico, clinico o medico; "broad" si de verdad cruza
+  campos ajenos a la psicologia y la medicina (filosofia, linguistica, educacion, economia,
+  ciencias de la computacion). Ante la duda, "psy".
 """
+
 
 # Palabras vacias que no aportan a la relevancia.
 _STOPWORDS = set("""
@@ -187,7 +277,13 @@ def _fallback_plan(question: str, query: str) -> dict:
         queries.append(key_query)
     if len(words) > 3:
         queries.append(' '.join(words[:3]))
-    return {'queries': [q for q in queries if q], 'keywords': keywords}
+    return {
+        'mode': 'research',
+        'queries': [q for q in queries if q],
+        'keywords': keywords,
+        'outline': [],
+        'scope': 'psy',
+    }
 
 
 def _plan_terms(plan: Optional[dict], question: str, query: str) -> list[str]:
@@ -218,6 +314,36 @@ def _plan_queries(plan: Optional[dict], question: str, query: str) -> list[str]:
         seen.add(key)
         cleaned.append(value)
     return cleaned[:5]
+
+
+def _plan_mode(plan: Optional[dict]) -> str:
+    mode = str((plan or {}).get('mode') or 'research').lower()
+    return mode if mode in ('research', 'chat', 'support') else 'research'
+
+
+def _plan_outline(plan: Optional[dict]) -> list[str]:
+    outline: list[str] = []
+    for item in (plan or {}).get('outline') or []:
+        if isinstance(item, str) and item.strip():
+            outline.append(item.strip()[:120])
+    return outline[:4]
+
+
+def _plan_scope(plan: Optional[dict]) -> str:
+    return 'broad' if str((plan or {}).get('scope') or '').lower() == 'broad' else 'psy'
+
+
+def _router_history(history: Optional[list[dict]]) -> str:
+    """Contexto minimo para que el router sepa a que se refiere un mensaje corto."""
+    if not history:
+        return ''
+    lines: list[str] = []
+    for item in history[-ROUTER_HISTORY_MESSAGES:]:
+        role = item.get('role')
+        content = (item.get('content') or '').strip()
+        if role in ('user', 'assistant') and content:
+            lines.append(f'{role}: {content[:ROUTER_HISTORY_CHARS]}')
+    return '\n'.join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -330,9 +456,12 @@ def _params(
     per_page: int,
     sort: Optional[str] = None,
     mode: str = 'broad',
+    scope: str = 'psy',
 ) -> dict:
     clean = _clean_query(query)[:300]
-    filters = [PSY_FIELDS, WORK_TYPES]
+    # En preguntas interdisciplinarias el filtro de campo excluiria la otra
+    # tradicion; el ranking de relevancia se encarga despues de limpiar ruido.
+    filters = [WORK_TYPES] if scope == 'broad' else [PSY_FIELDS, WORK_TYPES]
     if access in ('free', 'oneclick'):
         filters.append('is_oa:true')
     params = {
@@ -466,6 +595,7 @@ async def search_sources(
     log_fn: Callable[[str], None] = print,
     plan: Optional[dict] = None,
     question: str = '',
+    scope: str = 'psy',
 ) -> tuple[list[dict], dict]:
     """Busca papers con varias consultas y devuelve solo los realmente afines."""
     query = (query or '').strip()
@@ -477,7 +607,7 @@ async def search_sources(
     if not queries:
         return [], {'count': 0, 'query': query, 'candidates': 0}
 
-    cache_key = f'{access}|' + '|'.join(sorted(q.lower() for q in queries))
+    cache_key = f'{access}|{scope}|' + '|'.join(sorted(q.lower() for q in queries))
     cached = _search_cache.get(cache_key)
     if cached and cached[0] > time.time():
         return cached[1], {
@@ -493,9 +623,9 @@ async def search_sources(
     # latencia, y luego se deduplica por id/doi/titulo.
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY)
     tasks = []
-    for item in queries[:4]:
-        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='precise'), semaphore, log_fn))
-        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='broad'), semaphore, log_fn))
+    for item in queries[:5]:
+        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='precise', scope=scope), semaphore, log_fn))
+        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='broad', scope=scope), semaphore, log_fn))
     groups = await asyncio.gather(*tasks)
 
     pool: dict[str, dict] = {}
@@ -597,8 +727,10 @@ def _digest(sources: list[dict]) -> str:
         elif len(abstract) > ABSTRACT_CHARS:
             abstract = abstract[:ABSTRACT_CHARS].rstrip() + ' [...]'
         access = 'acceso abierto' if source.get('isOa') else 'de pago'
+        kind = 'revisión' if source.get('type') == 'review' else 'estudio'
+        citations = int(source.get('citations') or 0)
         blocks.append(
-            f'[{index}] {title} ({year}) · {journal} · {access}\n'
+            f'[{index}] {title} ({year}) · {journal} · {access} · {kind} · {citations} citas\n'
             f'Resumen: {abstract}'
         )
     return '\n\n'.join(blocks)
@@ -617,17 +749,41 @@ def _history_messages(history: Optional[list[dict]]) -> list[dict]:
     return cleaned
 
 
-def _build_messages(question: str, sources: list[dict], history: Optional[list[dict]]) -> list[dict]:
+def _build_messages(
+    question: str,
+    sources: list[dict],
+    history: Optional[list[dict]],
+    outline: Optional[list[str]] = None,
+) -> list[dict]:
     messages: list[dict] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
     messages.extend(_history_messages(history))
+    axes = ''
+    if outline:
+        axes = (
+            'EJES QUE LA RESPUESTA DEBE CUBRIR (no los repitas como lista: integralos '
+            'en las secciones):\n- ' + '\n- '.join(outline) + '\n\n'
+        )
     messages.append({
         'role': 'user',
         'content': (
             f'PREGUNTA DEL USUARIO:\n{question.strip()}\n\n'
+            f'{axes}'
             f'FUENTES DISPONIBLES:\n{_digest(sources)}\n\n'
-            'Redacta la respuesta en espanol citando las fuentes con [n].'
+            'Redactá la respuesta en español con la estructura y las citas [n] indicadas.'
         ),
     })
+    return messages
+
+
+def _direct_messages(
+    question: str,
+    history: Optional[list[dict]],
+    system_prompt: str,
+) -> list[dict]:
+    """Conversacion sin busqueda: charla o acompanamiento."""
+    messages: list[dict] = [{'role': 'system', 'content': system_prompt}]
+    messages.extend(_history_messages(history))
+    messages.append({'role': 'user', 'content': question.strip()})
     return messages
 
 
@@ -684,41 +840,48 @@ async def _complete(
     raise ChatStartError(f'No se pudo planificar la busqueda: {last_error}')
 
 
-async def _plan_search(
+async def _route(
     question: str,
     query: str,
+    history: Optional[list[dict]],
     api_keys: list[str],
     log_fn: Callable[[str], None],
 ) -> dict:
-    """Pide al modelo 3-5 consultas y palabras clave para OpenAlex.
+    """Decide si hay que investigar y, si si, arma 4-5 consultas para OpenAlex.
 
-    Si el modelo falla se usa un plan heuristico: la busqueda nunca se detiene
-    por culpa de la planificacion.
+    Es una sola llamada corta: reemplaza al viejo planificador, asi que el
+    enrutado no cuesta tokens extra. Si el modelo falla se usa un plan
+    heuristico y se investiga: la busqueda nunca se detiene por el router.
     """
     fallback = _fallback_plan(question, query)
+    context = _router_history(history)
+    prompt = f'Pregunta del usuario: {question[:1200]}\n'
+    if context:
+        prompt += f'\nConversacion previa (para interpretar el mensaje):\n{context}\n'
+    prompt += f'\nConsulta traducida al ingles (referencia): {query[:300]}'
+
     try:
         raw = await _complete(
             [
-                {'role': 'system', 'content': PLANNER_PROMPT},
-                {
-                    'role': 'user',
-                    'content': (
-                        f'Pregunta del usuario: {question[:1200]}\n'
-                        f'Consulta traducida al ingles: {query[:300]}'
-                    ),
-                },
+                {'role': 'system', 'content': ROUTER_PROMPT},
+                {'role': 'user', 'content': prompt},
             ],
             api_keys,
             max_tokens=PLANNER_MAX_OUTPUT,
         )
     except Exception as exc:  # noqa: BLE001
-        log_fn(f'[chat-plan] fallo: {type(exc).__name__}: {exc}')
+        log_fn(f'[chat-route] fallo: {type(exc).__name__}: {exc}')
         return fallback
 
     parsed = _parse_json_object(raw)
     if not parsed:
-        log_fn('[chat-plan] respuesta no parseable; usando plan heuristico')
+        log_fn('[chat-route] respuesta no parseable; se investiga con plan heuristico')
         return fallback
+
+    mode = _plan_mode(parsed)
+    if mode != 'research':
+        log_fn(f'[chat-route] modo {mode}: sin busqueda')
+        return {'mode': mode, 'queries': [], 'keywords': [], 'outline': [], 'scope': 'psy'}
 
     queries = [q.strip() for q in (parsed.get('queries') or []) if isinstance(q, str) and q.strip()]
     keywords = [k.strip() for k in (parsed.get('keywords') or []) if isinstance(k, str) and k.strip()]
@@ -726,8 +889,17 @@ async def _plan_search(
         queries = fallback['queries']
     if not keywords:
         keywords = fallback['keywords']
-    plan = {'queries': queries[:5], 'keywords': keywords[:10]}
-    log_fn(f'[chat-plan] {len(plan["queries"])} consultas: ' + ' | '.join(plan['queries']))
+    plan = {
+        'mode': 'research',
+        'queries': queries[:5],
+        'keywords': keywords[:10],
+        'outline': _plan_outline(parsed),
+        'scope': _plan_scope(parsed),
+    }
+    log_fn(
+        f'[chat-plan] {len(plan["queries"])} consultas ({plan["scope"]}): '
+        + ' | '.join(plan['queries'])
+    )
     return plan
 
 
@@ -735,6 +907,8 @@ async def _stream_completion(
     messages: list[dict],
     api_keys: list[str],
     log_fn: Callable[[str], None],
+    max_tokens: Optional[int] = None,
+    temperature: float = 0.25,
 ):
     if not api_keys:
         raise ChatStartError('No hay API key de DeepSeek configurada.')
@@ -742,11 +916,11 @@ async def _stream_completion(
     payload = {
         'model': CHAT_MODEL,
         'messages': messages,
-        'temperature': 0.25,
+        'temperature': temperature,
         'stream': True,
         'stream_options': {'include_usage': True},
         'thinking': {'type': 'disabled'},
-        'max_tokens': MAX_OUTPUT_TOKENS,
+        'max_tokens': max_tokens or MAX_OUTPUT_TOKENS,
     }
     last_error: Optional[BaseException] = None
 
@@ -838,12 +1012,89 @@ async def stream_chat(
             'cached': bool(meta.get('cached')),
         })
 
-    yield _sse({'type': 'status', 'text': 'Analizando la pregunta…'})
+    def finish(usage: dict, mode: str, sources_count: int, candidates: int) -> tuple[dict, float]:
+        """Registra el costo de la respuesta y deja la linea [cost-chat]."""
+        cost = estimate_cost(usage)
+        elapsed = round(time.time() - started, 2)
+        record = {
+            'doc_id': f"chat-{int(time.time() * 1000)}",
+            'kind': 'chat',
+            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            'title': question[:120],
+            'pages': 0,
+            'model': CHAT_MODEL,
+            'source': 'chat',
+            'mode': mode,
+            'access': access,
+            'sources': sources_count,
+            'candidates': candidates,
+            'cache_hit_tokens': int(usage.get('prompt_cache_hit_tokens') or 0),
+            'elapsed_sec': elapsed,
+            'client_id': client_id[:64],
+            **cost,
+        }
+        try:
+            record_cost(record)
+        except Exception:
+            pass
+        log_fn(
+            f"[cost-chat] {record['doc_id']} | modo {mode} | {sources_count} fuentes | "
+            f"{cost['total_tokens']} tokens (cache {record['cache_hit_tokens']}) | "
+            f"${cost['cost_usd']:.6f} USD | {elapsed}s"
+        )
+        return cost, elapsed
+
+    yield _sse({'type': 'status', 'text': 'Analizando el mensaje…'})
     try:
-        plan = await _plan_search(question, query or question, api_keys, log_fn)
+        plan = await _route(question, query or question, history, api_keys, log_fn)
     except Exception as exc:  # noqa: BLE001
-        log_fn(f'[chat-plan] error inesperado: {exc}')
+        log_fn(f'[chat-route] error inesperado: {exc}')
         plan = _fallback_plan(question, query or question)
+
+    mode = _plan_mode(plan)
+
+    # Charla y acompanamiento: no se busca bibliografia, se responde directo.
+    if mode in ('chat', 'support'):
+        is_support = mode == 'support'
+        yield _sse({
+            'type': 'status',
+            'text': 'Un momento…' if is_support else 'Escribiendo…',
+        })
+        direct_usage: dict = {}
+        try:
+            messages = _direct_messages(
+                question,
+                history,
+                SUPPORT_PROMPT if is_support else DIRECT_PROMPT,
+            )
+            async for kind, value in _stream_completion(
+                messages, api_keys, log_fn,
+                max_tokens=DIRECT_MAX_OUTPUT,
+                temperature=0.45,
+            ):
+                if kind == 'usage':
+                    direct_usage = value
+                elif kind == 'delta':
+                    yield _sse({'type': 'delta', 'text': value})
+        except Exception as exc:  # noqa: BLE001
+            log_fn(f'[chat] respuesta directa fallo: {type(exc).__name__}: {exc}')
+            yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
+            return
+
+        if is_support:
+            # Los recursos los agrega el servidor: numeros verificados, no inventados.
+            yield _sse({'type': 'delta', 'text': SUPPORT_FOOTER})
+
+        direct_cost, direct_elapsed = finish(direct_usage, mode, 0, 0)
+        yield sources_event([], {'query': query, 'cached': False})
+        yield _sse({
+            'type': 'done',
+            'usage': direct_usage,
+            'cost_usd': direct_cost['cost_usd'],
+            'sources_count': 0,
+            'elapsed_sec': direct_elapsed,
+        })
+        return
 
     query_count = len(_plan_queries(plan, question, query or question))
     yield _sse({
@@ -859,6 +1110,7 @@ async def stream_chat(
             log_fn=log_fn,
             plan=plan,
             question=question,
+            scope=_plan_scope(plan),
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] busqueda fallo: {type(exc).__name__}: {_redact(exc)}')
@@ -885,16 +1137,14 @@ async def stream_chat(
         'text': f'{candidates} papers revisados, {len(sources)} relevantes. Redactando…',
     })
 
-    messages = _build_messages(question, sources, history)
+    messages = _build_messages(question, sources, history, _plan_outline(plan))
     usage: dict = {}
-    answer_parts: list[str] = []
 
     try:
         async for kind, value in _stream_completion(messages, api_keys, log_fn):
             if kind == 'usage':
                 usage = value
             elif kind == 'delta':
-                answer_parts.append(value)
                 yield _sse({'type': 'delta', 'text': value})
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] generacion fallo: {type(exc).__name__}: {exc}')
@@ -902,35 +1152,7 @@ async def stream_chat(
         yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
         return
 
-    cost = estimate_cost(usage)
-    elapsed = round(time.time() - started, 2)
-    record = {
-        'doc_id': f"chat-{int(time.time() * 1000)}",
-        'kind': 'chat',
-        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'title': question[:120],
-        'pages': 0,
-        'model': CHAT_MODEL,
-        'source': 'chat',
-        'access': access,
-        'sources': len(sources),
-        'candidates': candidates,
-        'cache_hit_tokens': int(usage.get('prompt_cache_hit_tokens') or 0),
-        'elapsed_sec': elapsed,
-        'client_id': client_id[:64],
-        **cost,
-    }
-    try:
-        record_cost(record)
-    except Exception:
-        pass
-
-    cache_hit = record['cache_hit_tokens']
-    log_fn(
-        f"[cost-chat] {record['doc_id']} | {len(sources)} fuentes | "
-        f"{cost['total_tokens']} tokens (cache {cache_hit}) | "
-        f"${cost['cost_usd']:.6f} USD | {elapsed}s"
-    )
+    cost, elapsed = finish(usage, mode, len(sources), candidates)
     # Primero las fuentes y al final el cierre: el cliente las muestra recien
     # cuando el texto ya esta completo.
     yield sources_event(sources, search_meta)

@@ -443,7 +443,7 @@ function initDOMRefs() {
     chatForm: $('chat-form'),
     chatInput: $('chat-input'),
     btnChatSend: $('btn-chat-send'),
-    chatAccessSelect: $('chat-access-select'),
+    chatAccessSeg: $('chat-access-seg'),
     chatAccessHint: $('chat-access-hint'),
     chatSuggestions: $('chat-suggestions'),
     btnChatNew: $('btn-chat-new'),
@@ -603,6 +603,7 @@ function navigateTo(page) {
   Object.values(pages).forEach(p => p.classList.add('hidden'));
   pages[page].classList.remove('hidden');
   el.navBtns.forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  if (page !== 'chat') document.body.classList.remove('chat-input-focused');
   if (page === 'profile' || page === 'library') refreshProfile();
   if (page === 'library' && typeof refreshProcessedArticles === 'function') refreshProcessedArticles();
   if (page === 'chat') initChat();
@@ -4453,7 +4454,7 @@ function persistChats() {
 
 function createChat({ focus = true } = {}) {
   stopChatStream();
-  const access = el.chatAccessSelect?.value || 'all';
+  const access = getChatAccess();
   const chat = {
     id: newChatId(),
     title: 'Nueva conversación',
@@ -4496,10 +4497,7 @@ function selectChat(id) {
   stopChatStream();
   S.activeChatId = id;
   const chat = getActiveChat();
-  if (chat && el.chatAccessSelect) {
-    el.chatAccessSelect.value = chat.access || 'all';
-    updateChatAccessHint();
-  }
+  if (chat) setChatAccess(chat.access || 'all', { persist: false });
   renderChatHistory();
   renderActiveChat();
   closeChatHistory();
@@ -4542,9 +4540,31 @@ function closeChatHistory() {
   if (el.chatHistoryPanel) el.chatHistoryPanel.setAttribute('hidden', '');
 }
 
+function getChatAccess() {
+  const active = el.chatAccessSeg?.querySelector('.chat-access-option.is-active');
+  const value = active?.dataset.access || 'all';
+  return value === 'free' || value === 'oneclick' ? value : 'all';
+}
+
+function setChatAccess(access, { persist = true } = {}) {
+  const value = access === 'free' || access === 'oneclick' ? access : 'all';
+  if (el.chatAccessSeg) {
+    el.chatAccessSeg.querySelectorAll('.chat-access-option').forEach(btn => {
+      const on = btn.dataset.access === value;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  if (persist) {
+    try { localStorage.setItem(CHAT_ACCESS_KEY, value); } catch { }
+  }
+  updateChatAccessHint();
+  return value;
+}
+
 function updateChatAccessHint() {
   if (!el.chatAccessHint) return;
-  const access = el.chatAccessSelect?.value || 'all';
+  const access = getChatAccess();
   el.chatAccessHint.textContent = access === 'free'
     ? 'Solo acceso abierto'
     : access === 'oneclick'
@@ -4554,12 +4574,9 @@ function updateChatAccessHint() {
 
 function initChat() {
   if (!el.chatMessages) return;
-  if (el.chatAccessSelect) {
-    let saved = 'all';
-    try { saved = localStorage.getItem(CHAT_ACCESS_KEY) || 'all'; } catch { }
-    el.chatAccessSelect.value = saved;
-    updateChatAccessHint();
-  }
+  let saved = 'all';
+  try { saved = localStorage.getItem(CHAT_ACCESS_KEY) || 'all'; } catch { }
+  setChatAccess(saved, { persist: false });
 
   if (!S.activeChatId && S.chats.length) {
     S.activeChatId = [...S.chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0].id;
@@ -4576,10 +4593,7 @@ function renderActiveChat() {
   el.chatEmpty.style.display = messages.length ? 'none' : 'flex';
   el.chatMessages.innerHTML = '';
 
-  if (chat && el.chatAccessSelect) {
-    el.chatAccessSelect.value = chat.access || 'all';
-    updateChatAccessHint();
-  }
+  if (chat) setChatAccess(chat.access || 'all', { persist: false });
 
   const frag = document.createDocumentFragment();
   messages.forEach(msg => frag.appendChild(buildChatMessage(msg)));
@@ -4619,7 +4633,12 @@ function updateChatBubble(wrap, msg) {
   const metaEl = wrap.querySelector('.chat-meta');
   if (!answerEl) return;
 
-  const content = msg.content || '';
+  const fullContent = msg.content || '';
+  // Mientras llega el stream se muestra solo lo revelado por el efecto de
+  // escritura; el resto queda en cola para que el texto no aparezca de golpe.
+  const content = msg.streaming && typeof msg.shownChars === 'number'
+    ? fullContent.slice(0, msg.shownChars)
+    : fullContent;
   if (content) {
     answerEl.innerHTML = renderChatMarkdown(content, msg.sources || []);
   } else if (msg.streaming) {
@@ -4751,6 +4770,14 @@ function renderChatMarkdown(text, sources) {
   const container = document.createElement('div');
   container.innerHTML = html;
   sanitizeChatHtml(container);
+  // Las tablas se envuelven para poder desplazarlas en horizontal sin romper
+  // el ancho de la burbuja en pantallas chicas.
+  container.querySelectorAll('table').forEach(table => {
+    const wrapTable = document.createElement('div');
+    wrapTable.className = 'chat-table-wrap';
+    table.parentNode.insertBefore(wrapTable, table);
+    wrapTable.appendChild(table);
+  });
   linkifyChatCitations(container, sources || []);
   return container.innerHTML;
 }
@@ -4773,12 +4800,29 @@ function scrollChatToBottom(force = false) {
   el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
 }
 
+function advanceChatReveal(msg) {
+  const total = (msg.content || '').length;
+  const shown = typeof msg.shownChars === 'number' ? msg.shownChars : total;
+  if (shown >= total) return false;
+  const backlog = total - shown;
+  // Ritmo en caracteres por frame (~60fps): siempre avanza a velocidad de
+  // lectura y acelera si el modelo entregó mucho texto de una vez, para no
+  // quedar nunca atrás pero sin mostrar bloques enteros.
+  const step = Math.max(2, Math.min(26, Math.ceil(backlog / 10) + 2));
+  msg.shownChars = Math.min(total, shown + step);
+  return msg.shownChars < total;
+}
+
 function scheduleChatBubbleUpdate(wrap, msg) {
   if (chatRenderRaf) return;
   chatRenderRaf = requestAnimationFrame(() => {
     chatRenderRaf = null;
+    const pending = !!msg && msg.streaming && advanceChatReveal(msg);
     updateChatBubble(wrap, msg);
     if (chatAutoScroll) scrollChatToBottom();
+    // Sigue revelando mientras quede texto en cola; se detiene solo cuando
+    // el mensaje ya mostró todo lo recibido.
+    if (pending) scheduleChatBubbleUpdate(wrap, msg);
   });
 }
 
@@ -4841,7 +4885,7 @@ async function sendChatMessage() {
   let chat = getActiveChat();
   if (!chat) chat = createChat({ focus: false });
 
-  const access = el.chatAccessSelect?.value || chat.access || 'all';
+  const access = getChatAccess();
   chat.access = access;
   try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
 
@@ -4871,6 +4915,7 @@ async function sendChatMessage() {
     content: '',
     sources: [],
     streaming: true,
+    shownChars: 0,
     createdAt: Date.now()
   };
   chat.messages.push(assistantMsg);
@@ -4886,13 +4931,9 @@ async function sendChatMessage() {
   S.chatController = controller;
 
   try {
-    // La traducción de la consulta usa Google Translate (gratis) para no
-    // gastar tokens del modelo en generar la query de OpenAlex.
-    let query = question;
-    try {
-      const translated = await withTimeout(translateToEnglish(question), 4000, question);
-      if (translated && translated.trim()) query = translated.trim();
-    } catch { }
+    // El backend decide el modo y planifica las consultas en inglés, así que
+    // ya no se traduce antes: ahorra 1-2 s y una dependencia externa por mensaje.
+    const query = question;
 
     const response = await fetch(`${HF_SPACE_URL}/api/chat`, {
       method: 'POST',
@@ -5007,16 +5048,26 @@ function setupChatEventListeners() {
     if (open) selectChat(open.dataset.chatId);
   });
 
-  el.chatAccessSelect?.addEventListener('change', () => {
-    const access = el.chatAccessSelect.value || 'all';
-    try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
+  // Al escribir en el chat se oculta el relleno (filtros y disclaimer) y la
+  // barra inferior, para dejarle todo el alto al teclado en celular.
+  el.chatInput?.addEventListener('focus', () => {
+    document.body.classList.add('chat-input-focused');
+    setTimeout(() => scrollChatToBottom(true), 260);
+  });
+  el.chatInput?.addEventListener('blur', () => {
+    document.body.classList.remove('chat-input-focused');
+  });
+
+  el.chatAccessSeg?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.chat-access-option');
+    if (!btn) return;
+    const access = setChatAccess(btn.dataset.access);
     const chat = getActiveChat();
     if (chat) {
       chat.access = access;
       chat.updatedAt = Date.now();
       persistChats();
     }
-    updateChatAccessHint();
   });
 
   el.chatMessages?.addEventListener('click', (e) => {

@@ -84,29 +84,50 @@ actualiza la que pasás en `--update-env-vars`.
 | Variable | Default | Para qué sirve |
 |---|---|---|
 | `CHAT_MODEL` | `deepseek-flash` | Modelo de chat |
-| `CHAT_MAX_SOURCES` | `14` | Papers enviados al modelo por respuesta |
-| `CHAT_ABSTRACT_CHARS` | `1100` | Recorte de cada abstract |
-| `CHAT_MAX_OUTPUT_TOKENS` | `1400` | Largo máximo de la respuesta |
+| `CHAT_MAX_SOURCES` | `16` | Papers enviados al modelo por respuesta |
+| `CHAT_ABSTRACT_CHARS` | `1000` | Recorte de cada abstract |
+| `CHAT_MAX_OUTPUT_TOKENS` | `2000` | Largo máximo de la respuesta de investigación |
+| `CHAT_DIRECT_TOKENS` | `600` | Tope de las respuestas de charla y acompañamiento |
 | `CHAT_HISTORY_MESSAGES` | `6` | Turnos de historial que se reenvían |
 | `CHAT_SEARCH_CACHE_TTL` | `1800` | Segundos de caché de búsquedas OpenAlex |
 | `CHAT_SEARCH_RESULTS` | `25` | Papers que se piden por cada consulta |
 | `CHAT_MIN_RELEVANCE` | `0.14` | Umbral de relevancia para descartar papers |
 | `CHAT_SEARCH_CONCURRENCY` | `4` | Consultas simultáneas contra OpenAlex |
-| `CHAT_PLANNER_TOKENS` | `320` | Tope de tokens del planificador de búsquedas |
+| `CHAT_PLANNER_TOKENS` | `320` | Tope de tokens del router/planificador |
 
-### Cómo busca el chat
+### Cómo decide y cómo busca
 
-1. El planificador (una llamada corta al mismo modelo) convierte la pregunta en
-   3-5 consultas en inglés con sinónimos técnicos y en palabras clave.
-2. Cada consulta se lanza dos veces en paralelo contra OpenAlex (búsqueda
-   restringida a título+resumen y búsqueda general); los resultados se
-   deduplican por id/DOI/título.
-3. Cada paper se puntúa por coincidencia de términos en título, resumen y
-   tópicos, más citas, vigencia, tipo (revisión) y disponibilidad de resumen.
-   Se descartan los que no superan `CHAT_MIN_RELEVANCE` y se envían al modelo
-   los `CHAT_MAX_SOURCES` mejores.
-4. El texto se transmite en streaming y, recién al final, viajan las fuentes
-   para que la interfaz las muestre debajo de la respuesta.
+**Paso 0 — router (una sola llamada corta al modelo).** Antes de buscar, el
+mensaje se clasifica en uno de tres modos:
+
+| Modo | Cuándo | Qué hace |
+|---|---|---|
+| `chat` | Saludos, charla, preguntas sobre la app, aclaraciones | Responde directo, sin OpenAlex ni fuentes (~$0.00008) |
+| `support` | Malestar personal actual, angustia, ideación suicida | Respuesta breve de acompañamiento + bloque fijo de líneas de ayuda (el servidor agrega los números, el modelo no los inventa) |
+| `research` | Todo lo demás (y ante la duda, siempre) | Búsqueda bibliográfica completa |
+
+La detección de riesgo es deliberadamente conservadora: solo se activa cuando
+el mensaje es personal y actual. Una pregunta académica sobre suicidio
+("¿qué factores de riesgo predicen la ideación suicida?") se investiga normal.
+
+**Paso 1 — descomposición.** El mismo router devuelve 4-5 consultas en inglés,
+palabras clave, 2-4 ejes que la respuesta debe cubrir (`outline`) y el alcance
+(`psy`, o `broad` si la pregunta cruza disciplinas ajenas a psicología/medicina).
+
+**Paso 2 — recuperación.** Cada consulta se lanza dos veces en paralelo contra
+OpenAlex (título+resumen y buscador general); se deduplican por id/DOI/título
+(~120-165 papers únicos por pregunta).
+
+**Paso 3 — ranking.** Cada paper se puntúa por coincidencia de términos en
+título, resumen y tópicos, más citas, vigencia, tipo (revisión) y disponibilidad
+de resumen. Se descartan los que no superan `CHAT_MIN_RELEVANCE` y se envían al
+modelo los `CHAT_MAX_SOURCES` mejores, con tipo de estudio y citas en el digest.
+
+**Paso 4 — redacción.** El texto se transmite en streaming y las fuentes viajan
+al final. La respuesta sigue una plantilla estable (respuesta breve, 2-4
+secciones con títulos propios, tablas Markdown para comparar marcos/fases,
+distinción explícita entre evidencia experimental, correlacional y analogía, y
+un cierre de límites de la evidencia).
 
 ---
 
@@ -134,8 +155,9 @@ curl -N -X POST https://mi-servidor-api-42204102300.southamerica-east1.run.app/a
   -d '{"question":"¿Qué dice la evidencia sobre la TCC para la ansiedad?","access":"all"}'
 ```
 
-Vas a ver eventos `data: {"type":"sources"...}`, luego varios
-`data: {"type":"delta"...}` y al final `data: {"type":"done"...}`.
+Vas a ver eventos `data: {"type":"status"...}`, luego varios
+`data: {"type":"delta"...}`, después `data: {"type":"sources"...}` y al final
+`data: {"type":"done"...}`.
 
 ---
 
@@ -144,7 +166,7 @@ Vas a ver eventos `data: {"type":"sources"...}`, luego varios
 Cada respuesta genera una línea con el prefijo **`[cost-chat]`**:
 
 ```
-[cost-chat] chat-1761...a · 8 fuentes · 12450 tokens (cache 8700) · $0.000412 USD · 4.21s
+[cost-chat] chat-1761...a | modo research | 16 fuentes | 12450 tokens (cache 8700) | $0.000412 USD | 4.21s
 ```
 
 Para verla en la consola:

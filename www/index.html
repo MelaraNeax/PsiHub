@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>PsiHub</title>
   <meta name="description" content="Tu plataforma de lectura científica en psicoterapia.">
   <link rel="manifest" href="manifest.json">
@@ -398,22 +398,14 @@
   <div class="page hidden" id="page-chat">
     <div class="results-bg-glow chat-bg-glow"></div>
 
-    <header class="home-header chat-header">
-      <div class="home-header-top chat-header-top">
-        <div class="brand-block">
-          <h1 class="app-title">Chat</h1>
-          <p class="chat-header-sub">Investigá la literatura con IA</p>
-        </div>
-        <div class="chat-header-actions">
-          <button class="chat-icon-btn" id="btn-chat-history" aria-label="Historial" title="Historial de chats">
-            <i class="ph-bold ph-clock-counter-clockwise"></i>
-          </button>
-          <button class="chat-icon-btn chat-icon-btn-accent" id="btn-chat-new" aria-label="Nuevo chat"
-            title="Nuevo chat">
-            <i class="ph-bold ph-plus"></i>
-          </button>
-        </div>
-      </div>
+    <header class="chat-topbar">
+      <button class="chat-icon-btn" id="btn-chat-history" aria-label="Historial" title="Historial de chats">
+        <i class="ph-bold ph-clock-counter-clockwise"></i>
+      </button>
+      <button class="chat-icon-btn chat-icon-btn-accent" id="btn-chat-new" aria-label="Nuevo chat"
+        title="Nuevo chat">
+        <i class="ph-bold ph-plus"></i>
+      </button>
     </header>
 
     <!-- Historial de conversaciones -->
@@ -433,7 +425,7 @@
         <div class="chat-empty-icon"><i class="ph-bold ph-sparkle"></i></div>
         <h3 class="chat-empty-title">¿Qué querés investigar?</h3>
         <p class="chat-empty-desc">
-          Preguntá en español. Busco papers, leo sus resúmenes y sintetizo la evidencia citando cada fuente.
+          Preguntá en español: busco papers, leo sus resúmenes y sintetizo la evidencia.
         </p>
         <div class="chat-suggestions" id="chat-suggestions">
           <button class="chat-suggestion" data-q="¿Qué dice la evidencia sobre la TCC para los trastornos de ansiedad?">TCC y ansiedad</button>
@@ -447,15 +439,17 @@
 
     <div class="chat-composer-wrap">
       <div class="chat-access-row">
-        <label class="chat-access-pill" for="chat-access-select">
-          <i class="ph-bold ph-lock-key"></i>
-          <select id="chat-access-select" aria-label="Tipo de acceso">
-            <option value="all">Todos los papers</option>
-            <option value="free">Solo gratis</option>
-            <option value="oneclick">Solo 1 clic</option>
-          </select>
-          <i class="ph-bold ph-caret-down"></i>
-        </label>
+        <div class="chat-access-seg" id="chat-access-seg" role="group" aria-label="Tipo de acceso">
+          <button type="button" class="chat-access-option is-active" data-access="all" aria-pressed="true">
+            <i class="ph-bold ph-books"></i><span>Todas</span>
+          </button>
+          <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
+            <i class="ph-bold ph-lock-open"></i><span>Gratis</span>
+          </button>
+          <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
+            <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span>
+          </button>
+        </div>
         <span class="chat-access-hint" id="chat-access-hint"></span>
       </div>
       <form class="chat-composer" id="chat-form">
@@ -465,7 +459,7 @@
           <i class="ph-bold ph-arrow-up"></i>
         </button>
       </form>
-      <p class="chat-disclaimer">Basado en abstracts de OpenAlex. Puede contener errores; verificá en la fuente.</p>
+      <p class="chat-disclaimer">Basado en abstracts de OpenAlex. Puede contener errores.</p>
     </div>
   </div>
 
