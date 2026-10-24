@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable, Optional
 from urllib.parse import urlparse
@@ -32,14 +34,20 @@ OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
 OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
 OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
-MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '8')))
-ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '900')))
-MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '1000')))
+MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '14')))
+ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1100')))
+MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '1400')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '6')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '900')))
 SEARCH_CACHE_TTL = int(os.getenv('CHAT_SEARCH_CACHE_TTL', '1800'))
-SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '14')))
-ONECLICK_CANDIDATES = max(1, int(os.getenv('CHAT_ONECLICK_CANDIDATES', '12')))
+# Papers que se piden por cada consulta generada (el pool final se recorta).
+SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '25')))
+ONECLICK_CANDIDATES = max(1, int(os.getenv('CHAT_ONECLICK_CANDIDATES', '20')))
+# Relevancia minima (0-1) para considerar que un paper tiene relacion real.
+MIN_RELEVANCE = float(os.getenv('CHAT_MIN_RELEVANCE', '0.14'))
+# Consultas simultaneas contra OpenAlex (limite comodo del polite pool).
+SEARCH_CONCURRENCY = max(1, int(os.getenv('CHAT_SEARCH_CONCURRENCY', '4')))
+PLANNER_MAX_OUTPUT = max(120, int(os.getenv('CHAT_PLANNER_TOKENS', '320')))
 
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
 ABSTRACT_DIR = CACHE_DIR / 'abstracts'
@@ -66,8 +74,10 @@ Respondes SIEMPRE en español, con un tono claro, académico y directo. Escribí
 ortografía correcta: tildes, eñes y signos de apertura (¿, ¡).
 
 Reglas:
-1. Respondé la pregunta usando ÚNICAMENTE las FUENTES numeradas que recibís.
+1. Respondé la pregunta usando ÚNICAMENTE las FUENTES numeradas que recibís. Son muchas: apoyate en
+   las que de verdad tratan el tema y descartá sin citar las que solo lo rozan.
 2. Cada afirmación relevante debe llevar su cita en el formato [1], [2], etc. Podés citar varias: [1][3].
+   Si varias fuentes coinciden, citá las más sólidas (revisiones, meta-análisis, mayor muestra).
 3. Sintetizá: no copies párrafos enteros ni el abstract. Extraé objetivo, hallazgos y conclusión.
 4. Cuando las fuentes discrepen o sean limitadas, decilo explícitamente.
 5. No inventes datos, autores, años ni resultados que no aparezcan en las fuentes.
@@ -77,6 +87,137 @@ Reglas:
 8. Si las fuentes no alcanzan para responder, decilo y sugerí reformular la búsqueda.
 
 No agregues una lista de referencias al final: la interfaz ya muestra las fuentes."""
+
+
+# ---------------------------------------------------------------------------
+# Planificacion de la busqueda
+# ---------------------------------------------------------------------------
+
+PLANNER_PROMPT = """Eres un bibliotecario cientifico especializado en psicologia. Conviertes la pregunta
+de un usuario en consultas de busqueda para OpenAlex, una base de articulos academicos.
+
+Respondes SIEMPRE con un objeto JSON valido, sin texto adicional ni bloques de codigo:
+{"queries": ["...", "..."], "keywords": ["...", "..."]}
+
+Reglas:
+- "queries": entre 3 y 5 consultas EN INGLES de 2 a 7 palabras cada una.
+- Usa vocabulario academico: expande siglas y conceptos tecnicos (TCC -> cognitive behavioral
+  therapy; red neuronal por defecto -> default mode network; DMN -> default mode network).
+- Cada consulta debe atacar un angulo distinto: el concepto central, la relacion entre los
+  conceptos de la pregunta, la poblacion o el metodo (p. ej. resting-state functional
+  connectivity depression).
+- Si la pregunta es amplia o conceptual, dedica una consulta a revisiones y meta-analisis
+  (agregando review o meta-analysis a los conceptos centrales).
+- No uses comillas, comodines, parentesis, operadores booleanos ni signos de puntuacion.
+- "keywords": entre 4 y 8 conceptos sueltos EN INGLES (una o dos palabras) que deberian
+  aparecer en el titulo o el resumen de un articulo realmente relevante.
+"""
+
+# Palabras vacias que no aportan a la relevancia.
+_STOPWORDS = set("""
+a al algo algun alguna algunas alguno algunos ante antes aquel aquella aquellas aquello aquellos
+asi aun bajo bien cada como con contra cual cuales cualquier cuando de del desde donde dos durante
+e el ella ellas ello ellos en entre era eran eres es esa esas ese eso esos esta estaba estado estan
+estas este esto estos estoy fue fueron ha habia han hasta hay la las le les lo los mas me mi mis
+mucho muy no nos nuestra nuestro o os otra otro para pero poco por porque que quien se sea segun
+ser si sin so sobre son su sus tambien tan te tiene tienen todo todos tu tus un una unas uno unos
+u y ya yo
+
+about after again against all also an and any are because been before being between both but by can
+could did do does doing down during each few for from further had has have having here how into its
+itself just more most not now off on once only other our out over own same should some such than that
+the their them then there these they this those through too under until up very was were what when
+where which while who why will with would you your
+
+study studies paper papers article articles research evidence review reviews result results effect
+effects association associations role relationship between among using based approach
+""".split())
+
+
+def _normalize(text: object) -> str:
+    """Minusculas y sin tildes, para comparar terminos en espanol e ingles."""
+    raw = unicodedata.normalize('NFKD', str(text or ''))
+    return ''.join(ch for ch in raw if not unicodedata.combining(ch)).lower()
+
+
+def _word_set(text: object) -> set[str]:
+    return set(re.findall(r'[a-z0-9]{3,}', _normalize(text)))
+
+
+def _stems(words: set[str]) -> set[str]:
+    """Prefijos de 6 letras: aproximacion barata a un stemmer."""
+    return {word[:6] for word in words}
+
+
+def _hits(terms: list[str], stems: set[str]) -> int:
+    return sum(1 for term in terms if term[:6] in stems)
+
+
+def _clean_query(text: str) -> str:
+    # OpenAlex trata "*" y "?" como wildcards y exige busqueda exacta si aparecen;
+    # por eso se quitan junto con el resto de la puntuacion.
+    clean = re.sub(r'[,|"\'()?*¿¡!;:\[\]{}]', ' ', str(text or ''))
+    return re.sub(r'\s+', ' ', clean).strip()
+
+
+def _parse_json_object(raw: str) -> Optional[dict]:
+    text = str(raw or '').strip()
+    if text.startswith('```'):
+        text = re.sub(r'^```[a-zA-Z]*\s*', '', text)
+        text = re.sub(r'```\s*$', '', text).strip()
+    start = text.find('{')
+    end = text.rfind('}')
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _fallback_plan(question: str, query: str) -> dict:
+    """Plan sin costo: variantes heuristicas de la consulta traducida."""
+    base = _clean_query(query or question)
+    words = [w for w in re.findall(r'[a-zA-Z0-9]{3,}', base) if w.lower() not in _STOPWORDS]
+    keywords = list(dict.fromkeys(w.lower() for w in words))[:8]
+    key_query = ' '.join(words[:6])
+    queries = [base]
+    if key_query and key_query.lower() != base.lower():
+        queries.append(key_query)
+    if len(words) > 3:
+        queries.append(' '.join(words[:3]))
+    return {'queries': [q for q in queries if q], 'keywords': keywords}
+
+
+def _plan_terms(plan: Optional[dict], question: str, query: str) -> list[str]:
+    """Terminos con los que se puntua la relevancia de cada paper."""
+    terms: list[str] = []
+    for keyword in (plan or {}).get('keywords') or []:
+        terms.extend(_word_set(keyword))
+    terms.extend(_word_set(query))
+    terms.extend(_word_set(question))
+    ordered = [t for t in dict.fromkeys(terms) if t not in _STOPWORDS and len(t) >= 4]
+    return ordered[:24]
+
+
+def _plan_queries(plan: Optional[dict], question: str, query: str) -> list[str]:
+    candidates: list[str] = []
+    for item in (plan or {}).get('queries') or []:
+        if isinstance(item, str):
+            candidates.append(item)
+    if not candidates:
+        candidates = _fallback_plan(question, query)['queries']
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        value = _clean_query(item)[:160]
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(value)
+    return cleaned[:5]
 
 
 # ---------------------------------------------------------------------------
@@ -183,20 +324,30 @@ def _work_to_source(work: dict) -> dict:
     }
 
 
-def _params(query: str, access: str, per_page: int, sort: Optional[str] = None) -> dict:
-    # OpenAlex trata "*" y "?" como wildcards y exige busqueda exacta si aparecen;
-    # por eso se quitan junto con el resto de la puntuacion de la pregunta.
-    clean = re.sub(r'[,|"\'()?*¿¡!;:]', ' ', query or '')
-    clean = re.sub(r'\s+', ' ', clean).strip()[:300]
+def _params(
+    query: str,
+    access: str,
+    per_page: int,
+    sort: Optional[str] = None,
+    mode: str = 'broad',
+) -> dict:
+    clean = _clean_query(query)[:300]
     filters = [PSY_FIELDS, WORK_TYPES]
     if access in ('free', 'oneclick'):
         filters.append('is_oa:true')
     params = {
-        'search': clean,
         'filter': ','.join(filters),
         'per-page': str(per_page),
         'select': SELECT_FIELDS,
     }
+    # "precise" exige los terminos en titulo/resumen; "broad" usa el buscador
+    # general de OpenAlex; "title" restringe al titulo.
+    if mode == 'precise' and clean:
+        params['filter'] = f"{params['filter']},title_and_abstract.search:{clean}"
+    elif mode == 'title' and clean:
+        params['filter'] = f"{params['filter']},title.search:{clean}"
+    elif clean:
+        params['search'] = clean
     if OPENALEX_API_KEY:
         params['api_key'] = OPENALEX_API_KEY
     else:
@@ -253,53 +404,141 @@ async def _probe_oneclick(sources: list[dict], probe_fn) -> list[dict]:
     return [s for s in checked if s]
 
 
+def _work_key(work: dict) -> str:
+    oid = str(work.get('id') or '')
+    if oid:
+        return oid.rsplit('/', 1)[-1].lower()
+    doi = str(work.get('doi') or '').lower()
+    if doi:
+        return doi
+    return _normalize(work.get('title'))[:120]
+
+
+def _score_source(source: dict, terms: list[str]) -> tuple[float, float]:
+    """Devuelve (puntaje, relevancia). La relevancia es la fraccion de terminos
+    de la pregunta presentes en titulo, resumen y topicos del paper."""
+    title_stems = _stems(_word_set(source.get('title')))
+    abstract_stems = _stems(_word_set(source.get('abstract')))
+    topic_stems = _stems(_word_set(' '.join(source.get('topics') or [])))
+
+    if not terms:
+        relevance = 0.0
+    else:
+        title_hits = _hits(terms, title_stems)
+        abstract_hits = _hits(terms, abstract_stems)
+        topic_hits = _hits(terms, topic_stems)
+        relevance = min(
+            1.0,
+            (3.0 * title_hits + abstract_hits + 2.0 * topic_hits) / (3.0 * len(terms)),
+        )
+
+    score = relevance * 10.0
+    # Sin resumen no se puede sintetizar: penaliza fuerte frente a uno con texto.
+    score += 0.6 if source.get('abstract') else -1.2
+    # Senales de calidad: citas (en escala log) y vigencia.
+    score += min(math.log1p(max(0, int(source.get('citations') or 0))), 4.0) * 0.30
+    year = int(source.get('year') or 0)
+    if year >= time.gmtime().tm_year - 6:
+        score += 0.30
+    if source.get('type') == 'review':
+        score += 0.20
+    return score, relevance
+
+
+async def _collect(
+    params: dict,
+    semaphore: asyncio.Semaphore,
+    log_fn: Callable[[str], None],
+) -> list[dict]:
+    async with semaphore:
+        try:
+            payload = await _openalex_get(params)
+        except Exception as exc:  # noqa: BLE001 - una consulta caida no invalida el resto
+            log_fn(f'[chat-search] consulta fallo: {type(exc).__name__}: {_redact(exc)}')
+            return []
+    return [w for w in (payload.get('results') or []) if isinstance(w, dict)]
+
+
 async def search_sources(
     query: str,
     access: str = 'all',
     probe_fn: Optional[Callable[[str], Awaitable[dict]]] = None,
     log_fn: Callable[[str], None] = print,
+    plan: Optional[dict] = None,
+    question: str = '',
 ) -> tuple[list[dict], dict]:
-    """Busca papers y devuelve (fuentes, metadatos de la busqueda)."""
+    """Busca papers con varias consultas y devuelve solo los realmente afines."""
     query = (query or '').strip()
-    if not query:
-        return [], {'count': 0, 'query': ''}
+    question = (question or '').strip()
+    if not query and not question:
+        return [], {'count': 0, 'query': '', 'candidates': 0}
 
-    cache_key = f'{query.lower()}|{access}'
+    queries = _plan_queries(plan, question, query)
+    if not queries:
+        return [], {'count': 0, 'query': query, 'candidates': 0}
+
+    cache_key = f'{access}|' + '|'.join(sorted(q.lower() for q in queries))
     cached = _search_cache.get(cache_key)
     if cached and cached[0] > time.time():
-        return cached[1], {'count': len(cached[1]), 'query': query, 'cached': True}
+        return cached[1], {
+            'count': len(cached[1]),
+            'query': query,
+            'candidates': len(cached[1]),
+            'queries': queries,
+            'cached': True,
+        }
 
-    payload = await _openalex_get(_params(query, access, SEARCH_RESULTS))
-    works = [w for w in (payload.get('results') or []) if isinstance(w, dict)]
-    sources = [_work_to_source(w) for w in works]
+    # Cada consulta se lanza dos veces: restringida a titulo+resumen y en el
+    # buscador general. Se solapan en paralelo para ganar cobertura sin sumar
+    # latencia, y luego se deduplica por id/doi/titulo.
+    semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY)
+    tasks = []
+    for item in queries[:4]:
+        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='precise'), semaphore, log_fn))
+        tasks.append(_collect(_params(item, access, SEARCH_RESULTS, mode='broad'), semaphore, log_fn))
+    groups = await asyncio.gather(*tasks)
 
-    # Si el orden por relevancia dejo pocos abstracts, probamos por citas.
-    with_abstract = sum(1 for s in sources if s.get('abstract'))
-    if with_abstract < 4:
-        try:
-            alt = await _openalex_get(_params(query, access, SEARCH_RESULTS, sort='cited_by_count:desc'))
-            seen = {s.get('id') for s in sources}
-            for work in alt.get('results') or []:
-                source = _work_to_source(work)
-                if source.get('id') not in seen:
-                    seen.add(source.get('id'))
-                    sources.append(source)
-        except Exception as exc:  # noqa: BLE001 - la busqueda principal sigue siendo valida
-            log_fn(f'[chat-search] fallback por citas fallo: {exc}')
+    pool: dict[str, dict] = {}
+    for works in groups:
+        for work in works:
+            key = _work_key(work)
+            if key and key not in pool:
+                pool[key] = work
 
-    # Preferimos papers con abstract: son los que permiten sintetizar.
-    sources.sort(key=lambda s: (bool(s.get('abstract')), int(s.get('citations') or 0)), reverse=True)
+    sources = [_work_to_source(work) for work in pool.values()]
+    candidates = len(sources)
+    log_fn(f'[chat-search] {len(queries)} consultas | {candidates} papers unicos')
+
+    terms = _plan_terms(plan, question, query)
+    scored: list[tuple[float, float, dict]] = []
+    for source in sources:
+        score, relevance = _score_source(source, terms)
+        scored.append((score, relevance, source))
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    related = [source for _, relevance, source in scored if relevance >= MIN_RELEVANCE]
+    if len(related) < 4:
+        # Muy pocos papers superan el umbral: nos quedamos con los mejores por
+        # puntaje para no dejar la respuesta sin evidencia.
+        related = [source for _, _, source in scored][:MAX_SOURCES]
+    else:
+        related = related[:MAX_SOURCES]
 
     if access == 'oneclick' and probe_fn is not None:
-        sources = await _probe_oneclick(sources, probe_fn)
+        related = await _probe_oneclick(related, probe_fn)
 
-    sources = sources[:MAX_SOURCES]
     # Los abstracts se cachean en paralelo para no sumar latencia a la busqueda.
-    await asyncio.gather(*(_remember_abstract(source) for source in sources))
-    _search_cache[cache_key] = (time.time() + SEARCH_CACHE_TTL, sources)
+    await asyncio.gather(*(_remember_abstract(source) for source in related))
+    _search_cache[cache_key] = (time.time() + SEARCH_CACHE_TTL, related)
     if len(_search_cache) > 300:
         _search_cache.clear()
-    return sources, {'count': len(sources), 'query': query, 'cached': False}
+    return related, {
+        'count': len(related),
+        'query': query,
+        'candidates': candidates,
+        'queries': queries,
+        'cached': False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +643,94 @@ class ChatStartError(RuntimeError):
     pass
 
 
+async def _complete(
+    messages: list[dict],
+    api_keys: list[str],
+    max_tokens: int,
+    temperature: float = 0.2,
+) -> str:
+    """Llamada corta sin streaming (planificacion de la busqueda)."""
+    if not api_keys:
+        raise ChatStartError('No hay API key de DeepSeek configurada.')
+
+    payload = {
+        'model': CHAT_MODEL,
+        'messages': messages,
+        'temperature': temperature,
+        'stream': False,
+        'thinking': {'type': 'disabled'},
+        'max_tokens': max_tokens,
+    }
+    last_error: Optional[BaseException] = None
+    for attempt in range(min(len(api_keys), 2)):
+        key = api_keys[attempt % len(api_keys)]
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+                response = await client.post(
+                    DEEPSEEK_URL,
+                    headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+                    json=payload,
+                )
+            if response.status_code >= 400:
+                raise ChatStartError(f'DeepSeek HTTP {response.status_code}: {response.text[:200]}')
+            data = response.json()
+            choices = data.get('choices') or []
+            if not choices:
+                return ''
+            return (choices[0].get('message') or {}).get('content') or ''
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+    raise ChatStartError(f'No se pudo planificar la busqueda: {last_error}')
+
+
+async def _plan_search(
+    question: str,
+    query: str,
+    api_keys: list[str],
+    log_fn: Callable[[str], None],
+) -> dict:
+    """Pide al modelo 3-5 consultas y palabras clave para OpenAlex.
+
+    Si el modelo falla se usa un plan heuristico: la busqueda nunca se detiene
+    por culpa de la planificacion.
+    """
+    fallback = _fallback_plan(question, query)
+    try:
+        raw = await _complete(
+            [
+                {'role': 'system', 'content': PLANNER_PROMPT},
+                {
+                    'role': 'user',
+                    'content': (
+                        f'Pregunta del usuario: {question[:1200]}\n'
+                        f'Consulta traducida al ingles: {query[:300]}'
+                    ),
+                },
+            ],
+            api_keys,
+            max_tokens=PLANNER_MAX_OUTPUT,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_fn(f'[chat-plan] fallo: {type(exc).__name__}: {exc}')
+        return fallback
+
+    parsed = _parse_json_object(raw)
+    if not parsed:
+        log_fn('[chat-plan] respuesta no parseable; usando plan heuristico')
+        return fallback
+
+    queries = [q.strip() for q in (parsed.get('queries') or []) if isinstance(q, str) and q.strip()]
+    keywords = [k.strip() for k in (parsed.get('keywords') or []) if isinstance(k, str) and k.strip()]
+    if not queries:
+        queries = fallback['queries']
+    if not keywords:
+        keywords = fallback['keywords']
+    plan = {'queries': queries[:5], 'keywords': keywords[:10]}
+    log_fn(f'[chat-plan] {len(plan["queries"])} consultas: ' + ' | '.join(plan['queries']))
+    return plan
+
+
 async def _stream_completion(
     messages: list[dict],
     api_keys: list[str],
@@ -491,38 +818,72 @@ async def stream_chat(
     log_fn: Callable[[str], None] = print,
     client_id: str = '',
 ) -> AsyncIterator[str]:
-    """Genera eventos SSE: sources, delta, done o error."""
+    """Genera eventos SSE: status, delta, sources, done o error.
+
+    Las fuentes viajan al final, despues del texto, para que la respuesta se
+    lea como una redaccion y la lista de papers aparezca recien entonces.
+    """
     started = time.time()
     question = (question or '').strip()[:2000]
     if not question:
         yield _sse({'type': 'error', 'message': 'La pregunta esta vacia.'})
         return
 
+    def sources_event(sources: list[dict], meta: dict) -> str:
+        return _sse({
+            'type': 'sources',
+            'sources': sources,
+            'access': access,
+            'query': meta.get('query') or query,
+            'cached': bool(meta.get('cached')),
+        })
+
+    yield _sse({'type': 'status', 'text': 'Analizando la pregunta…'})
+    try:
+        plan = await _plan_search(question, query or question, api_keys, log_fn)
+    except Exception as exc:  # noqa: BLE001
+        log_fn(f'[chat-plan] error inesperado: {exc}')
+        plan = _fallback_plan(question, query or question)
+
+    query_count = len(_plan_queries(plan, question, query or question))
+    yield _sse({
+        'type': 'status',
+        'text': f'Buscando en {query_count} consultas de OpenAlex…',
+    })
+
     try:
         sources, search_meta = await search_sources(
-            query or question, access=access, probe_fn=probe_fn, log_fn=log_fn,
+            query or question,
+            access=access,
+            probe_fn=probe_fn,
+            log_fn=log_fn,
+            plan=plan,
+            question=question,
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] busqueda fallo: {type(exc).__name__}: {_redact(exc)}')
         yield _sse({'type': 'error', 'message': 'No se pudo buscar en OpenAlex. Intenta de nuevo.'})
         return
 
-    yield _sse({
-        'type': 'sources',
-        'sources': sources,
-        'access': access,
-        'query': search_meta.get('query') or query,
-        'cached': bool(search_meta.get('cached')),
-    })
-
     if not sources:
         yield _sse({
-            'type': 'delta',
-            'text': ('No encontre papers suficientes para responder con evidencia. '
-                     'Proba con otros terminos o cambia el filtro de acceso.'),
+            'type': 'status',
+            'text': 'Sin papers suficientemente relacionados.',
         })
+        yield _sse({
+            'type': 'delta',
+            'text': ('No encontre papers suficientemente relacionados con la pregunta. '
+                     'Proba reformulandola o cambia el filtro de acceso.'),
+        })
+        yield sources_event([], search_meta)
         yield _sse({'type': 'done', 'usage': {}, 'cost_usd': 0, 'sources_count': 0})
         return
+
+    candidates = int(search_meta.get('candidates') or len(sources))
+    yield _sse({
+        'type': 'status',
+        'text': f'{candidates} papers revisados, {len(sources)} relevantes. Redactando…',
+    })
 
     messages = _build_messages(question, sources, history)
     usage: dict = {}
@@ -537,6 +898,7 @@ async def stream_chat(
                 yield _sse({'type': 'delta', 'text': value})
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] generacion fallo: {type(exc).__name__}: {exc}')
+        yield sources_event(sources, search_meta)
         yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
         return
 
@@ -552,6 +914,7 @@ async def stream_chat(
         'source': 'chat',
         'access': access,
         'sources': len(sources),
+        'candidates': candidates,
         'cache_hit_tokens': int(usage.get('prompt_cache_hit_tokens') or 0),
         'elapsed_sec': elapsed,
         'client_id': client_id[:64],
@@ -568,6 +931,9 @@ async def stream_chat(
         f"{cost['total_tokens']} tokens (cache {cache_hit}) | "
         f"${cost['cost_usd']:.6f} USD | {elapsed}s"
     )
+    # Primero las fuentes y al final el cierre: el cliente las muestra recien
+    # cuando el texto ya esta completo.
+    yield sources_event(sources, search_meta)
     yield _sse({
         'type': 'done',
         'usage': usage,

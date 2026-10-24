@@ -4623,7 +4623,10 @@ function updateChatBubble(wrap, msg) {
   if (content) {
     answerEl.innerHTML = renderChatMarkdown(content, msg.sources || []);
   } else if (msg.streaming) {
-    answerEl.innerHTML = '<span class="chat-thinking"><i></i><i></i><i></i></span>';
+    const status = msg.status
+      ? `<span class="chat-status">${esc(msg.status)}</span>`
+      : '';
+    answerEl.innerHTML = `${status}<span class="chat-thinking"><i></i><i></i><i></i></span>`;
   } else {
     answerEl.innerHTML = '<p class="chat-empty-answer">No se generó respuesta.</p>';
   }
@@ -4800,7 +4803,12 @@ function stopChatStream() {
 
 function handleChatEvent(payload, msg, wrap) {
   if (!payload || !msg) return;
-  if (payload.type === 'sources') {
+  if (payload.type === 'status') {
+    // Fase de la búsqueda: se muestra mientras todavía no hay texto.
+    msg.status = payload.text || '';
+    if (!msg.content) scheduleChatBubbleUpdate(wrap, msg);
+  } else if (payload.type === 'sources') {
+    // Llegan al final del stream, cuando la respuesta ya está redactada.
     msg.sources = Array.isArray(payload.sources) ? payload.sources : [];
     scheduleChatBubbleUpdate(wrap, msg);
   } else if (payload.type === 'delta') {

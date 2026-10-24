@@ -84,11 +84,29 @@ actualiza la que pasás en `--update-env-vars`.
 | Variable | Default | Para qué sirve |
 |---|---|---|
 | `CHAT_MODEL` | `deepseek-flash` | Modelo de chat |
-| `CHAT_MAX_SOURCES` | `8` | Papers enviados al modelo por respuesta |
-| `CHAT_ABSTRACT_CHARS` | `900` | Recorte de cada abstract (tokens) |
-| `CHAT_MAX_OUTPUT_TOKENS` | `1000` | Largo máximo de la respuesta |
+| `CHAT_MAX_SOURCES` | `14` | Papers enviados al modelo por respuesta |
+| `CHAT_ABSTRACT_CHARS` | `1100` | Recorte de cada abstract |
+| `CHAT_MAX_OUTPUT_TOKENS` | `1400` | Largo máximo de la respuesta |
 | `CHAT_HISTORY_MESSAGES` | `6` | Turnos de historial que se reenvían |
 | `CHAT_SEARCH_CACHE_TTL` | `1800` | Segundos de caché de búsquedas OpenAlex |
+| `CHAT_SEARCH_RESULTS` | `25` | Papers que se piden por cada consulta |
+| `CHAT_MIN_RELEVANCE` | `0.14` | Umbral de relevancia para descartar papers |
+| `CHAT_SEARCH_CONCURRENCY` | `4` | Consultas simultáneas contra OpenAlex |
+| `CHAT_PLANNER_TOKENS` | `320` | Tope de tokens del planificador de búsquedas |
+
+### Cómo busca el chat
+
+1. El planificador (una llamada corta al mismo modelo) convierte la pregunta en
+   3-5 consultas en inglés con sinónimos técnicos y en palabras clave.
+2. Cada consulta se lanza dos veces en paralelo contra OpenAlex (búsqueda
+   restringida a título+resumen y búsqueda general); los resultados se
+   deduplican por id/DOI/título.
+3. Cada paper se puntúa por coincidencia de términos en título, resumen y
+   tópicos, más citas, vigencia, tipo (revisión) y disponibilidad de resumen.
+   Se descartan los que no superan `CHAT_MIN_RELEVANCE` y se envían al modelo
+   los `CHAT_MAX_SOURCES` mejores.
+4. El texto se transmite en streaming y, recién al final, viajan las fuentes
+   para que la interfaz las muestre debajo de la respuesta.
 
 ---
 

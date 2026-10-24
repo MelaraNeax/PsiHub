@@ -518,6 +518,14 @@
   border-color: rgba(138, 171, 144, 0.45);
 }
 
+.chat-status {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--txt-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
 .chat-thinking {
   display: inline-flex;
   align-items: center;
