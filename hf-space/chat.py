@@ -34,6 +34,10 @@ OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
 OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
 OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
+# Marca de la version del pipeline de chat. Se expone en /health para poder
+# confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
+CHAT_PIPELINE_VERSION = '2026-10-24-concepts-snowball-v2'
+
 MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '18')))
 ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1700')))
 MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '4200')))

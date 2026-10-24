@@ -761,6 +761,7 @@ async def health():
         'model': DEEPSEEK_MODEL,
         'chat_model': chat_service.CHAT_MODEL,
         'chat_keys': len(CHAT_API_KEYS),
+        'chat_pipeline': chat_service.CHAT_PIPELINE_VERSION,
         'pipeline_version': PIPELINE_VERSION,
     }
 
