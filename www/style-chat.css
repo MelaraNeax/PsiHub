@@ -812,10 +812,6 @@
   background: linear-gradient(to bottom, rgba(9, 9, 10, 0.4), var(--bg) 34%);
 }
 
-.chat-access-row {
-  display: none;
-}
-
 /* Filtro de acceso: un solo botón dentro del composer que abre las 3 opciones */
 .chat-filter {
   position: relative;
@@ -917,9 +913,6 @@
   opacity: 1;
 }
 
-.chat-access-hint {
-  display: none;
-}
 
 .chat-composer {
   display: flex;
@@ -1051,6 +1044,5 @@
 }
 
 @media (max-width: 360px) {
-  .chat-access-hint { display: none; }
   .chat-bubble-user { max-width: 92%; }
 }
