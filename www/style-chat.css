@@ -840,6 +840,12 @@
   font-size: 12px;
 }
 
+.chat-filter-btn .chat-filter-caret {
+  font-size: 8px;
+  color: var(--txt-3);
+  margin-left: -1px;
+}
+
 .chat-filter-btn:hover,
 .chat-filter-btn:active,
 .chat-filter-btn[aria-expanded="true"] {
