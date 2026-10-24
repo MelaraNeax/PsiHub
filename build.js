@@ -33,7 +33,7 @@ function copyDir(src, dest) {
 }
 
 // Archivos raíz
-const rootFiles = ['index.html', 'app.js', 'style.css', 'manifest.json'];
+const rootFiles = ['index.html', 'app.js', 'style.css', 'style-chat.css', 'manifest.json'];
 rootFiles.forEach(f => {
   const src = path.join(SRC, f);
   if (fs.existsSync(src)) {

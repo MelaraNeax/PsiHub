@@ -9,3 +9,5 @@ build/
 hf-space/.env
 cache/
 hf-space/cache/
+__pycache__/
+*.pyc

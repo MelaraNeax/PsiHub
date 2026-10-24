@@ -189,15 +189,19 @@ const responseCache = new Map();
 
 function sanitizeQuery(text) {
   return String(text || '')
-    .replace(/[,|"'()]/g, ' ')
+    // OpenAlex interpreta "*" y "?" como wildcards y responde 400 si no se
+    // pide busqueda exacta; se eliminan junto con la puntuacion de la frase.
+    .replace(/[,|"'()?*¿¡!;:]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function buildWorksParams({ query, subtype, sort, perPage, page, precise, apiKey, email }) {
+function buildWorksParams({ query, subtype, sort, perPage, page, precise, apiKey, email, access = 'all' }) {
   const extras = SUBTYPE_TERMS[subtype] || '';
   const fullQuery = sanitizeQuery(extras ? `${query} ${extras}` : query);
-  const filters = ['is_oa:true', PSY_FIELDS, WORK_TYPES];
+  const filters = [PSY_FIELDS, WORK_TYPES];
+  // "all" incluye papers de pago; "free" y "oneclick" piden acceso abierto.
+  if (access === 'free' || access === 'oneclick') filters.push('is_oa:true');
 
   if (precise && fullQuery) filters.push(`title_and_abstract.search:${fullQuery}`);
 
@@ -291,11 +295,12 @@ export async function fetchPapers({
   perPage = 10,
   page = 1,
   precise = true,
+  access = 'all',
   signal = null
 } = {}) {
   const apiKey = getOpenAlexApiKey();
   const email = getPoliteEmail();
-  const base = { query, subtype, sort, perPage, page, precise, apiKey, email };
+  const base = { query, subtype, sort, perPage, page, precise, apiKey, email, access };
 
   let data = await fetchWorksPage(buildWorksParams(base), signal);
 

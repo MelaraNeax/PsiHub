@@ -20,7 +20,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
     rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <link rel="stylesheet" href="style.css?v=39">
+  <link rel="stylesheet" href="style.css?v=40">
+  <link rel="stylesheet" href="style-chat.css?v=1">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
@@ -392,24 +393,95 @@
   </div>
 
   <!-- ══════════════════════════════════════
-       PÁGINA BUSCAR
+       PÁGINA CHAT — INVESTIGACIÓN CON IA
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-chat">
+    <div class="results-bg-glow chat-bg-glow"></div>
+
+    <header class="home-header chat-header">
+      <div class="home-header-top chat-header-top">
+        <div class="brand-block">
+          <h1 class="app-title">Chat</h1>
+          <p class="chat-header-sub">Investigá la literatura con IA</p>
+        </div>
+        <div class="chat-header-actions">
+          <button class="chat-icon-btn" id="btn-chat-history" aria-label="Historial" title="Historial de chats">
+            <i class="ph-bold ph-clock-counter-clockwise"></i>
+          </button>
+          <button class="chat-icon-btn chat-icon-btn-accent" id="btn-chat-new" aria-label="Nuevo chat"
+            title="Nuevo chat">
+            <i class="ph-bold ph-plus"></i>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Historial de conversaciones -->
+    <div class="chat-history-panel" id="chat-history-panel" hidden>
+      <div class="chat-history-head">
+        <span class="chat-history-title">Historial</span>
+        <button class="chat-history-close" id="btn-chat-history-close" aria-label="Cerrar historial">
+          <i class="ph-bold ph-x"></i>
+        </button>
+      </div>
+      <ul class="chat-history-list" id="chat-history-list"></ul>
+      <p class="chat-history-empty" id="chat-history-empty">Todavía no hay conversaciones guardadas.</p>
+    </div>
+
+    <div class="chat-scroll" id="chat-scroll">
+      <div class="chat-empty" id="chat-empty">
+        <div class="chat-empty-icon"><i class="ph-bold ph-sparkle"></i></div>
+        <h3 class="chat-empty-title">¿Qué querés investigar?</h3>
+        <p class="chat-empty-desc">
+          Preguntá en español. Busco papers, leo sus resúmenes y sintetizo la evidencia citando cada fuente.
+        </p>
+        <div class="chat-suggestions" id="chat-suggestions">
+          <button class="chat-suggestion" data-q="¿Qué dice la evidencia sobre la TCC para los trastornos de ansiedad?">TCC y ansiedad</button>
+          <button class="chat-suggestion" data-q="¿Qué estrategias mejoran la alianza terapéutica?">Alianza terapéutica</button>
+          <button class="chat-suggestion" data-q="¿Cuál es la evidencia sobre mindfulness en depresión?">Mindfulness y depresión</button>
+          <button class="chat-suggestion" data-q="¿Qué factores predicen el abandono de la psicoterapia?">Abandono de terapia</button>
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+    </div>
+
+    <div class="chat-composer-wrap">
+      <div class="chat-access-row">
+        <label class="chat-access-pill" for="chat-access-select">
+          <i class="ph-bold ph-lock-key"></i>
+          <select id="chat-access-select" aria-label="Tipo de acceso">
+            <option value="all">Todos los papers</option>
+            <option value="free">Solo gratis</option>
+            <option value="oneclick">Solo 1 clic</option>
+          </select>
+          <i class="ph-bold ph-caret-down"></i>
+        </label>
+        <span class="chat-access-hint" id="chat-access-hint"></span>
+      </div>
+      <form class="chat-composer" id="chat-form">
+        <textarea id="chat-input" rows="1" placeholder="Preguntá sobre psicoterapia, ansiedad, TCC…"
+          autocomplete="off" enterkeyhint="send"></textarea>
+        <button type="submit" class="chat-send-btn" id="btn-chat-send" aria-label="Enviar">
+          <i class="ph-bold ph-arrow-up"></i>
+        </button>
+      </form>
+      <p class="chat-disclaimer">Basado en abstracts de OpenAlex. Puede contener errores; verificá en la fuente.</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       PÁGINA RESULTADOS (desde el buscador del inicio)
   ══════════════════════════════════════ -->
   <div class="page hidden" id="page-search">
     <div class="results-bg-glow" id="results-bg-glow"></div>
 
-    <header class="home-header">
-      <div class="home-header-top" style="gap: 12px; margin-bottom: 8px;">
-        <div class="search-inline-wrapper active" id="search-page-wrapper" style="width: 100%; display: flex;">
-          <i class="ph-bold ph-magnifying-glass search-inline-icon"></i>
-          <input type="search" id="search-page-input" class="search-inline-input"
-            placeholder="Buscar artículos, autores, temas…" autocomplete="off" enterkeyhint="search"
-            style="opacity: 1; padding: 0 6px 0 10px;">
-          <button class="btn-clear-search" id="btn-clear-search-page" style="display:none;"><i
-              class="ph-bold ph-x"></i></button>
-          <button class="icon-btn search-inline-trigger" id="btn-do-search-page" aria-label="Buscar">
-            <i class="ph-bold ph-arrow-right"></i>
-          </button>
-        </div>
+    <header class="home-header results-top-bar">
+      <div class="home-header-top results-nav-row">
+        <button class="icon-btn results-back-btn" id="btn-results-back" aria-label="Volver al inicio">
+          <i class="ph-bold ph-arrow-left"></i>
+        </button>
+        <span class="results-nav-title">Resultados</span>
+        <span class="results-nav-spacer" aria-hidden="true"></span>
       </div>
     </header>
 
@@ -428,35 +500,30 @@
     </div>
 
     <div class="filter-bar" id="search-filter-bar" style="display: none;">
-      <label class="filter-sort-wrapper" for="results-sort">
-        <i class="ph-bold ph-faders"></i>
-        <select id="results-sort" class="sort-select">
-          <option value="">Relevancia</option>
-          <option value="cited_by_count:desc">Más citados</option>
-          <option value="publication_year:desc">Más recientes</option>
-        </select>
-        <i class="ph-bold ph-caret-down sort-caret"></i>
-      </label>
+      <div class="filter-controls">
+        <label class="filter-sort-wrapper" for="results-sort">
+          <i class="ph-bold ph-faders"></i>
+          <select id="results-sort" class="sort-select">
+            <option value="">Relevancia</option>
+            <option value="cited_by_count:desc">Más citados</option>
+            <option value="publication_year:desc">Más recientes</option>
+          </select>
+          <i class="ph-bold ph-caret-down sort-caret"></i>
+        </label>
+        <label class="filter-sort-wrapper filter-access-wrapper" for="results-access">
+          <i class="ph-bold ph-lock-key"></i>
+          <select id="results-access" class="sort-select">
+            <option value="all">Todos</option>
+            <option value="free">Gratis</option>
+            <option value="oneclick">1 clic</option>
+          </select>
+          <i class="ph-bold ph-caret-down sort-caret"></i>
+        </label>
+      </div>
       <span class="results-count" id="results-count"></span>
     </div>
 
     <div class="page-scroll results-scroll" id="search-results-scroll">
-
-      <!-- Búsqueda inicial vacía -->
-      <div class="search-initial-box" id="search-initial" style="display:flex;">
-        <div class="search-initial-icon-wrap">
-          <i class="ph-bold ph-magnifying-glass"></i>
-        </div>
-        <h3 class="search-initial-title">Explorá la literatura científica</h3>
-        <p class="search-initial-desc">Ingresá un término para buscar o elegí una corriente psicoterapéutica.</p>
-        <div class="search-initial-chips" id="search-initial-chips">
-          <button class="search-chip" data-query="Terapia Cognitivo Conductual">TCC</button>
-          <button class="search-chip" data-query="Neurociencia cognitiva">Neurociencia</button>
-          <button class="search-chip" data-query="Psicoanálisis y psicodinámica">Psicoanálisis</button>
-          <button class="search-chip" data-query="Mindfulness y compasión">Mindfulness</button>
-          <button class="search-chip" data-query="Trastornos de ansiedad">Ansiedad</button>
-        </div>
-      </div>
 
       <div class="state-loading" id="results-loading" style="display:none;">
         <div class="spinner"></div>
@@ -464,7 +531,7 @@
       </div>
       <div class="state-empty" id="results-empty" style="display:none;">
         <i class="ph-bold ph-file-dashed"></i>
-        <p>No se encontraron resultados en acceso abierto para este filtro.</p>
+        <p>No se encontraron resultados para este filtro.</p>
       </div>
       <div class="state-error" id="results-error" style="display:none;">
         <i class="ph-bold ph-warning-diamond"></i>
@@ -531,9 +598,9 @@
       <i class="ph-bold ph-books"></i>
       <span class="nav-label">Biblioteca</span>
     </button>
-    <button class="nav-btn" data-page="search" id="nav-search">
-      <i class="ph-bold ph-magnifying-glass"></i>
-      <span class="nav-label">Buscar</span>
+    <button class="nav-btn" data-page="chat" id="nav-chat">
+      <i class="ph-bold ph-chat-circle-dots"></i>
+      <span class="nav-label">Chat</span>
     </button>
     <button class="nav-btn" data-page="profile" id="nav-profile">
       <i class="ph-bold ph-user-circle"></i>

@@ -22,6 +22,8 @@ COST_PREFIX = os.getenv('COST_PREFIX', 'costs').strip('/')
 # DeepSeek V4.1 Flash: USD por millon de tokens (tarifa estandar).
 PRICE_INPUT = float(os.getenv('DEEPSEEK_PRICE_INPUT', '0.15'))
 PRICE_OUTPUT = float(os.getenv('DEEPSEEK_PRICE_OUTPUT', '0.60'))
+# Tokens de entrada servidos desde la cache de prompt (mucho mas baratos).
+PRICE_CACHE_HIT = float(os.getenv('DEEPSEEK_PRICE_CACHE_HIT', '0.03'))
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '').strip()
 ADMIN_TOKEN_OBJECT = os.getenv('ADMIN_TOKEN_OBJECT', 'admin/token.txt').strip('/')
 # Hash SHA-256 de la frase de acceso; permite abrir /costos sin guardar el texto.
@@ -44,18 +46,30 @@ class LedgerError(RuntimeError):
 
 
 def estimate_cost(usage: dict) -> dict:
-    """Calcula el costo estimado en USD a partir del usage de DeepSeek."""
+    """Calcula el costo estimado en USD a partir del usage de DeepSeek.
+
+    Los tokens que pegan en la cache de prompt se cobran mas barato, por eso
+    se descuentan del tramo de entrada a precio pleno.
+    """
     prompt = int(usage.get('prompt_tokens') or 0)
     completion = int(usage.get('completion_tokens') or 0)
     total = int(usage.get('total_tokens') or (prompt + completion))
-    cost = (prompt * PRICE_INPUT + completion * PRICE_OUTPUT) / 1_000_000
+    cache_hit = min(int(usage.get('prompt_cache_hit_tokens') or 0), prompt)
+    prompt_miss = prompt - cache_hit
+    cost = (
+        prompt_miss * PRICE_INPUT
+        + cache_hit * PRICE_CACHE_HIT
+        + completion * PRICE_OUTPUT
+    ) / 1_000_000
     return {
         'prompt_tokens': prompt,
         'completion_tokens': completion,
         'total_tokens': total,
+        'cache_hit_tokens': cache_hit,
         'cost_usd': round(cost, 6),
         'price_input_per_m': PRICE_INPUT,
         'price_output_per_m': PRICE_OUTPUT,
+        'price_cache_hit_per_m': PRICE_CACHE_HIT,
     }
 
 
@@ -175,12 +189,17 @@ def list_costs(limit: int = 300) -> list[dict]:
 
 def summarize(records: Iterable[dict]) -> dict:
     records = list(records)
+    chats = [r for r in records if r.get('kind') == 'chat']
+    documents = [r for r in records if r.get('kind') != 'chat']
     return {
-        'documents': len(records),
-        'pages': sum(int(r.get('pages') or 0) for r in records),
+        'entries': len(records),
+        'documents': len(documents),
+        'chats': len(chats),
+        'pages': sum(int(r.get('pages') or 0) for r in documents),
         'prompt_tokens': sum(int(r.get('prompt_tokens') or 0) for r in records),
         'completion_tokens': sum(int(r.get('completion_tokens') or 0) for r in records),
         'total_tokens': sum(int(r.get('total_tokens') or 0) for r in records),
+        'cache_hit_tokens': sum(int(r.get('cache_hit_tokens') or 0) for r in records),
         'cost_usd': round(sum(float(r.get('cost_usd') or 0) for r in records), 6),
     }
 

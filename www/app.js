@@ -328,6 +328,7 @@ const S = {
   activeSubtype: 'all',
   activeCorriente: null,
   sort: null,
+  accessFilter: 'all', // all | free | oneclick
   page: 1,
   perPage: 10,
   total: 0,
@@ -342,6 +343,12 @@ const S = {
   currentPaper: null,
   deferredInstall: null,
   readerDocId: null,
+
+  // Chat
+  chats: loadData('psyhub_chats_v1', []),
+  activeChatId: null,
+  chatStreaming: false,
+  chatController: null,
 
   // Historias / Explorar
   stories: [],
@@ -368,11 +375,11 @@ function initDOMRefs() {
     pageHome: $('page-home'),
     pageExplore: $('page-explore'),
     pageLibrary: $('page-library'),
+    pageChat: $('page-chat'),
     pageSearch: $('page-search'),
     pageProfile: $('page-profile'),
 
     // Home
-    btnSearchOpen: $('btn-search-open'),
     searchInlineWrapper: $('search-inline-wrapper'),
     searchInput: $('search-input'),
     btnClearSearch: $('btn-clear-search'),
@@ -408,12 +415,8 @@ function initDOMRefs() {
     resultsHeader: $('results-header'),
     resultsHeaderLabel: $('results-header-label'),
     resultsHeaderTitle: $('results-header-title'),
-    searchPageWrapper: $('search-page-wrapper'),
-    searchPageInput: $('search-page-input'),
-    btnClearSearchPage: $('btn-clear-search-page'),
-    btnDoSearchPage: $('btn-do-search-page'),
-    searchInitial: $('search-initial'),
-    searchInitialChips: $('search-initial-chips'),
+    btnResultsBack: $('btn-results-back'),
+    resultsAccess: $('results-access'),
     searchResultsScroll: $('search-results-scroll'),
     searchSubtabsBar: $('search-subtabs-bar'),
     searchFilterBar: $('search-filter-bar'),
@@ -432,6 +435,23 @@ function initDOMRefs() {
     scrollRetryContainer: $('scroll-retry-container'),
     btnLoadMoreRetry: $('btn-load-more-retry'),
     btnLoadMore: $('btn-load-more'),
+
+    // Chat
+    chatScroll: $('chat-scroll'),
+    chatEmpty: $('chat-empty'),
+    chatMessages: $('chat-messages'),
+    chatForm: $('chat-form'),
+    chatInput: $('chat-input'),
+    btnChatSend: $('btn-chat-send'),
+    chatAccessSelect: $('chat-access-select'),
+    chatAccessHint: $('chat-access-hint'),
+    chatSuggestions: $('chat-suggestions'),
+    btnChatNew: $('btn-chat-new'),
+    btnChatHistory: $('btn-chat-history'),
+    chatHistoryPanel: $('chat-history-panel'),
+    chatHistoryList: $('chat-history-list'),
+    chatHistoryEmpty: $('chat-history-empty'),
+    btnChatHistoryClose: $('btn-chat-history-close'),
 
     // Modal
     modalOverlay: $('modal-overlay'),
@@ -579,12 +599,13 @@ function navigateTo(page) {
   }
 
   S.activePage = page;
-  const pages = { home: el.pageHome, explore: el.pageExplore, library: el.pageLibrary, search: el.pageSearch, profile: el.pageProfile };
+  const pages = { home: el.pageHome, explore: el.pageExplore, library: el.pageLibrary, chat: el.pageChat, search: el.pageSearch, profile: el.pageProfile };
   Object.values(pages).forEach(p => p.classList.add('hidden'));
   pages[page].classList.remove('hidden');
   el.navBtns.forEach(b => b.classList.toggle('active', b.dataset.page === page));
   if (page === 'profile' || page === 'library') refreshProfile();
   if (page === 'library' && typeof refreshProcessedArticles === 'function') refreshProcessedArticles();
+  if (page === 'chat') initChat();
   if (page === 'explore') {
     if (!S.stories || S.stories.length === 0) {
       loadStories();
@@ -654,15 +675,12 @@ function openCorriente(corriente) {
   if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
   if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
   if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
-  if (el.searchPageInput) {
-    el.searchPageInput.value = '';
-    if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
-  }
 
   el.resultsHeader.style.background = ''; // Remover fondo para que se vea solo la nebula
   el.resultsHeaderLabel.textContent = 'Corriente psicoterapéutica';
   el.resultsHeaderTitle.textContent = corriente.label;
   if (el.resultsSort) el.resultsSort.value = 'cited_by_count:desc';
+  if (el.resultsAccess) el.resultsAccess.value = S.accessFilter;
 
   el.subtabBtns.forEach(b => b.classList.toggle('active', b.dataset.type === 'all'));
 
@@ -714,11 +732,7 @@ async function doSearch(query) {
   el.resultsHeaderLabel.textContent = 'Búsqueda';
   el.resultsHeaderTitle.textContent = `"${displayQuery}"`;
   el.subtabBtns.forEach(b => b.classList.toggle('active', b.dataset.type === 'all'));
-
-  if (el.searchPageInput) {
-    el.searchPageInput.value = displayQuery;
-    if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'flex';
-  }
+  if (el.resultsAccess) el.resultsAccess.value = S.accessFilter;
 
   updateGlow();
   showResults();
@@ -726,11 +740,6 @@ async function doSearch(query) {
 
   // Traducir/expandir la query a inglés sin mostrarla al usuario
   const englishQuery = await smartExpandQuery(displayQuery);
-
-  // Si el usuario ya cambió de búsqueda mientras traducía, abortar
-  if (el.searchPageInput && el.searchPageInput.value.trim() !== displayQuery) {
-    return;
-  }
 
   S.baseQuery = englishQuery; // OpenAlex recibe la versión en inglés
 
@@ -756,7 +765,6 @@ function resetSearchToInitial() {
 
   if (el.paperList) el.paperList.innerHTML = '';
   cardEls.clear();
-  if (el.searchInitial) el.searchInitial.style.display = 'flex';
   if (el.resultsHeader) el.resultsHeader.style.display = 'none';
   if (el.searchSubtabsBar) el.searchSubtabsBar.style.display = 'none';
   if (el.searchFilterBar) el.searchFilterBar.style.display = 'none';
@@ -768,9 +776,6 @@ function resetSearchToInitial() {
   if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
   if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
   if (el.resultsCount) el.resultsCount.textContent = '';
-  if (el.searchPageInput && !el.searchPageInput.value) {
-    if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
-  }
 }
 
 function showResults() {
@@ -779,18 +784,18 @@ function showResults() {
   }
   S.resultsOpen = true;
 
-  if (el.searchInitial) el.searchInitial.style.display = 'none';
   if (el.resultsHeader) el.resultsHeader.style.display = 'flex';
   if (el.searchSubtabsBar) el.searchSubtabsBar.style.display = 'flex';
   if (el.searchFilterBar) el.searchFilterBar.style.display = 'flex';
+  if (el.resultsAccess) el.resultsAccess.value = S.accessFilter;
 }
 
 function closeResults(animated = true) {
   if (!S.resultsOpen && !S.baseQuery) return;
   S.resultsOpen = false;
   resetSearchToInitial();
-  if (el.searchPageInput) el.searchPageInput.value = '';
   resetInlineSearch();
+  if (S.activePage === 'search') navigateTo('home');
 }
 
 let currentFetchController = null;
@@ -833,12 +838,19 @@ async function doFetch({ nextPage = false } = {}) {
   }
 
   try {
+    const needsVerification = S.accessFilter === 'oneclick';
+    if (needsVerification && el.resultsLoading) {
+      const label = el.resultsLoading.querySelector('p');
+      if (label) label.textContent = 'Verificando descarga en 1 clic…';
+    }
+
     const { results, meta } = await fetchPapers({
       query: S.baseQuery,
       subtype: S.activeSubtype,
       sort: S.sort || null,
-      perPage: S.perPage,
+      perPage: needsVerification ? Math.max(S.perPage, 15) : S.perPage,
       page: requestedPage,
+      access: S.accessFilter,
       signal
     });
 
@@ -851,6 +863,12 @@ async function doFetch({ nextPage = false } = {}) {
         return s[S.activeSubtype] > 0;
       });
       finalResults = filtered.length > 0 ? filtered : results;
+    }
+
+    // "Solo 1 clic": se muestran únicamente los PDF cuya descarga directa
+    // quedó verificada por el backend (sin login ni pasos intermedios).
+    if (needsVerification) {
+      finalResults = await filterOneClickPapers(finalResults, signal);
     }
 
     if (signal.aborted) return;
@@ -875,7 +893,9 @@ async function doFetch({ nextPage = false } = {}) {
     S.page = requestedPage;
 
     if (el.resultsCount && !signal.aborted) {
-      el.resultsCount.textContent = `${S.total.toLocaleString('es')} resultados`;
+      el.resultsCount.textContent = S.accessFilter === 'oneclick'
+        ? `${S.papers.length} en 1 clic`
+        : `${S.total.toLocaleString('es')} resultados`;
     }
 
     if (S.papers.length === 0) {
@@ -948,6 +968,10 @@ async function doFetch({ nextPage = false } = {}) {
       if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'flex';
     }
   } finally {
+    if (el.resultsLoading) {
+      const label = el.resultsLoading.querySelector('p');
+      if (label) label.textContent = 'Buscando en OpenAlex…';
+    }
     if (!signal.aborted) {
       S.loading = false;
     }
@@ -1190,16 +1214,19 @@ function handleReaderTranslationError(error, paper) {
 }
 
 function updatePaperAutomaticBadges(paper) {
-  if (!paper || !paper.pdfChecked) return;
+  if (!paper) return;
 
   // 1. Actualizar badges de disponibilidad en las tarjetas del DOM.
-  //    "Libre" solo aparece si el PDF se puede bajar en un clic.
-  const badges = document.querySelectorAll('.auto-badge-container');
-  badges.forEach(b => {
-    if (b.dataset.id === paper.id) {
-      b.innerHTML = paper.isAutomatic ? freeBadgeHtml() : '';
-    }
-  });
+  //    "Libre" solo aparece si el PDF se puede bajar en un clic; los papers de
+  //    pago muestran candado cerrado y los de acceso abierto, candado abierto.
+  if (paper.pdfChecked || paper.isOa !== undefined) {
+    const badges = document.querySelectorAll('.auto-badge-container');
+    badges.forEach(b => {
+      if (b.dataset.id === paper.id) {
+        b.innerHTML = accessBadgeHtml(paper);
+      }
+    });
+  }
 
   // 2. Si el modal abierto corresponde a este paper, actualizar la acción
   updateModalPaperAction(paper);
@@ -1438,6 +1465,66 @@ function validatePdfUrls(papers) {
   papersToCheck.forEach(p => checkPaperPdf(p));
 }
 
+/**
+ * Verifica un paper para el filtro "Solo 1 clic" y devuelve si es descargable
+ * directo. Reutiliza la caché de la sesión para no repetir peticiones.
+ */
+async function verifyPaperOneClick(paper, signal) {
+  if (!paper) return false;
+  if (paper.pdfChecked) return paper.isAutomatic === true;
+
+  const url = paper.pdfUrl || paper.oaUrl;
+  if (!url) {
+    applyPdfResult(paper, false, 'no-url');
+    return false;
+  }
+
+  const cached = checkedPdfUrls.get(url);
+  if (cached && !cached.pending) {
+    applyPdfResult(paper, cached.isAutomatic, cached.status);
+    return cached.isAutomatic === true;
+  }
+
+  // Filtro barato: los editores con login y los papers de pago no necesitan
+  // una petición de red para descartarse.
+  if (!metadataSaysFree(paper, url)) {
+    checkedPdfUrls.set(url, { isAutomatic: false, status: 'metadata-gated', pending: false });
+    applyPdfResult(paper, false, 'metadata-gated');
+    return false;
+  }
+
+  if (signal?.aborted) return false;
+  try {
+    const verdict = await resolvePdfUrl(url);
+    const isAuto = verdict.ok === true;
+    const status = verdict.reason || (isAuto ? 'verified' : 'not-free');
+    checkedPdfUrls.set(url, { isAutomatic: isAuto, status, pending: false });
+    applyPdfResult(paper, isAuto, status);
+    return isAuto;
+  } catch {
+    checkedPdfUrls.set(url, { isAutomatic: false, status: 'unverified', pending: false });
+    applyPdfResult(paper, false, 'unverified');
+    return false;
+  }
+}
+
+async function filterOneClickPapers(papers, signal) {
+  if (!Array.isArray(papers) || papers.length === 0) return [];
+  const keep = new Array(papers.length).fill(false);
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < papers.length && !signal?.aborted) {
+      const index = cursor++;
+      keep[index] = await verifyPaperOneClick(papers[index], signal);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(5, papers.length) }, worker));
+  if (signal?.aborted) return [];
+  return papers.filter((_, index) => keep[index]);
+}
+
 function renderPapers(papers, append) {
   const frag = document.createDocumentFragment();
   if (!append) {
@@ -1456,6 +1543,28 @@ function renderPapers(papers, append) {
 
 function freeBadgeHtml() {
   return `<span class="free-badge" title="PDF descargable en un clic · traducción automática"><i class="ph-bold ph-lock-open"></i>Libre</span>`;
+}
+
+function oaBadgeHtml() {
+  return `<span class="access-badge is-open" title="Acceso abierto: el PDF puede estar disponible en la revista"><i class="ph-bold ph-lock-open"></i>Gratis</span>`;
+}
+
+function paidBadgeHtml() {
+  return `<span class="access-badge is-paid" title="Paper de pago: requiere suscripción o compra"><i class="ph-bold ph-lock"></i>Pago</span>`;
+}
+
+/**
+ * Estado de acceso de un paper:
+ *   Libre   → PDF verificado, descarga directa en un clic.
+ *   Gratis  → acceso abierto, pero todavía no se confirmó la descarga directa.
+ *   Pago    → sin acceso abierto.
+ */
+function accessBadgeHtml(paper) {
+  if (!paper) return '';
+  if (paper.pdfChecked && paper.isAutomatic) return freeBadgeHtml();
+  if (paper.isOa === false) return paidBadgeHtml();
+  if (paper.isOa === true) return oaBadgeHtml();
+  return '';
 }
 
 function updateCardTranslations(papers) {
@@ -1497,7 +1606,7 @@ function buildCard(paper, onBookmarkChange) {
       <div class="paper-card-meta">
         ${paper.year ? `<span><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span><span class="meta-dot">·</span>` : ''}
         <span><i class="ph-bold ph-quotes"></i>${cites} citas</span>
-        <div class="auto-badge-container" data-id="${esc(paper.id)}" data-url="${esc(paper.pdfUrl || paper.oaUrl || '')}">${(paper.pdfChecked && paper.isAutomatic) ? freeBadgeHtml() : ''}</div>
+        <div class="auto-badge-container" data-id="${esc(paper.id)}" data-url="${esc(paper.pdfUrl || paper.oaUrl || '')}">${accessBadgeHtml(paper)}</div>
       </div>
     </div>
     <button class="btn-card-bk ${isBk ? 'saved' : ''}" data-id="${esc(paper.id || '')}" data-doi="${esc(paper.doi || '')}" aria-label="Guardar">
@@ -3016,27 +3125,9 @@ window.removeSavedPaperByIndex = removeSavedPaperByIndex;
 // ═══════════════════════════════════════════════════
 
 function setupEventListeners() {
-  // Nav con doble toque en la lupa para reiniciar
-  let lastNavSearchClick = 0;
   el.navBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const targetPage = btn.dataset.page;
-      if (targetPage === 'search') {
-        const now = Date.now();
-        // Si se presiona 2 veces seguidas (dentro de 600ms) o si ya está activa la página de búsqueda
-        if ((now - lastNavSearchClick < 600) || (S.activePage === 'search' && (S.baseQuery || S.papers.length > 0 || (el.searchPageInput && el.searchPageInput.value)))) {
-          resetSearchToInitial();
-          if (el.searchPageInput) {
-            el.searchPageInput.value = '';
-            el.searchPageInput.focus();
-          }
-          if (el.searchResultsScroll) {
-            el.searchResultsScroll.scrollTop = 0;
-          }
-          showToast('Búsqueda reiniciada');
-        }
-        lastNavSearchClick = now;
-      }
       navigateTo(targetPage);
     });
   });
@@ -3063,79 +3154,38 @@ function setupEventListeners() {
     });
   }
 
-  // Página Buscar
-  function triggerSearchPage() {
-    if (!el.searchPageInput) return;
-    const q = el.searchPageInput.value.trim();
-    if (q) {
-      if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'none';
-      doSearch(q);
-    } else {
-      resetSearchToInitial();
-    }
-  }
-
-  if (el.searchPageInput) {
-    el.searchPageInput.addEventListener('input', () => {
-      const v = el.searchPageInput.value;
-      if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = v ? 'flex' : 'none';
-      if (!v.trim()) {
-        resetSearchToInitial();
-      }
-    });
-    el.searchPageInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        triggerSearchPage();
-      }
+  // Volver desde resultados al inicio
+  if (el.btnResultsBack) {
+    el.btnResultsBack.addEventListener('click', () => {
+      closeResults();
+      navigateTo('home');
     });
   }
 
-  if (el.btnClearSearchPage) {
-    el.btnClearSearchPage.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (el.searchPageInput) el.searchPageInput.value = '';
-      resetSearchToInitial();
+  // Tipo de acceso de los resultados: todos / gratis / 1 clic
+  if (el.resultsAccess) {
+    el.resultsAccess.addEventListener('change', () => {
+      if (!S.baseQuery) return;
+      if (currentFetchController) {
+        try { currentFetchController.abort(); } catch { }
+      }
+      S.accessFilter = el.resultsAccess.value || 'all';
+      S.page = 1;
+      S.papers = [];
+      S.hasMore = false;
+      el.paperList.innerHTML = '';
+      if (el.resultsCount) el.resultsCount.textContent = '';
+      if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+      if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+      if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+      if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+      if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
+      doFetch();
     });
   }
 
-  let lastSearchPageBtnClick = 0;
-  if (el.btnDoSearchPage) {
-    el.btnDoSearchPage.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const now = Date.now();
-      if (now - lastSearchPageBtnClick < 600) {
-        // Doble toque a la lupa: reiniciar búsqueda
-        lastSearchPageBtnClick = 0;
-        resetSearchToInitial();
-        if (el.searchPageInput) {
-          el.searchPageInput.value = '';
-          el.searchPageInput.focus();
-        }
-        if (el.searchResultsScroll) {
-          el.searchResultsScroll.scrollTop = 0;
-        }
-        showToast('Búsqueda reiniciada');
-        return;
-      }
-      lastSearchPageBtnClick = now;
-      triggerSearchPage();
-    });
-  }
-
-  // Chips sugeridos de búsqueda inicial
-  if (el.searchInitialChips) {
-    el.searchInitialChips.addEventListener('click', (e) => {
-      const chip = e.target.closest('.search-chip');
-      if (chip && chip.dataset.query) {
-        if (el.searchPageInput) {
-          el.searchPageInput.value = chip.dataset.query;
-          if (el.btnClearSearchPage) el.btnClearSearchPage.style.display = 'flex';
-        }
-        doSearch(chip.dataset.query);
-      }
-    });
-  }
+  // Chat
+  setupChatEventListeners();
 
   // Guardados (Delegación de respaldo)
   el.savedList.addEventListener('click', e => {
@@ -3179,12 +3229,13 @@ function setupEventListeners() {
     }
   });
 
-  // "Ver todas" → página de búsqueda
+  // "Ver todas" → enfoca el buscador del inicio
   const btnAllTopics = $('btn-all-topics');
   if (btnAllTopics) {
     btnAllTopics.addEventListener('click', () => {
-      navigateTo('search');
-      setTimeout(() => el.searchPageInput?.focus(), 250);
+      navigateTo('home');
+      setHomeSearchOpen(true);
+      setTimeout(() => el.searchInput?.focus(), 250);
     });
   }
 
@@ -4357,3 +4408,632 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+// ═══════════════════════════════════════════════════
+// CHAT — INVESTIGACIÓN CON IA (OpenAlex + DeepSeek)
+// ═══════════════════════════════════════════════════
+
+const CHAT_STORE_KEY = 'psyhub_chats_v1';
+const CHAT_ACCESS_KEY = 'psyhub_chat_access';
+const CHAT_MAX_STORED = 40;
+let chatRenderRaf = null;
+let chatAutoScroll = true;
+
+function newChatId() {
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function getChatClientId() {
+  try {
+    let id = localStorage.getItem('psyhub_client_id');
+    if (!id) {
+      id = 'u-' + Math.random().toString(36).slice(2, 12);
+      localStorage.setItem('psyhub_client_id', id);
+    }
+    return id;
+  } catch {
+    return '';
+  }
+}
+
+function getActiveChat() {
+  if (!S.activeChatId) return null;
+  return S.chats.find(c => c.id === S.activeChatId) || null;
+}
+
+function persistChats() {
+  if (S.chats.length > CHAT_MAX_STORED) S.chats = S.chats.slice(0, CHAT_MAX_STORED);
+  // Evita llenar localStorage con conversaciones eternas.
+  S.chats.forEach(chat => {
+    if (Array.isArray(chat.messages) && chat.messages.length > 60) {
+      chat.messages = chat.messages.slice(-60);
+    }
+  });
+  saveData(CHAT_STORE_KEY, S.chats);
+}
+
+function createChat({ focus = true } = {}) {
+  stopChatStream();
+  const access = el.chatAccessSelect?.value || 'all';
+  const chat = {
+    id: newChatId(),
+    title: 'Nueva conversación',
+    access,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: []
+  };
+  S.chats.unshift(chat);
+  S.activeChatId = chat.id;
+  persistChats();
+  renderChatHistory();
+  renderActiveChat();
+  closeChatHistory();
+  if (focus) setTimeout(() => el.chatInput?.focus(), 120);
+  return chat;
+}
+
+function deleteChat(id) {
+  const chat = S.chats.find(c => c.id === id);
+  if (!chat) return;
+  const hasMessages = Array.isArray(chat.messages) && chat.messages.length > 0;
+  if (hasMessages && !confirm('¿Eliminar esta conversación?')) return;
+  if (S.activeChatId === id) {
+    stopChatStream();
+    S.activeChatId = null;
+  }
+  S.chats = S.chats.filter(c => c.id !== id);
+  if (!S.activeChatId && S.chats.length) S.activeChatId = S.chats[0].id;
+  persistChats();
+  renderChatHistory();
+  renderActiveChat();
+}
+
+function selectChat(id) {
+  if (S.activeChatId === id) {
+    closeChatHistory();
+    return;
+  }
+  stopChatStream();
+  S.activeChatId = id;
+  const chat = getActiveChat();
+  if (chat && el.chatAccessSelect) {
+    el.chatAccessSelect.value = chat.access || 'all';
+    updateChatAccessHint();
+  }
+  renderChatHistory();
+  renderActiveChat();
+  closeChatHistory();
+}
+
+function renderChatHistory() {
+  if (!el.chatHistoryList) return;
+  const chats = [...S.chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  if (el.chatHistoryEmpty) el.chatHistoryEmpty.style.display = chats.length ? 'none' : 'block';
+
+  el.chatHistoryList.innerHTML = chats.map(chat => {
+    const active = chat.id === S.activeChatId;
+    const date = new Date(chat.updatedAt || chat.createdAt || Date.now());
+    const when = date.toLocaleDateString('es', { day: 'numeric', month: 'short' });
+    return `
+      <li class="chat-history-item${active ? ' active' : ''}">
+        <button class="chat-history-open" data-chat-id="${esc(chat.id)}">
+          <span class="chat-history-item-title">${esc(chat.title || 'Nueva conversación')}</span>
+          <span class="chat-history-item-meta">${when}</span>
+        </button>
+        <button class="chat-history-delete" data-delete-id="${esc(chat.id)}" aria-label="Eliminar chat" title="Eliminar">
+          <i class="ph-bold ph-trash"></i>
+        </button>
+      </li>`;
+  }).join('');
+}
+
+function toggleChatHistory(forceOpen) {
+  if (!el.chatHistoryPanel) return;
+  const open = typeof forceOpen === 'boolean' ? forceOpen : el.chatHistoryPanel.hasAttribute('hidden');
+  if (open) {
+    renderChatHistory();
+    el.chatHistoryPanel.removeAttribute('hidden');
+  } else {
+    el.chatHistoryPanel.setAttribute('hidden', '');
+  }
+}
+
+function closeChatHistory() {
+  if (el.chatHistoryPanel) el.chatHistoryPanel.setAttribute('hidden', '');
+}
+
+function updateChatAccessHint() {
+  if (!el.chatAccessHint) return;
+  const access = el.chatAccessSelect?.value || 'all';
+  el.chatAccessHint.textContent = access === 'free'
+    ? 'Solo acceso abierto'
+    : access === 'oneclick'
+      ? 'Solo PDF verificados en 1 clic'
+      : 'Incluye papers de pago';
+}
+
+function initChat() {
+  if (!el.chatMessages) return;
+  if (el.chatAccessSelect) {
+    let saved = 'all';
+    try { saved = localStorage.getItem(CHAT_ACCESS_KEY) || 'all'; } catch { }
+    el.chatAccessSelect.value = saved;
+    updateChatAccessHint();
+  }
+
+  if (!S.activeChatId && S.chats.length) {
+    S.activeChatId = [...S.chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0].id;
+  }
+  renderChatHistory();
+  renderActiveChat();
+}
+
+function renderActiveChat() {
+  if (!el.chatMessages || !el.chatEmpty) return;
+  const chat = getActiveChat();
+  const messages = chat?.messages || [];
+
+  el.chatEmpty.style.display = messages.length ? 'none' : 'flex';
+  el.chatMessages.innerHTML = '';
+
+  if (chat && el.chatAccessSelect) {
+    el.chatAccessSelect.value = chat.access || 'all';
+    updateChatAccessHint();
+  }
+
+  const frag = document.createDocumentFragment();
+  messages.forEach(msg => frag.appendChild(buildChatMessage(msg)));
+  el.chatMessages.appendChild(frag);
+  chatAutoScroll = true;
+  scrollChatToBottom(true);
+}
+
+function buildChatMessage(msg) {
+  const wrap = document.createElement('div');
+  wrap.className = `chat-msg chat-msg-${msg.role}`;
+  wrap.dataset.mid = msg.id || '';
+
+  if (msg.role === 'user') {
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble chat-bubble-user';
+    bubble.textContent = msg.content || '';
+    wrap.appendChild(bubble);
+    return wrap;
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble chat-bubble-assistant';
+  bubble.innerHTML = `
+    <div class="chat-answer"></div>
+    <div class="chat-sources-wrap"></div>
+    <div class="chat-meta"></div>`;
+  wrap.appendChild(bubble);
+  updateChatBubble(wrap, msg);
+  return wrap;
+}
+
+function updateChatBubble(wrap, msg) {
+  if (!wrap || !msg) return;
+  const answerEl = wrap.querySelector('.chat-answer');
+  const sourcesEl = wrap.querySelector('.chat-sources-wrap');
+  const metaEl = wrap.querySelector('.chat-meta');
+  if (!answerEl) return;
+
+  const content = msg.content || '';
+  if (content) {
+    answerEl.innerHTML = renderChatMarkdown(content, msg.sources || []);
+  } else if (msg.streaming) {
+    answerEl.innerHTML = '<span class="chat-thinking"><i></i><i></i><i></i></span>';
+  } else {
+    answerEl.innerHTML = '<p class="chat-empty-answer">No se generó respuesta.</p>';
+  }
+
+  if (msg.streaming && content) {
+    const cursor = document.createElement('span');
+    cursor.className = 'chat-cursor';
+    answerEl.appendChild(cursor);
+  }
+
+  if (sourcesEl) {
+    sourcesEl.innerHTML = renderChatSourcesHtml(msg.sources || [], msg.id);
+  }
+
+  if (metaEl) {
+    if (!msg.streaming && msg.costUsd != null) {
+      const tokens = Number(msg.totalTokens || 0).toLocaleString('es');
+      metaEl.innerHTML = `<span class="chat-cost-tag">[cost-chat]</span> $${Number(msg.costUsd).toFixed(6)} · ${tokens} tokens`;
+    } else if (!msg.streaming && msg.error) {
+      metaEl.textContent = 'No se pudo completar la respuesta.';
+    } else {
+      metaEl.textContent = '';
+    }
+  }
+}
+
+function renderChatSourcesHtml(sources, msgId) {
+  if (!Array.isArray(sources) || !sources.length) return '';
+
+  const items = sources.map((source, index) => {
+    const lock = source.isOa
+      ? '<i class="ph-bold ph-lock-open chat-source-lock is-open"></i>'
+      : '<i class="ph-bold ph-lock chat-source-lock is-paid"></i>';
+    const meta = [source.year, source.journal].filter(Boolean).join(' · ');
+    return `
+      <button class="chat-source" data-mid="${esc(msgId)}" data-idx="${index}" title="Abrir ficha en PsiHub">
+        <span class="chat-source-num">${index + 1}</span>
+        <span class="chat-source-body">
+          <span class="chat-source-title">${esc(source.title || 'Sin título')}</span>
+          <span class="chat-source-meta">${lock} ${esc(meta || 'Sin metadatos')}</span>
+        </span>
+        <i class="ph-bold ph-caret-right chat-source-arrow"></i>
+      </button>`;
+  }).join('');
+
+  return `
+    <div class="chat-sources-head"><i class="ph-bold ph-books"></i> Fuentes consultadas</div>
+    <div class="chat-sources">${items}</div>`;
+}
+
+function sanitizeChatHtml(root) {
+  root.querySelectorAll('script,style,iframe,object,embed,form,input,button,textarea,link,meta').forEach(node => node.remove());
+  root.querySelectorAll('*').forEach(node => {
+    Array.from(node.attributes || []).forEach(attr => {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on')) node.removeAttribute(attr.name);
+      if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(attr.value || '')) {
+        node.removeAttribute(attr.name);
+      }
+    });
+  });
+}
+
+function linkifyChatCitations(root, sources) {
+  if (!sources || !sources.length) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || node.nodeValue.indexOf('[') === -1) return NodeFilter.FILTER_REJECT;
+      const parent = node.parentElement;
+      if (!parent || parent.closest('pre, code, a, button')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+  textNodes.forEach(node => {
+    const text = node.nodeValue;
+    const re = /\[(\d{1,2})\]/g;
+    if (!re.test(text)) return;
+    re.lastIndex = 0;
+
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    let match;
+    while ((match = re.exec(text)) !== null) {
+      if (match.index > last) frag.appendChild(document.createTextNode(text.slice(last, match.index)));
+      const n = parseInt(match[1], 10);
+      const source = n >= 1 && n <= sources.length ? sources[n - 1] : null;
+      if (source) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-cite';
+        btn.dataset.cite = String(n);
+        btn.textContent = String(n);
+        btn.title = source.title || `Fuente ${n}`;
+        frag.appendChild(btn);
+      } else {
+        frag.appendChild(document.createTextNode(match[0]));
+      }
+      last = match.index + match[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  });
+}
+
+function renderChatMarkdown(text, sources) {
+  let html = '';
+  const source = String(text || '');
+  if (window.marked && typeof window.marked.parse === 'function') {
+    try {
+      html = window.marked.parse(source);
+    } catch (err) {
+      html = '';
+    }
+  }
+  if (!html) {
+    html = source.split('\n\n').map(par => `<p>${esc(par).replace(/\n/g, '<br>')}</p>`).join('');
+  }
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  sanitizeChatHtml(container);
+  linkifyChatCitations(container, sources || []);
+  return container.innerHTML;
+}
+
+function autosizeChatInput() {
+  if (!el.chatInput) return;
+  el.chatInput.style.height = 'auto';
+  el.chatInput.style.height = `${Math.min(el.chatInput.scrollHeight || 24, 132)}px`;
+}
+
+function isChatNearBottom() {
+  if (!el.chatScroll) return true;
+  const distance = el.chatScroll.scrollHeight - el.chatScroll.scrollTop - el.chatScroll.clientHeight;
+  return distance < 80;
+}
+
+function scrollChatToBottom(force = false) {
+  if (!el.chatScroll) return;
+  if (!force && !chatAutoScroll) return;
+  el.chatScroll.scrollTop = el.chatScroll.scrollHeight;
+}
+
+function scheduleChatBubbleUpdate(wrap, msg) {
+  if (chatRenderRaf) return;
+  chatRenderRaf = requestAnimationFrame(() => {
+    chatRenderRaf = null;
+    updateChatBubble(wrap, msg);
+    if (chatAutoScroll) scrollChatToBottom();
+  });
+}
+
+function setChatStreaming(streaming) {
+  S.chatStreaming = streaming;
+  if (el.btnChatSend) {
+    el.btnChatSend.classList.toggle('is-streaming', streaming);
+    el.btnChatSend.innerHTML = streaming
+      ? '<i class="ph-fill ph-stop-circle"></i>'
+      : '<i class="ph-bold ph-arrow-up"></i>';
+    el.btnChatSend.setAttribute('aria-label', streaming ? 'Detener respuesta' : 'Enviar');
+  }
+}
+
+function stopChatStream() {
+  if (S.chatController) {
+    try { S.chatController.abort(); } catch { }
+    S.chatController = null;
+  }
+  if (S.chatStreaming) setChatStreaming(false);
+}
+
+function handleChatEvent(payload, msg, wrap) {
+  if (!payload || !msg) return;
+  if (payload.type === 'sources') {
+    msg.sources = Array.isArray(payload.sources) ? payload.sources : [];
+    scheduleChatBubbleUpdate(wrap, msg);
+  } else if (payload.type === 'delta') {
+    msg.content = (msg.content || '') + (payload.text || '');
+    scheduleChatBubbleUpdate(wrap, msg);
+  } else if (payload.type === 'done') {
+    msg.streaming = false;
+    msg.costUsd = payload.cost_usd;
+    msg.totalTokens = payload.usage?.total_tokens ?? 0;
+    updateChatBubble(wrap, msg);
+  } else if (payload.type === 'error') {
+    msg.streaming = false;
+    msg.error = true;
+    msg.content = (msg.content || '') + `\n\n> No se pudo completar: ${payload.message || 'error desconocido'}`;
+    updateChatBubble(wrap, msg);
+  }
+}
+
+async function sendChatMessage() {
+  if (!el.chatInput) return;
+
+  if (S.chatStreaming) {
+    stopChatStream();
+    return;
+  }
+
+  const question = (el.chatInput.value || '').trim();
+  if (!question) return;
+
+  let chat = getActiveChat();
+  if (!chat) chat = createChat({ focus: false });
+
+  const access = el.chatAccessSelect?.value || chat.access || 'all';
+  chat.access = access;
+  try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
+
+  const userMsg = {
+    id: newChatId(),
+    role: 'user',
+    content: question,
+    sources: [],
+    createdAt: Date.now()
+  };
+  chat.messages.push(userMsg);
+  const userCount = chat.messages.filter(m => m.role === 'user').length;
+  if (userCount === 1) chat.title = question.slice(0, 60);
+  chat.updatedAt = Date.now();
+
+  el.chatInput.value = '';
+  autosizeChatInput();
+
+  const history = chat.messages
+    .slice(0, -1)
+    .slice(-8)
+    .map(m => ({ role: m.role, content: String(m.content || '').slice(0, 1200) }));
+
+  const assistantMsg = {
+    id: newChatId(),
+    role: 'assistant',
+    content: '',
+    sources: [],
+    streaming: true,
+    createdAt: Date.now()
+  };
+  chat.messages.push(assistantMsg);
+  chat.updatedAt = Date.now();
+  persistChats();
+  renderActiveChat();
+
+  const wrap = el.chatMessages?.querySelector(`[data-mid="${assistantMsg.id}"]`);
+  setChatStreaming(true);
+  chatAutoScroll = true;
+
+  const controller = new AbortController();
+  S.chatController = controller;
+
+  try {
+    // La traducción de la consulta usa Google Translate (gratis) para no
+    // gastar tokens del modelo en generar la query de OpenAlex.
+    let query = question;
+    try {
+      const translated = await withTimeout(translateToEnglish(question), 4000, question);
+      if (translated && translated.trim()) query = translated.trim();
+    } catch { }
+
+    const response = await fetch(`${HF_SPACE_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        question,
+        query,
+        access,
+        history,
+        client_id: getChatClientId()
+      })
+    });
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const data = await response.json();
+        if (data?.detail) detail = data.detail;
+      } catch { }
+      throw new Error(detail);
+    }
+    if (!response.body) throw new Error('El servidor no devolvió un stream.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        const dataLine = part.split('\n').find(line => line.startsWith('data:'));
+        if (!dataLine) continue;
+        const raw = dataLine.slice(5).trim();
+        if (!raw || raw === '[DONE]') continue;
+        try {
+          handleChatEvent(JSON.parse(raw), assistantMsg, wrap);
+        } catch (parseErr) {
+          console.warn('[chat] evento inválido', parseErr, raw);
+        }
+      }
+    }
+
+    assistantMsg.streaming = false;
+    updateChatBubble(wrap, assistantMsg);
+  } catch (err) {
+    assistantMsg.streaming = false;
+    if (err.name === 'AbortError') {
+      assistantMsg.content = (assistantMsg.content || '') + '\n\n_(respuesta detenida)_';
+    } else {
+      assistantMsg.error = true;
+      assistantMsg.content = (assistantMsg.content || '') +
+        `\n\n> No se pudo conectar con el chat: ${err.message || 'error de red'}.`;
+    }
+    updateChatBubble(wrap, assistantMsg);
+  } finally {
+    S.chatController = null;
+    setChatStreaming(false);
+    chat.updatedAt = Date.now();
+    persistChats();
+    renderChatHistory();
+    if (chatAutoScroll) scrollChatToBottom(true);
+  }
+}
+
+function setupChatEventListeners() {
+  if (!el.chatMessages) return;
+
+  el.chatForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendChatMessage();
+  });
+
+  el.chatInput?.addEventListener('input', () => {
+    autosizeChatInput();
+    if (el.btnChatSend) el.btnChatSend.disabled = !el.chatInput.value.trim() && !S.chatStreaming;
+  });
+
+  el.chatInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  el.chatSuggestions?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.chat-suggestion');
+    if (!btn) return;
+    if (el.chatInput) {
+      el.chatInput.value = btn.dataset.q || btn.textContent.trim();
+      autosizeChatInput();
+    }
+    sendChatMessage();
+  });
+
+  el.btnChatNew?.addEventListener('click', () => createChat());
+  el.btnChatHistory?.addEventListener('click', () => toggleChatHistory());
+  el.btnChatHistoryClose?.addEventListener('click', () => closeChatHistory());
+
+  el.chatHistoryList?.addEventListener('click', (e) => {
+    const del = e.target.closest('.chat-history-delete');
+    if (del) {
+      e.stopPropagation();
+      deleteChat(del.dataset.deleteId);
+      return;
+    }
+    const open = e.target.closest('.chat-history-open');
+    if (open) selectChat(open.dataset.chatId);
+  });
+
+  el.chatAccessSelect?.addEventListener('change', () => {
+    const access = el.chatAccessSelect.value || 'all';
+    try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
+    const chat = getActiveChat();
+    if (chat) {
+      chat.access = access;
+      chat.updatedAt = Date.now();
+      persistChats();
+    }
+    updateChatAccessHint();
+  });
+
+  el.chatMessages?.addEventListener('click', (e) => {
+    const cite = e.target.closest('.chat-cite');
+    const sourceBtn = e.target.closest('.chat-source');
+    const trigger = cite || sourceBtn;
+    if (!trigger) return;
+
+    const holder = trigger.closest('[data-mid]');
+    const msgId = holder?.dataset.mid;
+    const chat = getActiveChat();
+    const msg = chat?.messages?.find(m => m.id === msgId);
+    if (!msg) return;
+
+    const index = cite
+      ? parseInt(cite.dataset.cite, 10) - 1
+      : parseInt(sourceBtn.dataset.idx, 10);
+    const source = (msg.sources || [])[index];
+    if (!source) return;
+    openModal(source, null);
+  });
+
+  el.chatScroll?.addEventListener('scroll', () => {
+    chatAutoScroll = isChatNearBottom();
+  }, { passive: true });
+
+  if (el.btnChatSend) el.btnChatSend.disabled = true;
+}

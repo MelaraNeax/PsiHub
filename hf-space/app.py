@@ -32,6 +32,7 @@ from costs import (PRICE_INPUT, PRICE_OUTPUT, admin_token_matches, estimate_cost
                    list_costs, record_cost, summarize)
 from exporters import document_to_markdown, document_to_pdf
 from vision_extract import extract_document
+import chat as chat_service
 
 load_dotenv()
 
@@ -40,6 +41,13 @@ _legacy_key = os.getenv('DEEPSEEK_API_KEY', '').strip()
 if not any(DEEPSEEK_API_KEYS) and _legacy_key:
     DEEPSEEK_API_KEYS = [_legacy_key]
 DEEPSEEK_API_KEYS = [k for k in DEEPSEEK_API_KEYS if k]
+
+# El chat puede usar una key dedicada (DEEPSEEK_API_CHAT, admite varias
+# separadas por coma) para no competir con la traduccion. Si no existe,
+# reutiliza las mismas keys de traduccion.
+CHAT_API_KEYS = [k.strip() for k in os.getenv('DEEPSEEK_API_CHAT', '').split(',') if k.strip()]
+if not CHAT_API_KEYS:
+    CHAT_API_KEYS = DEEPSEEK_API_KEYS
 
 # ID canonico de DeepSeek-V4.1-Flash (el alias deepseek-v4-flash apunta aqui).
 DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
@@ -299,6 +307,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None,
     cost = estimate_cost(usage)
     record_cost({
         'doc_id': doc_id,
+        'kind': 'translation',
         'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'title': meta.get('title_es') or meta.get('title') or '',
         'pages': pages,
@@ -501,6 +510,14 @@ class CheckPdfsRequest(BaseModel):
     urls: list[str] = []
 
 
+class ChatRequest(BaseModel):
+    question: str
+    query: Optional[str] = None
+    access: str = 'all'
+    history: list[dict] = []
+    client_id: str = ''
+
+
 @app.get('/api/document/{document_id}/image/{image_filename}')
 async def api_get_image(document_id: str, image_filename: str):
     safe_name = Path(image_filename).name
@@ -644,6 +661,37 @@ async def api_check_pdfs(request: CheckPdfsRequest):
     return JSONResponse(content={'results': results})
 
 
+@app.post('/api/chat')
+async def api_chat(request: ChatRequest):
+    """Chat de investigacion con streaming SSE (OpenAlex + DeepSeek)."""
+    access = request.access if request.access in ('all', 'free', 'oneclick') else 'all'
+    question = (request.question or '').strip()
+    if not question:
+        raise HTTPException(status_code=400, detail='Falta la pregunta.')
+    if not CHAT_API_KEYS:
+        raise HTTPException(status_code=503, detail='No hay API key de DeepSeek configurada.')
+
+    generator = chat_service.stream_chat(
+        question=question,
+        query=(request.query or question).strip(),
+        access=access,
+        history=request.history[-8:],
+        api_keys=CHAT_API_KEYS,
+        probe_fn=probe_pdf,
+        log_fn=log,
+        client_id=request.client_id,
+    )
+    return StreamingResponse(
+        generator,
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
+
 @app.post('/api/translate-file')
 async def api_translate_file(file: UploadFile = File(...), model: Optional[str] = Form(None)):
     try:
@@ -669,6 +717,8 @@ async def health():
         'deepseek': bool(DEEPSEEK_API_KEYS),
         'deepseek_keys': len(DEEPSEEK_API_KEYS),
         'model': DEEPSEEK_MODEL,
+        'chat_model': chat_service.CHAT_MODEL,
+        'chat_keys': len(CHAT_API_KEYS),
         'pipeline_version': PIPELINE_VERSION,
     }
 
@@ -697,21 +747,23 @@ async def costs_page(token: str = Query(''), x_admin_token: str = Header('')):
     _require_admin(token, x_admin_token)
     records = list_costs(300)
     totals = summarize(records)
-    average = totals['cost_usd'] / totals['documents'] if totals['documents'] else 0
+    average = totals['cost_usd'] / totals['entries'] if totals['entries'] else 0
     rows = []
     for record in records:
+        kind = 'Chat' if record.get('kind') == 'chat' else 'Traducción'
         title = html_lib.escape(str(record.get('title') or 'Sin titulo'))
         stamp = html_lib.escape(str(record.get('timestamp') or ''))
         rows.append(
             '<tr>'
             f'<td class="date">{stamp}</td>'
+            f'<td class="kind">{kind}</td>'
             f'<td class="title">{title}</td>'
             f'<td class="num">{int(record.get("pages") or 0)}</td>'
             f'<td class="num tokens">{int(record.get("total_tokens") or 0):,}</td>'
             f'<td class="num cost">${float(record.get("cost_usd") or 0):.4f}</td>'
             '</tr>'
         )
-    body = ''.join(rows) or '<tr><td colspan="5" class="empty">Sin registros todavía.</td></tr>'
+    body = ''.join(rows) or '<tr><td colspan="6" class="empty">Sin registros todavía.</td></tr>'
     markup = f"""<!doctype html>
 <html lang="es">
 <head>
@@ -739,6 +791,7 @@ async def costs_page(token: str = Query(''), x_admin_token: str = Header('')):
   tr:last-child td {{ border-bottom: none; }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .cost {{ font-weight: 600; }}
+  .kind {{ color: #6c6a62; white-space: nowrap; }}
   .date {{ color: #6c6a62; white-space: nowrap; }}
   .title {{ max-width: 380px; }}
   .empty {{ text-align: center; color: #8a877e; padding: 26px; }}
@@ -755,17 +808,17 @@ async def costs_page(token: str = Query(''), x_admin_token: str = Header('')):
 </style>
 </head>
 <body><main>
-  <h1>Costos de traducción</h1>
-  <p class="sub">DeepSeek V4.1 Flash · ${PRICE_INPUT:.2f} entrada / ${PRICE_OUTPUT:.2f} salida por millón de tokens · solo documentos procesados (no caché).</p>
+  <h1>Costos de API</h1>
+  <p class="sub">DeepSeek V4.1 Flash · ${PRICE_INPUT:.2f} entrada / ${PRICE_OUTPUT:.2f} salida por millón de tokens · traducciones y chat (no caché).</p>
   <div class="cards">
     <div class="card"><div class="label">Gasto total</div><div class="value">${totals['cost_usd']:.4f}</div></div>
-    <div class="card"><div class="label">Documentos</div><div class="value">{totals['documents']}</div></div>
-    <div class="card"><div class="label">Páginas</div><div class="value">{totals['pages']}</div></div>
+    <div class="card"><div class="label">Traducciones</div><div class="value">{totals['documents']}</div></div>
+    <div class="card"><div class="label">Chats</div><div class="value">{totals['chats']}</div></div>
     <div class="card"><div class="label">Costo medio</div><div class="value">${average:.4f}</div></div>
     <div class="card"><div class="label">Tokens</div><div class="value">{totals['total_tokens']:,}</div></div>
   </div>
   <div class="table-wrap"><table>
-    <thead><tr><th class="date">Fecha (UTC)</th><th>Documento</th><th class="num">Págs.</th><th class="num tokens">Tokens</th><th class="num">Costo</th></tr></thead>
+    <thead><tr><th class="date">Fecha (UTC)</th><th>Tipo</th><th>Documento / Pregunta</th><th class="num">Págs.</th><th class="num tokens">Tokens</th><th class="num">Costo</th></tr></thead>
     <tbody>{body}</tbody>
   </table></div>
 </main></body></html>"""
