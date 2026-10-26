@@ -29,10 +29,12 @@ from pydantic import BaseModel
 import gradio as gr
 
 import storage
+import enrich
+import summarize as summarize_service
 from costs import (PRICE_INPUT, PRICE_OUTPUT, admin_token_matches, estimate_cost,
                    list_costs, record_cost, summarize)
 from exporters import document_to_markdown, document_to_pdf, markdown_to_pdf
-from vision_extract import extract_document
+from vision_extract import extract_document, PAGE_PROMPT, VISION_DPI
 import chat as chat_service
 
 load_dotenv()
@@ -52,7 +54,7 @@ if not CHAT_API_KEYS:
 
 # ID canonico de DeepSeek-V4.1-Flash (el alias deepseek-v4-flash apunta aqui).
 DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
-PIPELINE_VERSION = '2026-10-19-vision-json-v1'
+PIPELINE_VERSION = '2026-10-26-vision-system-cache-v2'
 
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
 SOURCE_PDF_DIR = CACHE_DIR / 'source_pdfs'
@@ -89,7 +91,10 @@ def cache_key(content: bytes, model: str) -> str:
     digest = hashlib.sha256(content).hexdigest()
     model_hash = hashlib.sha256(model.encode()).hexdigest()[:12]
     version_hash = hashlib.sha256(PIPELINE_VERSION.encode()).hexdigest()[:12]
-    return f'{digest}_{model_hash}_{version_hash}'
+    # El prompt y la resolucion cambian la salida: incluirlos evita servir un
+    # documento viejo tras una mejora de traduccion sin bumpear la version.
+    prompt_hash = hashlib.sha256(PAGE_PROMPT.encode()).hexdigest()[:8]
+    return f'{digest}_{model_hash}_{version_hash}_{prompt_hash}_{VISION_DPI}'
 
 
 def load_cache(key: str) -> Optional[dict]:
@@ -525,6 +530,24 @@ class ChatPdfRequest(BaseModel):
     sources: list[dict] = []
 
 
+class EnrichRequest(BaseModel):
+    items: list[dict] = []
+
+
+class SummarizeRequest(BaseModel):
+    title: str = ''
+    abstract: str = ''
+    authors: list = []
+    year: Optional[int] = None
+    journal: str = ''
+    doi: str = ''
+    type: str = ''
+    design: list = []
+    sample: str = ''
+    mode: str = 'basic'
+    pdf_url: str = ''
+
+
 @app.get('/api/document/{document_id}/image/{image_filename}')
 async def api_get_image(document_id: str, image_filename: str):
     safe_name = Path(image_filename).name
@@ -668,6 +691,106 @@ async def api_check_pdfs(request: CheckPdfsRequest):
     return JSONResponse(content={'results': results})
 
 
+@app.post('/api/enrich')
+async def api_enrich(request: EnrichRequest):
+    """Completa abstract/año/DOI/autores faltantes con otras APIs academicas."""
+    items = []
+    for raw in request.items[:enrich.MAX_ITEMS]:
+        if not isinstance(raw, dict):
+            continue
+        items.append({
+            'title': str(raw.get('title') or '')[:500],
+            'doi': str(raw.get('doi') or '')[:300],
+            'year': raw.get('year'),
+            'abstract': str(raw.get('abstract') or '')[:4000],
+            'authors': raw.get('authors') if isinstance(raw.get('authors'), list) else [],
+            'journal': str(raw.get('journal') or '')[:300],
+        })
+    try:
+        results = await enrich.enrich_items(items)
+    except Exception as exc:  # noqa: BLE001
+        log(f'[ENRICH] {type(exc).__name__}: {exc}')
+        results = [{} for _ in items]
+    return JSONResponse(content={'results': results})
+
+
+@app.post('/api/summarize')
+async def api_summarize(request: SummarizeRequest):
+    """Resumen basico (abstract) o avanzado (PDF descargable en 1 clic)."""
+    if not CHAT_API_KEYS:
+        raise HTTPException(status_code=503, detail='No hay API key de DeepSeek configurada.')
+    data = {
+        'title': request.title,
+        'abstract': request.abstract,
+        'authors': request.authors,
+        'year': request.year,
+        'journal': request.journal,
+        'doi': request.doi,
+        'type': request.type,
+        'design': request.design,
+        'sample': request.sample,
+    }
+    mode = 'advanced' if request.mode == 'advanced' else 'basic'
+    try:
+        if mode == 'advanced':
+            if not request.pdf_url:
+                raise HTTPException(status_code=400, detail='Falta la URL del PDF.')
+            if not _pdf_url_is_safe(request.pdf_url):
+                raise HTTPException(status_code=400, detail='La URL del PDF no es valida.')
+            log(f'[SUMMARY] avanzado: {request.pdf_url[:160]}')
+            pdf_bytes = await download_pdf(request.pdf_url)
+            result = await summarize_service.summarize_full_text(data, pdf_bytes, CHAT_API_KEYS)
+        else:
+            result = await summarize_service.summarize_basic(data, CHAT_API_KEYS)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log(f'[SUMMARY] {type(exc).__name__}: {exc}')
+        raise HTTPException(status_code=502, detail=f'No se pudo generar el resumen: {exc}') from exc
+    return JSONResponse(content={
+        'summary': result['summary'],
+        'mode': result['mode'],
+        'cost_usd': (result.get('cost') or {}).get('cost_usd', 0),
+        'pages': result.get('pages'),
+    })
+
+
+@app.post('/api/summarize-pdf')
+async def api_summarize_pdf(
+    file: UploadFile = File(...),
+    payload: str = Form('{}'),
+):
+    """Resumen avanzado con un PDF que sube el usuario (articulos de pago)."""
+    if not CHAT_API_KEYS:
+        raise HTTPException(status_code=503, detail='No hay API key de DeepSeek configurada.')
+    try:
+        data = json.loads(payload or '{}')
+        if not isinstance(data, dict):
+            data = {}
+    except ValueError:
+        data = {}
+    raw = await file.read()
+    if not raw.startswith(b'%PDF') and b'%PDF' not in raw[:4096]:
+        raise HTTPException(status_code=400, detail='El archivo no es un PDF valido.')
+    if len(raw) > 80 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail='El PDF supera los 80 MB.')
+    try:
+        result = await summarize_service.summarize_full_text(data, raw, CHAT_API_KEYS)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log(f'[SUMMARY-PDF] {type(exc).__name__}: {exc}')
+        raise HTTPException(status_code=502, detail=f'No se pudo generar el resumen: {exc}') from exc
+    return JSONResponse(content={
+        'summary': result['summary'],
+        'mode': 'advanced',
+        'cost_usd': (result.get('cost') or {}).get('cost_usd', 0),
+        'pages': result.get('pages'),
+    })
+
+
 @app.post('/api/chat')
 async def api_chat(request: ChatRequest):
     """Chat de investigacion con streaming SSE (OpenAlex + DeepSeek)."""
@@ -763,6 +886,8 @@ async def health():
         'chat_keys': len(CHAT_API_KEYS),
         'chat_pipeline': chat_service.CHAT_PIPELINE_VERSION,
         'pipeline_version': PIPELINE_VERSION,
+        'enrich': True,
+        'summarize': bool(CHAT_API_KEYS),
     }
 
 

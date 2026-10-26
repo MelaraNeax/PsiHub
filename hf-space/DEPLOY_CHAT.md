@@ -56,8 +56,15 @@ gcloud run deploy mi-servidor-api \
   --source . \
   --region southamerica-east1 \
   --allow-unauthenticated \
+  --min-instances=1 \
+  --cpu-boost \
   --update-env-vars DEEPSEEK_API_CHAT=sk-tu-key-del-chat
 ```
+
+> `--min-instances=1` evita el arranque en frío de ~15 s, que era la causa de
+> que OpenAlex fallara solo en el primer inicio de la app. Cuesta unos centavos
+> al mes y ahorra la espera en cada apertura. `--cpu-boost` acelera el arranque
+> cuando la instancia igual tiene que despertar.
 
 Si preferís mantener las keys fuera del historial de la shell, usá un
 archivo de variables:
@@ -86,16 +93,20 @@ actualiza la que pasás en `--update-env-vars`.
 | Variable | Default | Para qué sirve |
 |---|---|---|
 | `CHAT_MODEL` | `deepseek-flash` | Modelo de chat |
-| `CHAT_MAX_SOURCES` | `18` | Papers enviados al modelo por respuesta |
-| `CHAT_ABSTRACT_CHARS` | `1700` | Recorte de cada abstract (conserva inicio y resultados finales) |
-| `CHAT_MAX_OUTPUT_TOKENS` | `4200` | Largo máximo de la respuesta de investigación |
+| `CHAT_MAX_SOURCES` | `7` | Papers enviados al modelo por respuesta |
+| `CHAT_ABSTRACT_CHARS` | `650` | Recorte de cada abstract (conserva inicio, resultados y cierre) |
+| `CHAT_MAX_OUTPUT_TOKENS` | `1000` | Largo máximo de la respuesta de investigación |
 | `CHAT_DIRECT_TOKENS` | `800` | Tope de las respuestas de charla y acompañamiento |
-| `CHAT_HISTORY_MESSAGES` | `6` | Turnos de historial que se reenvían |
+| `CHAT_HISTORY_MESSAGES` | `3` | Turnos de historial que se reenvían |
+| `CHAT_HISTORY_CHARS` | `450` | Recorte de cada turno del historial |
 | `CHAT_SEARCH_CACHE_TTL` | `1800` | Segundos de caché de búsquedas OpenAlex |
-| `CHAT_SEARCH_RESULTS` | `30` | Papers que se piden por cada consulta |
+| `CHAT_SEARCH_RESULTS` | `20` | Papers que se piden por cada consulta |
+| `CHAT_ONECLICK_CANDIDATES` | `12` | PDFs que se verifican cuando el filtro es "1 clic" |
 | `CHAT_MIN_RELEVANCE` | `0.14` | Umbral de relevancia para descartar papers |
 | `CHAT_SEARCH_CONCURRENCY` | `4` | Consultas simultáneas contra OpenAlex |
-| `CHAT_PLANNER_TOKENS` | `800` | Tope de tokens del router/planificador |
+| `CHAT_PLANNER_TOKENS` | `550` | Tope de tokens del router/planificador |
+| `CHAT_ENRICH` | `1` | Completa abstract/año/DOI con Crossref, Europe PMC y Semantic Scholar |
+| `CHAT_ENRICH_CANDIDATES` | `18` | Papers candidatos que se intentan enriquecer por búsqueda |
 | `CHAT_SNOWBALL_SEEDS` | `3` | Trabajos semilla cuyas referencias se expanden (`0` desactiva) |
 | `CHAT_SNOWBALL_IDS` | `80` | Máximo de referencias recuperadas por búsqueda |
 
@@ -138,12 +149,21 @@ constructo abundante no desplace a otro minoritario. Se envían al modelo los
 
 **Paso 4 — redacción.** El texto se transmite en streaming y las fuentes viajan
 al final. La respuesta abre con un párrafo sustantivo (sin la etiqueta "respuesta
-breve"), sigue con 3-6 secciones con títulos propios y 2-4 párrafos cada una,
-usa tablas Markdown para comparar marcos/fases, distingue explícitamente entre
-evidencia experimental, correlacional y analogía, y cierra con límites de la
-evidencia. Extensión objetivo: 900-1400 palabras. El servidor añade además un
-bloque de cobertura y distinciones conceptuales para que el modelo declare las
-brechas en vez de rellenarlas.
+breve"), sigue con 2-4 secciones con títulos propios y un párrafo cada una,
+usa tablas Markdown compactas (máx. 4 columnas × 6 filas) para comparar
+marcos/fases, distingue explícitamente entre evidencia experimental,
+correlacional y analogía, y cierra con límites de la evidencia. Extensión
+objetivo: 450-650 palabras (350-450 si la pregunta es simple). El servidor
+añade además un bloque de cobertura y distinciones conceptuales para que el
+modelo declare las brechas en vez de rellenarlas.
+
+## Endpoints auxiliares (costo cero o mínimo)
+
+| Endpoint | Qué hace |
+|---|---|
+| `POST /api/enrich` | Completa abstract, año, DOI, autores y revista faltantes usando Crossref, Europe PMC y Semantic Scholar. Sin costo de modelo (solo APIs gratuitas + caché de 7 días) |
+| `POST /api/summarize` | `mode: "basic"` resume abstract y metadatos; `mode: "advanced"` + `pdf_url` descarga el PDF y resume el texto completo (~$0.001-0.003) |
+| `POST /api/summarize-pdf` | Resumen avanzado con un PDF que sube el usuario (papers de pago). Campos `file` y `payload` (JSON) |
 
 ---
 

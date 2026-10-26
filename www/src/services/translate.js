@@ -55,11 +55,35 @@ async function translateGoogle(text, from = 'auto', to = 'es') {
 
 /**
  * Motor de respaldo: MyMemory API
+ * MyMemory corta en ~500 caracteres, así que se envía por fragmentos y se
+ * vuelve a unir: antes se traducía solo el primer trozo y el resto del
+ * abstract quedaba en inglés mezclado.
  */
-async function translateMyMemory(text, langpair) {
+function splitForMyMemory(text, max = 480) {
+  const clean = String(text || '');
+  if (clean.length <= max) return [clean];
+  const parts = [];
+  let rest = clean;
+  while (rest.length > max) {
+    let cut = -1;
+    for (const re of [/[.!?]\s+/g, /[;:]\s+/g, /,\s+/g, /\s+/g]) {
+      let m;
+      let last = -1;
+      while ((m = re.exec(rest)) && m.index < max) last = m.index + m[0].length;
+      if (last > max * 0.4) { cut = last; break; }
+    }
+    if (cut < 0) cut = max;
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  if (rest.trim()) parts.push(rest);
+  return parts;
+}
+
+async function translateMyMemoryChunk(text, langpair) {
   const email = localStorage.getItem('psyhub_tr_email') || '';
   const params = new URLSearchParams({
-    q: text.slice(0, 500),
+    q: text,
     langpair,
     ...(email ? { de: email } : {})
   });
@@ -69,6 +93,16 @@ async function translateMyMemory(text, langpair) {
   const tr = data?.responseData?.translatedText;
   if (!tr || tr.includes('MYMEMORY WARNING')) throw new Error('MyMemory quota reached');
   return tr;
+}
+
+async function translateMyMemory(text, langpair) {
+  const chunks = splitForMyMemory(text);
+  if (chunks.length === 1) return translateMyMemoryChunk(chunks[0], langpair);
+  const out = [];
+  for (const chunk of chunks) {
+    out.push(await translateMyMemoryChunk(chunk, langpair));
+  }
+  return out.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /**

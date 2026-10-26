@@ -3,8 +3,8 @@
  * Spotify aesthetic · OpenAlex · Traducción MyMemory
  */
 
-import { fetchPapers, fetchWorkById } from './src/services/openalex.js?v=38';
-import { translateToSpanish, translateBatch, translateToEnglish } from './src/services/translate.js';
+import { fetchPapers, fetchWorkById } from './src/services/openalex.js?v=39';
+import { translateToSpanish, translateBatch, translateToEnglish } from './src/services/translate.js?v=2';
 
 // ═══════════════════════════════════════════════════
 // EXPANSIÓN DE QUERIES — Diccionario ES → EN + sinónimos clave
@@ -493,6 +493,8 @@ function initDOMRefs() {
     btnClosePsihubOptions: $('btn-close-psihub-options'),
     btnPsihubReadEs: $('btn-psihub-read-es'),
     btnPsihubSummarize: $('btn-psihub-summarize'),
+    btnPsihubSummarizeAdvanced: $('btn-psihub-summarize-advanced'),
+    psihubSummarizeHint: $('psihub-summarize-hint'),
     googleInputName: $('google-input-name'),
     statSaved: $('stat-saved'),
     sectionSaved: $('section-saved'),
@@ -534,7 +536,8 @@ const SPLASH_MIN_MS = 1600;
 
 function hideAppSplash() {
   const splash = document.getElementById('app-splash');
-  if (!splash) return;
+  if (!splash || splash.dataset.done === '1') return;
+  splash.dataset.done = '1';
   const elapsed = performance.now() - SPLASH_START;
   const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
   setTimeout(() => {
@@ -548,12 +551,21 @@ document.addEventListener('DOMContentLoaded', () => {
   registerSW();
   renderCorrientes();
   setupEventListeners();
+  // Arrancar el backend en cuanto se abre la app: Cloud Run tarda en frío y
+  // era la causa de que OpenAlex fallara solo en el primer inicio.
+  warmBackend();
   loadProfile();
   loadRecommendations();
   loadStories();
 });
 
-window.addEventListener('load', hideAppSplash);
+// La barra de carga no debe quedarse pegada si algún recurso externo tarda
+// (fuentes, iconos): se libera al cargar o, como máximo, a los 6 segundos.
+const splashTimeout = setTimeout(hideAppSplash, 6000);
+window.addEventListener('load', () => {
+  clearTimeout(splashTimeout);
+  hideAppSplash();
+});
 
 // ═══════════════════════════════════════════════════
 // SERVICE WORKER
@@ -803,6 +815,30 @@ function closeResults(animated = true) {
 
 let currentFetchController = null;
 
+/**
+ * Primera carga tolerante a fallos: el arranque en frío del proxy y los hipos
+ * de OpenAlex hacían que la app mostrara "hubo un problema" solo la primera
+ * vez. Se reintenta una vez (con pausa) antes de rendirse.
+ */
+async function fetchPapersFirstPage(options, signal, retries = 1) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    try {
+      return await fetchPapers({ ...options, signal });
+    } catch (err) {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 900));
+        // Aprovechar la pausa para despertar el backend si aún no respondió.
+        warmBackend();
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function doFetch({ nextPage = false } = {}) {
   if (!S.baseQuery || !S.baseQuery.trim()) {
     resetSearchToInitial();
@@ -847,15 +883,18 @@ async function doFetch({ nextPage = false } = {}) {
       if (label) label.textContent = 'Verificando descarga en 1 clic…';
     }
 
-    const { results, meta } = await fetchPapers({
+    const fetchOptions = {
       query: S.baseQuery,
       subtype: S.activeSubtype,
       sort: S.sort || null,
       perPage: needsVerification ? Math.max(S.perPage, 15) : S.perPage,
       page: requestedPage,
-      access: S.accessFilter,
-      signal
-    });
+      access: S.accessFilter
+    };
+
+    const { results, meta } = isFirstPage
+      ? await fetchPapersFirstPage(fetchOptions, signal)
+      : await fetchPapers({ ...fetchOptions, signal });
 
     if (signal.aborted) return;
 
@@ -916,6 +955,10 @@ async function doFetch({ nextPage = false } = {}) {
     // y actualiza las tarjetas en segundo plano, sin bloquear la búsqueda.
     renderPapers(newResults, !isFirstPage);
     showResultsState('results');
+
+    // Completar abstracts/año/DOI faltantes con otras APIs académicas, en
+    // segundo plano, para que la ficha y el chat tengan la información.
+    enrichPapers(newResults).catch(() => { });
 
     const hasMore = results.length > 0 && S.papers.length < S.total;
     const reachedEnd = S.papers.length >= S.total;
@@ -1045,6 +1088,20 @@ const checkedPdfUrls = new Map(); // url -> { isAutomatic: boolean, status: stri
 const paperTranslations = new Map(); // id/url -> markdown
 const activeTranslations = new Map(); // id -> Promise
 const cardEls = new Map(); // paper.id -> <li> visible en resultados
+
+let backendWarmPromise = null;
+/**
+ * Despierta el backend (Cloud Run) al abrir la app. No se espera su
+ * resultado: solo adelanta el arranque en frío para que las siguientes
+ * llamadas (OpenAlex proxy, PDF, chat) no paguen la espera.
+ */
+function warmBackend() {
+  if (backendWarmPromise) return backendWarmPromise;
+  backendWarmPromise = fetch(`${HF_SPACE_URL}/health`, { cache: 'no-store' })
+    .then(res => res.ok)
+    .catch(() => false);
+  return backendWarmPromise;
+}
 
 function getCleanTranslationKey(key) {
   if (!key) return '';
@@ -1253,7 +1310,7 @@ function updateModalPaperAction(paper) {
 
   if (paper.isAutomatic) {
     if (label) label.textContent = 'Leer en PsiHub';
-    if (sub) sub.textContent = 'Libre · traducción automática';
+    if (sub) sub.textContent = '1-click · traducción automática';
     if (btn) btn.dataset.mode = 'auto';
   } else {
     if (label) label.textContent = 'Traducir PDF descargado';
@@ -1544,30 +1601,60 @@ function renderPapers(papers, append) {
   validatePdfUrls(papers);
 }
 
-function freeBadgeHtml() {
-  return `<span class="free-badge" title="PDF descargable en un clic · traducción automática"><i class="ph-bold ph-lock-open"></i>Libre</span>`;
-}
-
-function oaBadgeHtml() {
-  return `<span class="access-badge is-open" title="Acceso abierto: el PDF puede estar disponible en la revista"><i class="ph-bold ph-lock-open"></i>Gratis</span>`;
-}
-
-function paidBadgeHtml() {
-  return `<span class="access-badge is-paid" title="Paper de pago: requiere suscripción o compra"><i class="ph-bold ph-lock"></i>Pago</span>`;
-}
+// Etiqueta única de acceso. "Gratis" solo cuando el acceso abierto está
+// confirmado; "1-click" cuando además el PDF se descarga directo; "Pago" si no.
+const ACCESS_META = {
+  oneclick: {
+    cls: 'is-oneclick',
+    icon: 'ph-download-simple',
+    label: '1-click',
+    title: 'PDF de descarga directa en un clic, con traducción automática'
+  },
+  free: {
+    cls: 'is-open',
+    icon: 'ph-lock-open',
+    label: 'Gratis',
+    title: 'Acceso abierto: el PDF está disponible sin costo (puede pedir un paso en la revista)'
+  },
+  paid: {
+    cls: 'is-paid',
+    icon: 'ph-lock',
+    label: 'Pago',
+    title: 'Requiere suscripción o compra'
+  }
+};
 
 /**
- * Estado de acceso de un paper:
- *   Libre   → PDF verificado, descarga directa en un clic.
- *   Gratis  → acceso abierto, pero todavía no se confirmó la descarga directa.
- *   Pago    → sin acceso abierto.
+ * Estado de acceso de un paper: 'oneclick' | 'free' | 'paid' | null.
+ * Prioriza lo que ya clasificó el backend; si no, usa la verificación local.
  */
+function paperAccessCategory(paper) {
+  if (!paper) return null;
+  const status = String(paper.pdfCheckStatus || '');
+  // Solo una verificación concluyente manda sobre la clasificación del backend.
+  // 'metadata-gated' o 'cors' no prueban que el PDF no exista.
+  const conclusive = /^(verified|auth|missing|landing|blocked|http-\d+)$/.test(status);
+  if (paper.pdfChecked && conclusive) {
+    if (paper.isAutomatic === true) return 'oneclick';
+    return paper.isOa === false ? 'paid' : 'free';
+  }
+  const explicit = paper.accessCategory || paper.access;
+  if (explicit === 'oneclick' || explicit === 'free' || explicit === 'paid') return explicit;
+  if (paper.isAutomatic === true) return 'oneclick';
+  if (paper.pdfChecked) return paper.isOa === false ? 'paid' : 'free';
+  if (paper.isOa === false) return 'paid';
+  if (paper.isOa === true) return 'free';
+  return null;
+}
+
+function accessBadgeFor(category) {
+  const meta = ACCESS_META[category];
+  if (!meta) return '';
+  return `<span class="access-badge ${meta.cls}" title="${esc(meta.title)}"><i class="ph-bold ${meta.icon}"></i>${meta.label}</span>`;
+}
+
 function accessBadgeHtml(paper) {
-  if (!paper) return '';
-  if (paper.pdfChecked && paper.isAutomatic) return freeBadgeHtml();
-  if (paper.isOa === false) return paidBadgeHtml();
-  if (paper.isOa === true) return oaBadgeHtml();
-  return '';
+  return accessBadgeFor(paperAccessCategory(paper));
 }
 
 function updateCardTranslations(papers) {
@@ -1580,6 +1667,114 @@ function updateCardTranslations(papers) {
     const snippetEl = li.querySelector('.paper-card-snippet');
     if (snippetEl && p.abstractEs) snippetEl.textContent = p.abstractEs;
   });
+}
+
+// ═══════════════════════════════════════════════════
+// ENRIQUECIMIENTO DE METADATOS (Crossref / Europe PMC / Semantic Scholar)
+// ═══════════════════════════════════════════════════
+
+function paperNeedsEnrichment(paper) {
+  return Boolean(paper && (!paper.abstract || !paper.year || !paper.doi));
+}
+
+function applyEnrichment(paper, extra) {
+  if (!paper || !extra || typeof extra !== 'object') return false;
+  let changed = false;
+  if (!paper.abstract && extra.abstract) { paper.abstract = extra.abstract; changed = true; }
+  if (!paper.year && extra.year) { paper.year = extra.year; changed = true; }
+  if (!paper.doi && extra.doi) { paper.doi = extra.doi; changed = true; }
+  if ((!paper.journal || !paper.journal.trim()) && extra.journal) { paper.journal = extra.journal; changed = true; }
+  if ((!Array.isArray(paper.authors) || paper.authors.length === 0) && Array.isArray(extra.authors) && extra.authors.length) {
+    paper.authors = extra.authors;
+    changed = true;
+  }
+  if (Array.isArray(extra.sources) && extra.sources.length) paper.enrichedBy = extra.sources;
+  return changed;
+}
+
+/** Rehace la tarjeta visible (y el modal abierto) con los datos completados. */
+function refreshPaperCard(paper) {
+  if (!paper?.id) return;
+  const current = cardEls.get(paper.id);
+  if (current && current.parentNode) {
+    const next = buildCard(paper);
+    current.replaceWith(next);
+    cardEls.set(paper.id, next);
+  }
+  if (S.currentPaper?.id === paper.id && el.modalOverlay && !el.modalOverlay.classList.contains('hidden')) {
+    const tags = classifyPaper(paper);
+    const title = paper.titleEs || paper.title || 'Sin título';
+    el.modalBody.innerHTML = buildModalHTML(paper, null, tags, title, paper.abstractEs, false);
+  }
+}
+
+async function enrichPapers(papers, limit = 12) {
+  if (!Array.isArray(papers) || !papers.length) return;
+  const targets = papers.filter(paperNeedsEnrichment).slice(0, limit);
+  if (!targets.length) return;
+
+  const res = await fetch(`${HF_SPACE_URL}/api/enrich`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      items: targets.map(p => ({
+        title: p.title || '',
+        doi: p.doi || '',
+        year: p.year || null,
+        abstract: p.abstract || '',
+        authors: Array.isArray(p.authors) ? p.authors : [],
+        journal: p.journal || ''
+      }))
+    })
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  const results = Array.isArray(data?.results) ? data.results : [];
+  const changed = [];
+  targets.forEach((paper, index) => {
+    if (applyEnrichment(paper, results[index])) changed.push(paper);
+  });
+  if (!changed.length) return;
+
+  // El abstract recién completado también se muestra en español.
+  const withAbstract = changed.filter(p => p.abstract && !p.abstractEs);
+  if (withAbstract.length) {
+    try {
+      const translated = await translateBatch(withAbstract.map(p => p.abstract.slice(0, 150)));
+      withAbstract.forEach((p, i) => {
+        if (translated[i]) p.abstractEs = translated[i] + '...';
+      });
+    } catch { }
+  }
+  changed.forEach(refreshPaperCard);
+}
+
+/** Enriquecer un solo paper (ficha abierta). Devuelve true si completó algo. */
+async function enrichSinglePaper(paper) {
+  if (!paperNeedsEnrichment(paper)) return false;
+  try {
+    const res = await fetch(`${HF_SPACE_URL}/api/enrich`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: [{
+          title: paper.title || '',
+          doi: paper.doi || '',
+          year: paper.year || null,
+          abstract: paper.abstract || '',
+          authors: Array.isArray(paper.authors) ? paper.authors : [],
+          journal: paper.journal || ''
+        }]
+      })
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    const extra = Array.isArray(data?.results) ? data.results[0] : null;
+    return applyEnrichment(paper, extra);
+  } catch (err) {
+    console.warn('[enrich] falló', err);
+    return false;
+  }
 }
 
 function buildCard(paper, onBookmarkChange) {
@@ -1702,7 +1897,18 @@ async function loadRecommendations() {
   }
 
   try {
-    let { results } = await fetchPapers({ query, page, perPage: 8, sort });
+    let data;
+    try {
+      data = await fetchPapers({ query, page, perPage: 8, sort });
+    } catch (errRecs) {
+      // Primer arranque en frío: se espera al backend y se reintenta una vez
+      // antes de mostrar el error en la pantalla de inicio.
+      console.warn('[Recs] reintentando tras fallo inicial:', errRecs?.name || errRecs);
+      await warmBackend();
+      await new Promise(r => setTimeout(r, 700));
+      data = await fetchPapers({ query, page: 1, perPage: 8, sort: 'cited_by_count:desc' });
+    }
+    let { results } = data;
 
     // Si la página aleatoria vino vacía, reintentar con la primera página
     if ((!results || !results.length) && page > 1) {
@@ -1747,6 +1953,7 @@ async function loadRecommendations() {
     // Igual que en la búsqueda: verificar si el PDF es de descarga libre
     // para habilitar la traducción automática desde el inicio.
     validatePdfUrls(results);
+    enrichPapers(results).catch(() => { });
 
   } catch (err) {
     console.error('[Recs]', err);
@@ -1881,6 +2088,27 @@ async function openModal(paper, corriente) {
       }
     }
 
+    // Última red: si OpenAlex no tenía abstract/año/DOI, se completa desde
+    // Crossref, Europe PMC o Semantic Scholar (backend).
+    if (paperNeedsEnrichment(paper) && S.currentPaper?.id === paper.id) {
+      enrichSinglePaper(paper).then(filled => {
+        if (!filled || S.currentPaper?.id !== paper.id) return;
+        const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
+        const currentTitle = paper.titleEs || paper.title || 'Sin título';
+        el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, updatedTags, currentTitle, paper.abstractEs, false);
+        if (paper.abstract && !paper.abstractEs) {
+          translateToSpanish(paper.abstract).then(translated => {
+            if (S.currentPaper?.id !== paper.id || !translated) return;
+            paper.abstractEs = translated;
+            const absEl = document.getElementById('modal-abstract-text');
+            const langEl = document.getElementById('modal-abstract-lang');
+            if (absEl) absEl.textContent = translated;
+            if (langEl) langEl.innerHTML = '<span class="modal-lang-badge">Traducido al español</span>';
+          }).catch(() => { });
+        }
+      }).catch(() => { });
+    }
+
     // Traducir abstract en el fondo si existe y no está traducido
     if (paper.abstract && !paper.abstractEs) {
       try {
@@ -2006,7 +2234,9 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
   const primaryLabel = (availabilityKnown && !isFreePdf) ? 'Traducir PDF descargado' : 'Leer en PsiHub';
   const primarySub = !availabilityKnown
     ? 'Verificando disponibilidad…'
-    : (isFreePdf ? 'Libre · traducción automática' : 'Requiere descarga manual');
+    : (isFreePdf ? '1-click · traducción automática' : 'Requiere descarga manual');
+
+  const accessHtml = accessBadgeHtml(paper);
 
   const facts = [];
   if (sourceStr) facts.push(`<span class="modal-fact">${esc(sourceStr)}</span>`);
@@ -2020,7 +2250,7 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
 
     <h2 class="modal-title">${esc(displayTitle || 'Sin título')}</h2>
     ${authorsStr ? `<p class="modal-byline">${esc(authorsStr)}</p>` : ''}
-    <div class="modal-facts">${factsHtml}</div>
+    <div class="modal-facts">${factsHtml}${accessHtml ? `<span class="modal-fact-dot" aria-hidden="true">·</span><span class="modal-access">${accessHtml}</span>` : ''}</div>
 
     <div class="modal-abstract-section">
       <div class="modal-abstract-header">
@@ -2383,9 +2613,285 @@ function stopReaderLoadingProgress() {
   }
 }
 
+// ═══════════════════════════════════════════════════
+// RESUMEN CON IA (básico desde abstract · avanzado desde PDF)
+// ═══════════════════════════════════════════════════
+
+let summaryBusy = false;
+let summaryProgressTimer = null;
+
+function setReaderHeaderMode(mode) {
+  const badgeText = document.getElementById('reader-title-badge-text');
+  const badgeIcon = document.querySelector('#reader-title-badge i');
+  const loadingTitle = document.getElementById('reader-loading-title');
+  const loadingDesc = document.getElementById('reader-loading-desc');
+  if (mode === 'summary') {
+    if (badgeText) badgeText.textContent = 'Resumen IA';
+    if (badgeIcon) badgeIcon.className = 'ph-fill ph-magic-wand';
+    if (loadingTitle) loadingTitle.textContent = 'Generando resumen…';
+    if (loadingDesc) loadingDesc.textContent = 'Analizando el artículo con IA';
+  } else {
+    if (badgeText) badgeText.textContent = 'Modo Lectura';
+    if (badgeIcon) badgeIcon.className = 'ph-fill ph-book-open';
+    if (loadingTitle) loadingTitle.textContent = 'Traduciendo y adaptando PDF…';
+    if (loadingDesc) loadingDesc.textContent = 'Procesando el artículo científico con IA';
+  }
+}
+
+/** Restaura el visor para la traducción normal (el resumen lo deja adaptado). */
+function restoreReaderForTranslation() {
+  clearInterval(summaryProgressTimer);
+  summaryProgressTimer = null;
+  setReaderHeaderMode('translation');
+  const uploadBox = document.getElementById('reader-upload-box');
+  if (uploadBox) uploadBox.style.display = '';
+  const msg = document.getElementById('reader-error-msg');
+  if (msg) msg.style.display = '';
+}
+
+function dismissPsihubOptions() {
+  if (!el.psihubOptionsOverlay || el.psihubOptionsOverlay.classList.contains('hidden')) return;
+  if (el.psihubOptionsSheet) el.psihubOptionsSheet.classList.add('closing');
+  setTimeout(() => {
+    if (el.psihubOptionsOverlay) el.psihubOptionsOverlay.classList.add('hidden');
+    if (el.psihubOptionsSheet) el.psihubOptionsSheet.classList.remove('closing');
+  }, 200);
+}
+
+function summaryPayload(paper) {
+  return {
+    title: paper.titleEs || paper.title || '',
+    abstract: paper.abstract || '',
+    authors: Array.isArray(paper.authors) ? paper.authors.slice(0, 12) : [],
+    year: Number(paper.year) || null,
+    journal: paper.journal || '',
+    doi: paper.doi || '',
+    type: paper.type || '',
+    design: Array.isArray(paper.design) ? paper.design : [],
+    sample: paper.sample || '',
+    mode: 'basic',
+    pdf_url: ''
+  };
+}
+
+function openSummaryShell(advanced) {
+  clearInterval(summaryProgressTimer);
+  el.readerOverlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  el.readerError.style.display = 'none';
+  el.readerContent.innerHTML = '';
+  el.readerLoading.style.display = 'flex';
+  if (el.readerScroll) el.readerScroll.scrollTop = 0;
+  if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+  if (el.btnReaderViewPdf) el.btnReaderViewPdf.style.display = 'none';
+  // El resumen no es un documento traducible: no se ofrecen exportaciones
+  // ni se reutiliza el id de una lectura anterior.
+  S.readerDocId = null;
+  S.readerPdfUrl = null;
+  updateReaderExportButtons();
+  const uploadBox = document.getElementById('reader-upload-box');
+  if (uploadBox) uploadBox.style.display = 'none';
+  setReaderHeaderMode('summary');
+
+  let pct = 6;
+  updateReaderProgressBar(pct, advanced ? 'Descargando y extrayendo el texto del PDF…' : 'Analizando abstract y metadatos…');
+  summaryProgressTimer = setInterval(() => {
+    pct = Math.min(92, pct + (pct < 55 ? 4 : 1));
+    updateReaderProgressBar(
+      pct,
+      pct < 55
+        ? (advanced ? 'Extrayendo método, resultados y límites…' : 'Identificando hallazgos y conclusiones…')
+        : 'Redactando el resumen en español…'
+    );
+  }, 800);
+}
+
+function updateSummarizeButtons() {
+  [el.btnPsihubSummarize, el.btnPsihubSummarizeAdvanced].forEach(btn => {
+    if (!btn) return;
+    btn.disabled = summaryBusy;
+    btn.style.opacity = summaryBusy ? '0.55' : '';
+  });
+}
+
+function showSummaryResult(paper, result) {
+  clearInterval(summaryProgressTimer);
+  summaryProgressTimer = null;
+  summaryBusy = false;
+  updateSummarizeButtons();
+  const md = String(result?.summary || '').trim();
+  if (!md) {
+    showSummaryError('El servidor no devolvió ningún resumen.');
+    return;
+  }
+  updateReaderProgressBar(100, 'Resumen listo');
+  el.readerLoading.style.display = 'none';
+  el.readerError.style.display = 'none';
+  if (!window.marked || typeof window.marked.parse !== 'function') {
+    el.readerContent.textContent = md;
+    return;
+  }
+  renderReaderPaperContent(paper, md);
+  if (el.readerScroll) el.readerScroll.scrollTop = 0;
+}
+
+function showSummaryError(message) {
+  clearInterval(summaryProgressTimer);
+  summaryProgressTimer = null;
+  summaryBusy = false;
+  updateSummarizeButtons();
+  el.readerLoading.style.display = 'none';
+  el.readerContent.innerHTML = '';
+  el.readerError.style.display = 'flex';
+  const uploadBox = document.getElementById('reader-upload-box');
+  if (uploadBox) uploadBox.style.display = 'none';
+  const iconWrap = document.getElementById('reader-error-icon-wrap');
+  if (iconWrap) {
+    iconWrap.className = 'reader-requisite-icon-wrap';
+    iconWrap.innerHTML = '<i class="ph-bold ph-warning-circle"></i>';
+  }
+  const titleEl = document.getElementById('reader-requisite-title');
+  if (titleEl) titleEl.textContent = 'No se pudo generar el resumen';
+  const msgEl = document.getElementById('reader-error-msg');
+  if (msgEl) {
+    msgEl.style.display = 'block';
+    msgEl.textContent = message || 'Probá de nuevo en unos segundos.';
+  }
+  const journalWrap = document.getElementById('reader-journal-action-wrap');
+  if (journalWrap) journalWrap.style.display = 'none';
+}
+
+async function readApiError(res, fallback) {
+  let data = null;
+  try { data = await res.json(); } catch { }
+  const detail = data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail.trim();
+  return fallback || `Error ${res.status}`;
+}
+
+async function requestBasicSummary(paper) {
+  const res = await fetch(`${HF_SPACE_URL}/api/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(summaryPayload(paper))
+  });
+  if (!res.ok) throw new Error(await readApiError(res, 'No se pudo generar el resumen.'));
+  return res.json();
+}
+
+async function requestAdvancedSummaryByUrl(paper, pdfUrl) {
+  const res = await fetch(`${HF_SPACE_URL}/api/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...summaryPayload(paper), mode: 'advanced', pdf_url: pdfUrl })
+  });
+  if (!res.ok) throw new Error(await readApiError(res, 'No se pudo descargar el PDF.'));
+  return res.json();
+}
+
+async function requestAdvancedSummaryByFile(paper, file) {
+  const fd = new FormData();
+  fd.append('payload', JSON.stringify(summaryPayload(paper)));
+  fd.append('file', file, file.name || 'articulo.pdf');
+  const res = await fetch(`${HF_SPACE_URL}/api/summarize-pdf`, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(await readApiError(res, 'No se pudo leer el PDF.'));
+  return res.json();
+}
+
+/** Pide al usuario un PDF y genera el resumen avanzado con ese archivo. */
+function pickSummaryPdf(paper) {
+  showToast('Seleccioná el PDF del artículo para resumirlo.');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/pdf,.pdf';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    input.remove();
+    if (!file) return;
+    summaryBusy = true;
+    updateSummarizeButtons();
+    openSummaryShell(true);
+    try {
+      const result = await requestAdvancedSummaryByFile(paper, file);
+      showSummaryResult(paper, result);
+    } catch (err) {
+      showSummaryError(err?.message || 'No se pudo leer el PDF.');
+    }
+  });
+  input.click();
+}
+
+function updateSummarizeUiForPaper(paper) {
+  if (!el.psihubSummarizeHint) return;
+  el.psihubSummarizeHint.style.display = 'block';
+  if (!paper) return;
+  const category = paperAccessCategory(paper);
+  if (category === 'oneclick' && paper.pdfUrl) {
+    el.psihubSummarizeHint.textContent = 'El resumen avanzado descarga el PDF automáticamente (1-click) y analiza el artículo completo.';
+  } else if (paper.pdfUrl) {
+    el.psihubSummarizeHint.textContent = 'El resumen avanzado intenta descargar el PDF; si la revista lo bloquea, podrás adjuntarlo manualmente.';
+  } else {
+    el.psihubSummarizeHint.textContent = 'El resumen avanzado necesita el PDF: te pediremos que lo adjuntes.';
+  }
+}
+
+async function startPaperSummary(kind = 'basic') {
+  const paper = S.currentPaper;
+  if (!paper || summaryBusy) return;
+  const advanced = kind === 'advanced';
+  dismissPsihubOptions();
+
+  if (!advanced) {
+    if (!paper.abstract || paper.abstract.trim().length < 200) {
+      showToast('Este artículo no tiene abstract suficiente. Usá el resumen avanzado con el PDF.');
+      return;
+    }
+    summaryBusy = true;
+    updateSummarizeButtons();
+    openSummaryShell(false);
+    try {
+      const result = await requestBasicSummary(paper);
+      showSummaryResult(paper, result);
+    } catch (err) {
+      showSummaryError(err?.message || 'No se pudo generar el resumen.');
+    }
+    return;
+  }
+
+  // Avanzado: con PDF directo el backend lo descarga; si falla o no hay, se
+  // pide el archivo al usuario (papers de pago).
+  const pdfUrl = paper.pdfUrl || paper.oaUrl || '';
+  if (!pdfUrl) {
+    pickSummaryPdf(paper);
+    return;
+  }
+
+  summaryBusy = true;
+  updateSummarizeButtons();
+  openSummaryShell(true);
+  try {
+    const result = await requestAdvancedSummaryByUrl(paper, pdfUrl);
+    showSummaryResult(paper, result);
+  } catch (err) {
+    if (err instanceof TypeError) {
+      showSummaryError('No se pudo conectar con el servidor. Revisá la conexión e intentá de nuevo.');
+      return;
+    }
+    const message = err?.message || 'No se pudo descargar el PDF.';
+    showSummaryError(`${message} Si ya tenés el PDF, adjuntalo para resumirlo.`);
+    // Sin API key o sin conexión no tiene sentido pedir el archivo.
+    if (/api key|configurada|no hay/i.test(message)) return;
+    // Se ofrece el selector de archivo como salida para papers bloqueados.
+    pickSummaryPdf(paper);
+  }
+}
+
 async function openReaderModal(paperUrl, paperId, paperObj) {
   const paper = paperObj || S.currentPaper;
   const effectiveId = paperId || paper?.id || paperUrl;
+  restoreReaderForTranslation();
 
   // 1. Revisar si la traducción ya existe (en memoria o en almacenamiento persistente)
   let cachedMarkdown = paperTranslations.get(effectiveId) || paper?.translatedMarkdown;
@@ -2638,6 +3144,7 @@ function closeReaderModal() {
     closeInternalPdfViewer();
   }
   stopReaderLoadingProgress();
+  restoreReaderForTranslation();
   if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
   el.readerOverlay.classList.add('hidden');
   if (el.readerModal) el.readerModal.classList.remove('slide-left');
@@ -2666,6 +3173,7 @@ async function handleReaderFileUpload(file) {
   S.readerPaperId = effectiveId;
   S.readerDocId = null;
   updateReaderExportButtons();
+  restoreReaderForTranslation();
 
   el.readerLoading.style.display = 'flex';
   startReaderLoadingProgress(true);
@@ -3490,6 +3998,8 @@ function setupEventListeners() {
         }
         el.psihubOptionsOverlay.classList.remove('hidden');
         el.psihubOptionsSheet.classList.remove('closing');
+        updateSummarizeUiForPaper(S.currentPaper);
+        updateSummarizeButtons();
       }
       return;
     }
@@ -3630,7 +4140,14 @@ function setupEventListeners() {
   if (el.btnPsihubSummarize) {
     el.btnPsihubSummarize.addEventListener('click', (e) => {
       e.stopPropagation();
-      showToast('Resumir artículo estará disponible próximamente');
+      startPaperSummary('basic');
+    });
+  }
+
+  if (el.btnPsihubSummarizeAdvanced) {
+    el.btnPsihubSummarizeAdvanced.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startPaperSummary('advanced');
     });
   }
 
@@ -4927,16 +5444,18 @@ function renderChatSourcesHtml(sources, msgId) {
   if (!Array.isArray(sources) || !sources.length) return '';
 
   const items = sources.map((source, index) => {
-    const lock = source.isOa
-      ? '<i class="ph-bold ph-lock-open chat-source-lock is-open"></i>'
-      : '<i class="ph-bold ph-lock chat-source-lock is-paid"></i>';
+    // Chats viejos guardados sin `access`: se deduce de isOa y del PDF directo.
+    const category = source.access
+      || (source.accessCategory)
+      || (source.isAutoDownloadable ? 'oneclick' : (source.isOa ? 'free' : 'paid'));
+    const badge = accessBadgeFor(category);
     const meta = [source.year, source.journal].filter(Boolean).join(' · ');
     return `
       <button class="chat-source" data-mid="${esc(msgId)}" data-idx="${index}" title="Abrir ficha en PsiHub">
         <span class="chat-source-num">${index + 1}</span>
         <span class="chat-source-body">
           <span class="chat-source-title">${esc(source.title || 'Sin título')}</span>
-          <span class="chat-source-meta">${lock} ${esc(meta || 'Sin metadatos')}</span>
+          <span class="chat-source-meta">${badge}${badge && meta ? ' ' : ''}${esc(meta || 'Sin metadatos')}</span>
         </span>
         <i class="ph-bold ph-caret-right chat-source-arrow"></i>
       </button>`;

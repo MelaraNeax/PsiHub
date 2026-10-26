@@ -12,6 +12,7 @@ Cada respuesta registra su costo en el ledger (`kind: chat`) y deja una linea
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -25,6 +26,7 @@ from urllib.parse import urlparse
 import httpx
 
 import storage
+import enrich
 from costs import estimate_cost, record_cost
 
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
@@ -36,26 +38,32 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
 # Marca de la version del pipeline de chat. Se expone en /health para poder
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
-CHAT_PIPELINE_VERSION = '2026-10-24-concepts-snowball-v2'
+CHAT_PIPELINE_VERSION = '2026-10-26-lean-answers-v3'
 
-MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '18')))
-ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '1700')))
-MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '4200')))
+# Presupuesto de contexto: 7 fuentes con ~650 caracteres de resumen mantienen
+# 2-3 papers directos por concepto y dejan la respuesta total en ~2-3k tokens.
+MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '7')))
+ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '650')))
+MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '1000')))
 DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
-MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '6')))
-HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '900')))
+MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '3')))
+HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '450')))
 # Mensajes de historial que ve el router para saber a que se refiere la charla.
 ROUTER_HISTORY_MESSAGES = 4
 ROUTER_HISTORY_CHARS = 400
 SEARCH_CACHE_TTL = int(os.getenv('CHAT_SEARCH_CACHE_TTL', '1800'))
 # Papers que se piden por cada consulta generada (el pool final se recorta).
-SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '30')))
-ONECLICK_CANDIDATES = max(1, int(os.getenv('CHAT_ONECLICK_CANDIDATES', '20')))
+SEARCH_RESULTS = max(MAX_SOURCES, int(os.getenv('CHAT_SEARCH_RESULTS', '20')))
+ONECLICK_CANDIDATES = max(1, int(os.getenv('CHAT_ONECLICK_CANDIDATES', '12')))
 # Relevancia minima (0-1) para considerar que un paper tiene relacion real.
 MIN_RELEVANCE = float(os.getenv('CHAT_MIN_RELEVANCE', '0.14'))
 # Consultas simultaneas contra OpenAlex (limite comodo del polite pool).
 SEARCH_CONCURRENCY = max(1, int(os.getenv('CHAT_SEARCH_CONCURRENCY', '4')))
-PLANNER_MAX_OUTPUT = max(120, int(os.getenv('CHAT_PLANNER_TOKENS', '800')))
+PLANNER_MAX_OUTPUT = max(120, int(os.getenv('CHAT_PLANNER_TOKENS', '550')))
+# Enriquecimiento de metadatos (Crossref / Europe PMC / Semantic Scholar) para
+# papers sin abstract, año o DOI antes de armar el digest.
+ENRICH = os.getenv('CHAT_ENRICH', '1').strip() not in {'0', 'false', 'no'}
+ENRICH_CANDIDATES = max(0, int(os.getenv('CHAT_ENRICH_CANDIDATES', '18')))
 # Consultas maximas por pregunta (conceptos + puente + revision).
 MAX_QUERIES = 8
 # Relevancia (0-1) desde la cual un paper "trata directamente" un constructo.
@@ -86,80 +94,30 @@ GATED_HOST_RE = re.compile(
     re.I,
 )
 
-SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado en psicología, psiquiatría y psicoterapia.
-Respondes SIEMPRE en español, con un tono claro, académico y directo. Escribí con
-ortografía correcta: tildes, eñes y signos de apertura (¿, ¡).
+SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado en psicología, psiquiatría y psicoterapia. Respondés siempre en español, con tono claro, académico y directo, con tildes, eñes y signos de apertura.
 
-## Cómo pensar antes de escribir
-1. Descomponé la pregunta: identificá qué concepto, qué relación, qué población y qué
-   tipo de respuesta se pide. Respondé cada parte, no solo la primera.
-2. Fidelidad conceptual (la regla más importante). Si un término es un constructo técnico de
-   una tradición concreta (psicopatología fenomenológica, psicoanálisis, neurociencia
-   cognitiva, filosofía de la mente), definilo SOLO como lo definen las fuentes que lo tratan
-   directamente, nombrando la tradición y los autores que figuren en ellas. Nunca lo
-   reemplaces por un concepto vecino que "se le parece" (hiperreflexividad ≠ rumiación;
-   mindfulness ≠ relajación; disociación ≠ desrealización). Si recibís "DISTINCIONES
-   CONCEPTUALES", explicá en qué difieren. Si ninguna fuente trata el constructo
-   directamente, decilo al principio y no lo reinterpretes ni lo rellenes.
-3. Puentes entre conceptos o niveles (neural ↔ fenomenológico, teoría ↔ clínica). Indicá
-   si alguna fuente examina el vínculo directamente. Si no, presentalo como "puente teórico
-   no puesto a prueba", atribuyéndolo a quien lo propone cuando conste. Prohibido afirmar
-   identidades o causas ("es precisamente", "se debe a") sin evidencia directa.
-4. Si la pregunta cruza disciplinas o marcos, exponé primero cada marco por separado con
-   sus fuentes y recién después contrastalos y concluí. No mezcles vocabularios sin avisar.
-5. Distinguí siempre tres niveles de respaldo: evidencia experimental directa (ensayos,
-   mediciones, meta-análisis), evidencia observacional o correlacional, y analogía, modelo
-   teórico o hipótesis mecanística. Calibrá el verbo: "muestra/demuestra" solo para
-   experimentos y meta-análisis; "se asocia" para lo correlacional; "sugiere/propone" para
-   teoría, analogía o muestras pequeñas. Una analogía útil no es prueba de nada: decilo.
-6. Si la pregunta admite fases, etapas, subtipos, clasificaciones o comparaciones entre
-   opciones, resumilas en una tabla Markdown con una cita por fila.
-7. Cuando las fuentes discrepen, mostrá la discrepancia y qué la explica (muestra,
-   método, población, tipo de práctica); no la escondas ni la promedies. Incluí las
-   excepciones relevantes que aparezcan en las fuentes.
-8. Usá "COBERTURA DE LA BÚSQUEDA" si la recibís: reconocé en el texto los conceptos con
-   pocas o cero fuentes directas en lugar de cubrirlos con fuentes tangenciales.
+## Rigor conceptual
+- Definí cada constructo como lo definen las fuentes que lo tratan directamente, nombrando su tradición y autores. No lo reemplaces por un concepto vecino que se le parece (hiperreflexividad ≠ rumiación; mindfulness ≠ relajación; disociación ≠ desrealización). Si recibís DISTINCIONES CONCEPTUALES, explicá en qué difieren. Si ninguna fuente trata el constructo, decilo al principio.
+- Distinguí tres niveles de respaldo: evidencia experimental o meta-analítica, evidencia observacional/correlacional, y teoría, analogía o hipótesis mecanística. Calibrá el verbo: "muestra" solo para experimentos y meta-análisis; "se asocia" para correlaciones; "sugiere/propone" para teoría o muestras pequeñas.
+- Puentes entre niveles (neural ↔ fenomenológico, teoría ↔ clínica): indicá si alguna fuente examina el vínculo. Si no, presentalo como "puente teórico no puesto a prueba". Prohibido afirmar identidades o causas sin evidencia directa.
+- Cuando las fuentes discrepen, mostrá la discrepancia y qué la explica (muestra, método, población); no la promedies ni la escondas.
 
-## Formato (para que se pueda estudiar y citar)
-- NO empieces con un encabezado ni con la etiqueta "Respuesta breve". Abrí con un párrafo
-  de 3 a 5 frases, sin título, que conteste la pregunta de frente, nombre los conceptos
-  centrales y anuncie la salvedad principal.
-- Seguí con 3 a 6 secciones "## " (y "### " cuando una sección tenga dos o más
-  subpreguntas). Títulos cortos y descriptivos, no genéricos: "## Qué muestra la evidencia
-  experimental", "## El marco fenomenológico".
-- Desarrollá cada sección en 2 a 4 párrafos: primero el hallazgo, después quién lo muestra
-  y con qué diseño, y por último cómo se interpreta o qué lo matiza. No entregues una
-  idea por viñeta: explicá el razonamiento que une las fuentes.
-- Si hay dos o más conceptos, incluí "## Cómo se relacionan y en qué se distinguen".
-- Usá tablas cuando compares marcos, fases o estudios; viñetas cortas para listas;
-  negrita para el término técnico que el lector debería retener.
-- Cerrá con "## Límites de la evidencia" en 3 a 5 líneas: qué parte de la pregunta no
-  tiene respaldo directo, qué sesgos o tamaños de muestra limitan las conclusiones, y que
-  se trabaja con resúmenes (no con el texto completo).
-- Extensión objetivo: 900 a 1400 palabras. Desarrollá cada eje con lo que dicen las
-  fuentes; no rellenes con generalidades, pero tampoco telegrafíes: cada afirmación
-  central merece su explicación, su respaldo y, si corresponde, su matiz.
+## Formato
+- Abrí con 2 a 3 frases que respondan de frente la pregunta, sin encabezado, nombrando los conceptos centrales y la salvedad principal.
+- Seguí con 2 a 4 secciones "## " de título corto y específico. Cada sección: 1 párrafo de 4 a 6 frases. Cada sección debe aportar evidencia, mecanismo o matiz nuevo; no repitas ideas.
+- Usá tablas para comparar marcos, fases, estudios o niveles de evidencia: incluí al menos una siempre que compares 3 o más elementos. Máximo 4 columnas y 6 filas; celdas de 1 a 8 palabras, sin párrafos ni listas dentro de una celda; una cita por fila. Si no cabe, resumí en prosa.
+- Viñetas solo para listas breves. Negrita para el término técnico que el lector debe retener.
+- Cerrá con "## Límites de la evidencia" en 3 o 4 líneas: qué parte de la pregunta no tiene respaldo directo y qué sesgos o muestras limitan las conclusiones.
+- Extensión objetivo: 450 a 650 palabras (350 a 450 si la pregunta es simple). No rellenes con generalidades ni repitas para llegar a una extensión.
 
-## Reglas de contenido
-- Usá ÚNICAMENTE las FUENTES numeradas que recibís. Son muchas: apoyate en las que de
-  verdad tratan el tema y descartá sin citar las que solo lo rozan o provienen de revistas
-  ajenas al tema.
+## Contenido
+- Usá únicamente las FUENTES numeradas. Apoyate en las que tratan el tema y descartá sin citar las tangenciales.
 - Cada afirmación relevante lleva su cita: [1], [2], [1][3]. En tablas, citá dentro de la celda.
-- En los hallazgos centrales nombrá el estudio en la prosa con el autor y el año que figuran
-  en la fuente, y la cita: "Hasenkamp et al. (2012) [3] identificaron…". Mencioná el diseño
-  y la muestra solo si la fuente los declara.
-- Priorizá meta-análisis y revisiones sistemáticas, luego estudios de mayor muestra; los
-  trabajos muy citados y antiguos sirven para afirmaciones fundacionales.
-- Cubrí cada eje de "EJES QUE LA RESPUESTA DEBE CUBRIR" en alguna sección; no los repitas
-  como lista, integralos. Si un eje no tiene fuentes, decilo en vez de omitirlo.
-- No repitas la misma idea en dos secciones: cada sección debe agregar evidencia, mecanismo
-  o matiz nuevo. La extensión se gana con contenido, no con redundancia.
-- Sintetizá: no copies el abstract ni parafrasees frase por frase. Extraé hallazgos y conclusión.
-- No inventes datos, autores, años, tamaños de muestra ni resultados que no estén en las fuentes.
-- No incluyas URLs, DOIs ni enlaces: el lector abre cada fuente desde la interfaz.
-- No agregues una lista de referencias al final: la interfaz ya muestra las fuentes.
-- Si las fuentes no alcanzan para responder con rigor, decilo en "## Límites de la evidencia"
-  y sugerí cómo reformular la búsqueda."""
+- Para hallazgos centrales nombrá autor y año en la prosa ("Hasenkamp et al. (2012) [3]"), con diseño y muestra solo si la fuente los declara.
+- Priorizá meta-análisis y revisiones sistemáticas; los trabajos fundacionales sirven para afirmaciones históricas.
+- Cubrí cada eje de "EJES QUE LA RESPUESTA DEBE CUBRIR" integrado en alguna sección, no como lista. Si un eje no tiene fuentes, decilo.
+- Sintetizá: extraé hallazgos y conclusión, no copies el abstract.
+- No inventes datos, autores, años, muestras ni resultados. No incluyas URLs, DOIs ni referencias finales: la interfaz ya muestra las fuentes."""
 
 # Respuestas conversacionales: sin búsqueda bibliográfica ni fuentes.
 DIRECT_PROMPT = """Eres el asistente de PsiHub, una app de psicología basada en evidencia.
@@ -209,64 +167,33 @@ SUPPORT_FOOTER = """
 # Router + planificacion de la busqueda (una sola llamada)
 # ---------------------------------------------------------------------------
 
-ROUTER_PROMPT = """Eres el router y bibliotecario cientifico de PsiHub, una app de psicologia
-basada en evidencia. Decidis QUE necesita el mensaje y, si necesita investigacion, preparas
-la busqueda en OpenAlex.
+ROUTER_PROMPT = """Eres el router y bibliotecario cientifico de PsiHub, una app de psicologia basada en evidencia. Decidis que necesita el mensaje y, si necesita investigacion, preparas la busqueda en OpenAlex. Respondes SOLO con un objeto JSON valido, sin texto adicional.
 
-Respondes SIEMPRE con un objeto JSON valido, sin texto adicional ni bloques de codigo.
-
-FORMATO:
+FORMATOS:
 {"mode": "research", "concepts": [{"name": "...", "kind": "theory", "terms": ["..."], "not": ["..."], "queries": ["..."]}], "bridge": ["..."], "review": ["..."], "keywords": ["..."], "outline": ["..."], "scope": "psy"}
 {"mode": "chat"}
 {"mode": "support"}
 
-MODO "chat": saludos, agradecimientos, charla, preguntas sobre como usar PsiHub, opiniones
-sin respaldo empirico, o aclaraciones que se responden con la conversacion. No se busca nada.
-MODO "support": cuando la persona habla en primera persona de su propio dolor actual, angustia,
-desesperanza, aislamiento o ideacion suicida. Es acompanamiento emocional, no investigacion.
-MODO "research": TODO lo demas. Ante la duda entre "chat" y "research", elegi "research".
-
-EJEMPLO (pregunta: "¿La hiperreflexividad se explica por la red neuronal por defecto?"):
-{"mode": "research", "concepts": [{"name": "hyperreflexivity", "kind": "theory", "terms": ["hyperreflexivity", "self-disorder", "ipseity disturbance"], "not": ["rumination", "self-focused attention"], "queries": ["hyperreflexivity schizophrenia"]}, {"name": "default mode network", "kind": "empirical", "terms": ["default mode network", "DMN", "resting-state functional connectivity"], "not": [], "queries": ["default mode network self-referential processing"]}], "bridge": ["default mode network hyperreflexivity schizophrenia"], "review": ["default mode network schizophrenia systematic review"], "keywords": ["hyperreflexivity", "default mode network", "self-disorder", "self-referential processing", "schizophrenia"], "outline": ["Definir hiperreflexividad", "Que mide la DMN", "Vinculo teorico y evidencia", "Brechas y limites"], "scope": "psy"}
-
-Deteccion de riesgo (modo "support"): solo cuando el mensaje es personal y actual, por ejemplo
-"ultimamente siento que no vale la pena seguir", "estoy muy solo y no le veo salida",
-"pienso en lastimarme". NO marques "support" cuando se pregunta por el tema en general:
-"que factores de riesgo predicen la ideacion suicida en adolescentes" es "research".
-Si hay riesgo personal y a la vez una pregunta academica, elegi "support".
+- "chat": saludos, agradecimientos, charla, preguntas sobre como usar PsiHub, opiniones sin respaldo empirico o aclaraciones que se responden con la conversacion.
+- "support": la persona habla en primera persona de su dolor actual, angustia, desesperanza, aislamiento o ideacion suicida. Si hay riesgo personal y ademas una pregunta academica, elegi "support".
+- "research": todo lo demas. Ante la duda entre "chat" y "research", elegi "research".
+La deteccion de riesgo es solo para lo personal y actual ("ultimamente no le veo salida"), NO para preguntas generales ("que factores predicen la ideacion suicida en adolescentes" es research).
 
 Cuando el modo sea "research":
-- "concepts": entre 1 y 3, uno por cada constructo distinto de la pregunta.
-  - "kind": "theory" si es un constructo de una tradicion teorica, fenomenologica o
-    clinico-conceptual (hiperreflexividad, trastorno de ipseidad, transferencia, self-disorder,
-    mentalizacion, apego); "empirical" si se mide o se interviene (default mode network,
-    mindfulness, terapia cognitivo conductual, rumination).
-  - "terms": 2 a 4 terminos EN INGLES con el vocabulario propio de la literatura de ESE
-    constructo: el nombre canonico, sinonimos y el nombre del modelo (hiperreflexividad ->
-    hyperreflexivity, self-disorder, ipseity disturbance). Expandi siglas. Evita terminos
-    genericos que aparecen en cualquier paper (study, effect, brain, treatment). NUNCA
-    sustituyas el constructo por un concepto vecino que se le parezca (hiperreflexividad
-    no es rumination).
-  - "not": 0 a 2 conceptos vecinos que suelen confundirse con este y NO son equivalentes
-    (lista vacia si no hay).
-  - "queries": 1 a 2 consultas EN INGLES de 2 a 7 palabras con el vocabulario del propio
-    constructo. La primera es el nombre canonico solo o con su marco (hyperreflexivity
-    schizophrenia). La segunda agrega el metodo, la poblacion o el modelo si ayuda a
-    desambiguar, no la pregunta completa.
-- "bridge": si hay 2 o mas conceptos, 1 consulta que los une (default mode network
-  self-referential processing schizophrenia); si hay uno solo, [].
-- "review": 1 consulta para meta-analisis o revisiones sistematicas del tema central
-  (incluye "systematic review" o "meta-analysis").
-- Total de consultas (concepts + bridge + review) entre 3 y 8. No uses comillas, comodines,
-  parentesis, operadores booleanos ni signos de puntuacion.
-- "keywords": entre 4 y 8 conceptos sueltos EN INGLES que deberian aparecer en el titulo o
-  el resumen de un articulo realmente relevante. Incluye el nombre canonico de cada concepto.
-- "outline": entre 3 y 5 ejes o subpreguntas EN ESPANOL que la respuesta debe cubrir para
-  ser completa, en frases de 3 a 8 palabras. Si hay 2 o mas conceptos, incluye un eje sobre
-  la relacion o la brecha entre ellos.
-- "scope": "psy" si el tema es psicologico, clinico o medico; "broad" si de verdad cruza
-  campos ajenos a la psicologia y la medicina (filosofia, linguistica, educacion, economia,
-  ciencias de la computacion). Ante la duda, "psy".
+- "concepts": 1 a 3, uno por constructo distinto.
+  - "kind": "theory" si es un constructo de una tradicion teorica o clinico-conceptual (hiperreflexividad, transferencia, mentalizacion, apego); "empirical" si se mide o se interviene (DMN, mindfulness, TCC, rumiacion).
+  - "terms": 2 a 4 terminos EN INGLES propios de ESE constructo (nombre canonico, sinonimos, nombre del modelo; expandi siglas). Evita terminos genericos (study, effect, brain, treatment). NUNCA sustituyas el constructo por un vecino (hiperreflexividad no es rumination).
+  - "not": 0 a 2 conceptos vecinos que NO son equivalentes ([] si no hay).
+  - "queries": 1 a 2 consultas EN INGLES de 2 a 7 palabras con el vocabulario del constructo; la segunda agrega metodo, poblacion o modelo para desambiguar.
+- "bridge": si hay 2 o mas conceptos, 1 consulta que los une; si hay uno, [].
+- "review": 1 consulta para meta-analisis o revisiones sistematicas del tema central.
+- Total de consultas (concepts + bridge + review): 3 a 8. Sin comillas, comodines, parentesis, operadores booleanos ni puntuacion.
+- "keywords": 4 a 8 conceptos sueltos EN INGLES que deberian aparecer en el titulo o resumen de un articulo relevante.
+- "outline": 3 a 5 ejes EN ESPANOL de 3 a 8 palabras; si hay 2 o mas conceptos, incluye la relacion o brecha entre ellos.
+- "scope": "psy" si es psicologico, clinico o medico; "broad" si cruza filosofia, linguistica, educacion, economia o computacion. Ante la duda, "psy".
+
+EJEMPLO ("¿La hiperreflexividad se explica por la red neuronal por defecto?"):
+{"mode": "research", "concepts": [{"name": "hyperreflexivity", "kind": "theory", "terms": ["hyperreflexivity", "self-disorder", "ipseity disturbance"], "not": ["rumination", "self-focused attention"], "queries": ["hyperreflexivity schizophrenia"]}, {"name": "default mode network", "kind": "empirical", "terms": ["default mode network", "DMN", "resting-state functional connectivity"], "not": [], "queries": ["default mode network self-referential processing"]}], "bridge": ["default mode network hyperreflexivity schizophrenia"], "review": ["default mode network schizophrenia systematic review"], "keywords": ["hyperreflexivity", "default mode network", "self-disorder", "self-referential processing", "schizophrenia"], "outline": ["Definir hiperreflexividad", "Que mide la DMN", "Vinculo teorico y evidencia", "Brechas y limites"], "scope": "psy"}
 """
 
 
@@ -566,6 +493,28 @@ def _is_direct_pdf(url: str) -> bool:
         return False
 
 
+def _access_category(work: dict, pdf_url: Optional[str]) -> str:
+    """Categoria de acceso verificable, sin confundir "open access" con gratis.
+
+    - oneclick: hay un PDF directo en un dominio que no exige login.
+    - free: OpenAlex confirma acceso abierto con una URL de lectura.
+    - paid: no hay ninguna via gratuita comprobable.
+    """
+    oa = work.get('open_access') or {}
+    oa_url = str(oa.get('oa_url') or '').strip()
+    is_oa = bool(oa.get('is_oa'))
+    if pdf_url and _is_direct_pdf(pdf_url):
+        try:
+            host = (urlparse(pdf_url).hostname or '').lower()
+        except Exception:
+            host = ''
+        if host and not GATED_HOST_RE.search(host):
+            return 'oneclick'
+    if is_oa and (oa_url or pdf_url):
+        return 'free'
+    return 'paid'
+
+
 def _work_to_source(work: dict) -> dict:
     abstract = _reconstruct_abstract(work.get('abstract_inverted_index'))
     authors = [
@@ -585,6 +534,7 @@ def _work_to_source(work: dict) -> dict:
 
     pdf_url = _extract_pdf_url(work)
     is_oa = bool((work.get('open_access') or {}).get('is_oa'))
+    access_category = _access_category(work, pdf_url)
     work_id = str(work.get('id') or '')
     if work_id.startswith('https://openalex.org/'):
         work_id = work_id.rsplit('/', 1)[-1]
@@ -605,7 +555,9 @@ def _work_to_source(work: dict) -> dict:
         'oaStatus': (work.get('open_access') or {}).get('oa_status'),
         'oaUrl': (work.get('open_access') or {}).get('oa_url'),
         'pdfUrl': pdf_url,
-        'isAutoDownloadable': bool(is_oa and pdf_url),
+        'isAutoDownloadable': access_category == 'oneclick',
+        'accessCategory': access_category,
+        'accessChecked': False,
     }
 
 
@@ -693,6 +645,43 @@ async def _openalex_get(
             await client.aclose()
 
 
+async def _verify_access(sources: list[dict], probe_fn) -> list[dict]:
+    """Confirma los PDF directos antes de prometer "1 clic" en la interfaz.
+
+    Si el PDF no responde sin login, el paper se degrada a "gratis" (solo si
+    OpenAlex confirma una URL abierta) o a "pago"; nunca se muestra una etiqueta
+    de acceso que no se pueda sostener.
+    """
+    candidates = [s for s in sources if s.get('accessCategory') == 'oneclick']
+    if not candidates:
+        return sources
+    semaphore = asyncio.Semaphore(6)
+
+    async def verify(source: dict) -> None:
+        source['accessChecked'] = True
+        url = source.get('pdfUrl') or ''
+        try:
+            host = (urlparse(url).hostname or '').lower()
+        except Exception:
+            host = ''
+        ok = False
+        if url and host and not GATED_HOST_RE.search(host) and _is_direct_pdf(url):
+            async with semaphore:
+                try:
+                    verdict = await asyncio.wait_for(probe_fn(url), timeout=6.0)
+                    ok = verdict.get('ok') is True
+                except Exception:
+                    ok = False
+        if not ok:
+            source['isAutoDownloadable'] = False
+            source['accessCategory'] = (
+                'free' if source.get('isOa') and source.get('oaUrl') else 'paid'
+            )
+
+    await asyncio.gather(*(verify(source) for source in candidates))
+    return sources
+
+
 async def _probe_oneclick(sources: list[dict], probe_fn) -> list[dict]:
     """Conserva solo papers cuyo PDF responde sin login (verificacion real)."""
     candidates = [s for s in sources if s.get('pdfUrl') and s.get('isAutoDownloadable')][:ONECLICK_CANDIDATES]
@@ -701,6 +690,7 @@ async def _probe_oneclick(sources: list[dict], probe_fn) -> list[dict]:
     semaphore = asyncio.Semaphore(6)
 
     async def verify(source: dict) -> Optional[dict]:
+        source['accessChecked'] = True
         url = source['pdfUrl']
         try:
             host = (urlparse(url).hostname or '').lower()
@@ -966,12 +956,15 @@ def _select_sources(items: list[dict], n_concepts: int, limit: int) -> list[dict
 
     if n_concepts >= 2:
         take([it for it in pool if sum(c >= DIRECT_REL for c in it['crel']) >= 2], 3)
-    quota = max(3, limit // (n_concepts + 1)) if n_concepts else 0
+    strong = ('meta-análisis', 'revisión sistemática', 'revisión narrativa')
+    # Reservar una revision antes de repartir cupos: con 7 fuentes y 3
+    # conceptos, el reparto no debe quedarse sin evidencia sintetizada.
+    take([it for it in pool if any(t in strong for t in (it['source'].get('design') or []))], 1)
+    quota = max(2, (limit - len(chosen)) // max(n_concepts, 1)) if n_concepts else 0
     for i in range(n_concepts):
         have = sum(1 for it in chosen if it['crel'][i] >= DIRECT_REL)
         take([it for it in pool if it['crel'][i] >= DIRECT_REL], quota - have)
-    strong = ('meta-análisis', 'revisión sistemática', 'revisión narrativa')
-    take([it for it in pool if any(t in strong for t in (it['source'].get('design') or []))], 3)
+    take([it for it in pool if any(t in strong for t in (it['source'].get('design') or []))], 2)
     take(pool, limit)
     chosen.sort(key=lambda it: it['score'], reverse=True)
     return chosen
@@ -1244,10 +1237,59 @@ async def search_sources(
         })
     items.sort(key=lambda it: it['score'], reverse=True)
 
+    # OpenAlex a veces omite el resumen/año/DOI. Antes de recortar, completamos
+    # los mejores candidatos con Crossref/Europe PMC/Semantic Scholar: sin
+    # resumen el modelo no puede usar el paper y la respuesta pierde base.
+    if ENRICH and ENRICH_CANDIDATES:
+        pending = [
+            it for it in items[:ENRICH_CANDIDATES]
+            if enrich.needs_enrichment(it['source'])
+        ]
+        if pending:
+            log_fn(f'[chat-enrich] completando metadatos de {len(pending)} papers')
+            try:
+                extra_fields = await asyncio.wait_for(
+                    enrich.enrich_items([it['source'] for it in pending]),
+                    timeout=12.0,
+                )
+            except Exception as exc:  # noqa: BLE001 - nunca bloquea la respuesta
+                log_fn(f'[chat-enrich] omitido: {type(exc).__name__}: {_redact(exc)}')
+                extra_fields = []
+            filled = 0
+            for item, extra in zip(pending, extra_fields):
+                if not isinstance(extra, dict):
+                    continue
+                source = item['source']
+                for field in ('abstract', 'year', 'doi', 'authors', 'journal', 'title'):
+                    value = extra.get(field)
+                    if value and not source.get(field):
+                        source[field] = value
+                        filled += 1
+                if extra.get('sources'):
+                    source['enrichedBy'] = extra['sources']
+                source['design'], source['sample'] = _study_design(source)
+                item['crel'] = [_concept_relevance(source, c) for c in concepts]
+                item['score'], item['rel'] = _score_source(
+                    source, terms, scope, item['crel'],
+                    consensus.get(str(source.get('openalexId') or '').lower(), 0), anchors,
+                )
+            if filled:
+                items.sort(key=lambda it: it['score'], reverse=True)
+                log_fn(f'[chat-enrich] {filled} campos completados')
+
     related = [it['source'] for it in _select_sources(items, len(concepts), MAX_SOURCES)]
 
     if access == 'oneclick' and probe_fn is not None:
         related = await _probe_oneclick(related, probe_fn)
+    elif probe_fn is not None:
+        # La etiqueta de acceso debe ser real incluso cuando no se filtra por
+        # 1 clic: verificamos los PDF directos y degradamos los que fallen.
+        related = await _verify_access(related, probe_fn)
+    if access == 'free':
+        related = [
+            s for s in related
+            if s.get('accessCategory') in ('free', 'oneclick')
+        ]
 
     coverage, bridge_direct = _coverage(related, concepts)
     if coverage:
@@ -1344,17 +1386,44 @@ def _author_label(source: dict) -> str:
     return f'{last(authors[0])} et al.'
 
 
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+_QUANT_RESULT_RE = re.compile(
+    r'(\bp\s*[<=>]|\bd\s*=|\bOR\s*=|\bRR\s*=|\bHR\s*=|IC\s*95|CI\s*95|'
+    r'\bn\s*=|\d+(?:[.,]\d+)?\s*%)',
+    re.I,
+)
+
+
 def _clip_abstract(abstract: str) -> str:
-    """Recorta conservando inicio (objetivo) y final (resultados/conclusion)."""
-    if len(abstract) <= ABSTRACT_CHARS:
-        return abstract
-    head_len = int(ABSTRACT_CHARS * 0.4)
-    tail_len = ABSTRACT_CHARS - head_len
-    head = abstract[:head_len].rstrip()
-    tail = abstract[-tail_len:]
-    if ' ' in tail:
-        tail = tail[tail.find(' ') + 1:]
-    return f'{head} [...] {tail.lstrip()}'
+    """Recorta conservando objetivo, resultados cuantitativos y conclusión.
+
+    El corte ciego 40/60 perdía justo los tamaños de efecto y los valores p
+    que sostienen la calibración de la respuesta. Acá se eligen la primera y
+    las dos últimas oraciones completas, más cualquier oración de la primera
+    mitad que traiga un resultado numérico.
+    """
+    text = re.sub(r'\s+', ' ', (abstract or '').strip())
+    if len(text) <= ABSTRACT_CHARS:
+        return text
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    if len(sentences) < 3:
+        head_len = int(ABSTRACT_CHARS * 0.4)
+        tail_len = ABSTRACT_CHARS - head_len
+        return f'{text[:head_len].rstrip()} [...] {text[-tail_len:].lstrip()}'
+    picked: list[str] = [sentences[0]]
+    half = max(1, len(sentences) // 2)
+    for sentence in sentences[1:half]:
+        if _QUANT_RESULT_RE.search(sentence):
+            picked.append(sentence)
+    for sentence in sentences[-2:]:
+        if sentence not in picked:
+            picked.append(sentence)
+    clipped = ' '.join(picked)
+    if len(clipped) > ABSTRACT_CHARS:
+        clipped = clipped[:ABSTRACT_CHARS].rsplit(' ', 1)[0].rstrip(' ,;:')
+    if not clipped.endswith(('.', '!', '?', '…')):
+        clipped += ' […]'
+    return clipped
 
 
 def _digest(sources: list[dict]) -> str:
@@ -1368,7 +1437,11 @@ def _digest(sources: list[dict]) -> str:
             abstract = 'OpenAlex no incluye el resumen de este artículo.'
         else:
             abstract = _clip_abstract(abstract)
-        access = 'acceso abierto' if source.get('isOa') else 'de pago'
+        access = {
+            'oneclick': 'PDF directo (1 clic)',
+            'free': 'acceso abierto',
+            'paid': 'de pago',
+        }.get(source.get('accessCategory') or '', 'acceso no informado')
         citations = int(source.get('citations') or 0)
         author = _author_label(source)
         who = f'{author} ({year})' if author else f'({year})'
@@ -1462,8 +1535,8 @@ def _build_messages(
             f'{axes}'
             f'{_concept_notes(plan, meta)}'
             f'FUENTES DISPONIBLES:\n{_digest(sources)}\n\n'
-            'Redactá en español una respuesta desarrollada (900-1400 palabras) con el'
-            ' párrafo de apertura, las secciones y las citas [n] indicadas.'
+            'Redactá en español una respuesta compacta (450-650 palabras) con el'
+            ' párrafo de apertura, 2 a 4 secciones y las citas [n] indicadas.'
         ),
     })
     return messages
@@ -1498,7 +1571,7 @@ async def _complete(
     api_keys: list[str],
     max_tokens: int,
     temperature: float = 0.2,
-) -> str:
+) -> tuple[str, dict]:
     """Llamada corta sin streaming (planificacion de la busqueda)."""
     if not api_keys:
         raise ChatStartError('No hay API key de DeepSeek configurada.')
@@ -1526,12 +1599,36 @@ async def _complete(
             data = response.json()
             choices = data.get('choices') or []
             if not choices:
-                return ''
-            return (choices[0].get('message') or {}).get('content') or ''
+                return '', (data.get('usage') or {})
+            content = (choices[0].get('message') or {}).get('content') or ''
+            return content, (data.get('usage') or {})
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             continue
     raise ChatStartError(f'No se pudo planificar la busqueda: {last_error}')
+
+
+# Planes del router reutilizables: una misma pregunta dentro de la ventana de
+# cache de busqueda no debe pagar dos veces la planificacion.
+_plan_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _merge_usage(*parts: dict) -> dict:
+    """Suma usage de varias llamadas (router + respuesta) para el ledger."""
+    merged: dict = {}
+    keys = (
+        'prompt_tokens', 'completion_tokens', 'total_tokens',
+        'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
+        'prompt_tokens_details', 'completion_tokens_details',
+    )
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        for key in keys:
+            value = part.get(key)
+            if isinstance(value, (int, float)):
+                merged[key] = int(merged.get(key, 0)) + int(value)
+    return merged
 
 
 async def _route(
@@ -1548,6 +1645,16 @@ async def _route(
     heuristico y se investiga: la busqueda nunca se detiene por el router.
     """
     fallback = _fallback_plan(question, query)
+    plan_key = hashlib.sha1(
+        f'{_normalize(question)}|{_normalize(query)}'.encode('utf-8')
+    ).hexdigest()
+    cached = _plan_cache.get(plan_key)
+    if cached and cached[0] > time.time():
+        plan = dict(cached[1])
+        plan['route_usage'] = {}
+        plan['cached_plan'] = True
+        return plan
+
     context = _router_history(history)
     prompt = f'Pregunta del usuario: {question[:1200]}\n'
     if context:
@@ -1555,7 +1662,7 @@ async def _route(
     prompt += f'\nConsulta traducida al ingles (referencia): {query[:300]}'
 
     try:
-        raw = await _complete(
+        raw, usage = await _complete(
             [
                 {'role': 'system', 'content': ROUTER_PROMPT},
                 {'role': 'user', 'content': prompt},
@@ -1565,17 +1672,20 @@ async def _route(
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat-route] fallo: {type(exc).__name__}: {exc}')
+        fallback['route_usage'] = {}
         return fallback
 
     parsed = _parse_json_object(raw)
     if not parsed:
         log_fn('[chat-route] respuesta no parseable; se investiga con plan heuristico')
+        fallback['route_usage'] = usage
         return fallback
 
     mode = _plan_mode(parsed)
     if mode != 'research':
         log_fn(f'[chat-route] modo {mode}: sin busqueda')
-        return {'mode': mode, 'queries': [], 'keywords': [], 'outline': [], 'scope': 'psy'}
+        return {'mode': mode, 'queries': [], 'keywords': [], 'outline': [],
+                'scope': 'psy', 'route_usage': usage}
 
     legacy = [q.strip() for q in (parsed.get('queries') or []) if isinstance(q, str) and q.strip()]
     keywords = [k.strip() for k in (parsed.get('keywords') or []) if isinstance(k, str) and k.strip()]
@@ -1590,7 +1700,11 @@ async def _route(
         'keywords': keywords[:10],
         'outline': _plan_outline(parsed),
         'scope': _plan_scope(parsed),
+        'route_usage': usage,
     }
+    _plan_cache[plan_key] = (time.time() + SEARCH_CACHE_TTL, dict(plan))
+    if len(_plan_cache) > 300:
+        _plan_cache.clear()
     specs = _plan_query_specs(plan, question, query)
     log_fn(
         f'[chat-plan] {len(specs)} consultas ({plan["scope"]}, '
@@ -1700,9 +1814,23 @@ async def stream_chat(
         return
 
     def sources_event(sources: list[dict], meta: dict) -> str:
+        # El cliente solo pinta estos campos. Enviar el abstract y los topics
+        # inflaba el SSE a ~45 KB y llenaba el localStorage del historial.
+        public_fields = (
+            'id', 'openalexId', 'doi', 'title', 'authors', 'year', 'journal',
+            'citations', 'isOa', 'oaUrl', 'pdfUrl', 'isAutoDownloadable',
+            'accessCategory', 'type', 'design', 'sample', 'enrichedBy',
+        )
+        public_sources = []
+        for source in sources:
+            item = {key: source.get(key) for key in public_fields if source.get(key) is not None}
+            item['access'] = source.get('accessCategory') or (
+                'free' if source.get('isOa') else 'paid'
+            )
+            public_sources.append(item)
         return _sse({
             'type': 'sources',
-            'sources': sources,
+            'sources': public_sources,
             'access': access,
             'query': meta.get('query') or query,
             'cached': bool(meta.get('cached')),
@@ -1748,6 +1876,7 @@ async def stream_chat(
         plan = _fallback_plan(question, query or question)
 
     mode = _plan_mode(plan)
+    route_usage = plan.get('route_usage') or {}
 
     # Charla y acompanamiento: no se busca bibliografia, se responde directo.
     if mode in ('chat', 'support'):
@@ -1781,6 +1910,7 @@ async def stream_chat(
             # Los recursos los agrega el servidor: numeros verificados, no inventados.
             yield _sse({'type': 'delta', 'text': SUPPORT_FOOTER})
 
+        direct_usage = _merge_usage(direct_usage, route_usage)
         direct_cost, direct_elapsed = finish(direct_usage, mode, 0, 0)
         yield sources_event([], {'query': query, 'cached': False})
         yield _sse({
@@ -1858,6 +1988,7 @@ async def stream_chat(
         yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
         return
 
+    usage = _merge_usage(usage, route_usage)
     cost, elapsed = finish(usage, mode, len(sources), candidates)
     # Primero las fuentes y al final el cierre: el cliente las muestra recien
     # cuando el texto ya esta completo.

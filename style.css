@@ -5251,8 +5251,10 @@ body::after { opacity: 0.016; }
   inset: 0;
   z-index: 100000;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 20px;
   background: #09090a;
   transition: opacity 0.45s ease;
 }
@@ -5291,9 +5293,37 @@ body::after { opacity: 0.016; }
   to   { clip-path: inset(0 0 0 0); }
 }
 
+/* Barra de carga del splash: la única señal de progreso, siempre visible
+   desde el primer frame (sin imagen estática previa). */
+.app-splash-bar {
+  width: 132px;
+  height: 2px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(236, 233, 226, 0.16);
+}
+
+.app-splash-bar span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: #ece9e2;
+  animation: splash-bar 1.1s ease-in-out infinite;
+}
+
+@keyframes splash-bar {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(360%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-splash-wordmark .app-splash-fill {
     animation-duration: 0.3s;
+  }
+  .app-splash-bar span {
+    width: 100%;
+    animation: none;
   }
 }
 

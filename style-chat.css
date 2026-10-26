@@ -28,10 +28,39 @@
   border-color: rgba(138, 171, 144, 0.2);
 }
 
+.access-badge.is-oneclick {
+  color: #8fb4d8;
+  background: rgba(110, 156, 210, 0.1);
+  border-color: rgba(110, 156, 210, 0.24);
+}
+
 .access-badge.is-paid {
   color: #c08682;
   background: rgba(179, 112, 109, 0.09);
   border-color: rgba(179, 112, 109, 0.22);
+}
+
+/* En la ficha del paper el badge va dentro de la fila de metadatos */
+.modal-facts .modal-access {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ─── Tablas del chat: legibles y con scroll en móvil ─── */
+@media (max-width: 640px) {
+  .chat-answer table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    font-size: 12.5px;
+  }
+
+  .chat-answer table th,
+  .chat-answer table td {
+    padding: 7px 9px;
+    min-width: 96px;
+  }
 }
 
 /* ─── Barra de resultados: filtros ─── */
@@ -418,27 +447,39 @@
 .chat-answer table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .chat-answer th {
   text-align: left;
-  padding: 8px 10px;
-  font-size: 10px;
+  padding: 10px 12px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--txt-2);
   background: rgba(255, 255, 255, 0.045);
   border-bottom: 1px solid var(--stroke);
-  white-space: nowrap;
+  /* Las cabeceras pueden partirse en dos líneas: las tablas densas dejan de
+     apretar las columnas y se leen mejor en pantallas angostas. */
+  white-space: normal;
+  min-width: 84px;
+  vertical-align: bottom;
 }
 
 .chat-answer td {
-  padding: 8px 10px;
+  padding: 10px 12px;
   vertical-align: top;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 84px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.chat-answer td:first-child,
+.chat-answer th:first-child {
+  min-width: 108px;
 }
 
 .chat-answer tbody tr:last-child td {

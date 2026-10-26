@@ -6,7 +6,10 @@ const BASE = 'https://api.openalex.org/works';
 // Proxy propio: usa la IP del backend (con su propia cuota de OpenAlex) y
 // cachea las respuestas para no gastar créditos en búsquedas repetidas.
 const PROXY = 'https://mi-servidor-api-42204102300.southamerica-east1.run.app/api/openalex';
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 25000;
+// El proxy puede tardar en arrancar en frío; pasado este umbral se prefiere
+// ir directo a OpenAlex antes que dejar la pantalla de inicio sin resultados.
+const PROXY_TIMEOUT_MS = 12000;
 // OpenAlex puede responder Retry-After con horas; nunca se espera tanto.
 const MAX_RETRY_WAIT_MS = 3000;
 
@@ -74,16 +77,24 @@ function getFallbackFilterForQuery(query) {
 /**
  * Fetch con reintentos automáticos para evitar errores 429 de límite de frecuencia.
  */
-function withTimeout(signal) {
+function withTimeout(signal, timeoutMs = REQUEST_TIMEOUT_MS) {
   if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) return signal;
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  // El timeout debe ser nuevo en cada intento: si se crea una sola vez fuera
+  // del bucle, el primer intento lo consume y los reintentos fallan al instante.
+  const timeout = AbortSignal.timeout(timeoutMs);
   if (!signal) return timeout;
   return AbortSignal.any ? AbortSignal.any([signal, timeout]) : signal;
 }
 
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 1000) {
-  const opts = { ...options, signal: withTimeout(options.signal) };
+  const { signal: externalSignal, timeoutMs = REQUEST_TIMEOUT_MS, ...rest } = options;
   for (let attempt = 0; attempt <= retries; attempt++) {
+    if (externalSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const opts = { ...rest, signal: withTimeout(externalSignal, timeoutMs) };
     try {
       const res = await fetch(url, opts);
       if (res.status === 429 && attempt < retries) {
@@ -93,14 +104,15 @@ async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 1000) {
           : delayMs * (attempt + 1);
         const wait = Math.min(suggested, MAX_RETRY_WAIT_MS);
         console.warn(`[OpenAlex 429] Rate limit temporal. Reintentando en ${wait}ms (intento ${attempt + 1}/${retries})...`);
-        await new Promise(r => setTimeout(r, wait));
+        await sleep(wait);
         continue;
       }
       return res;
     } catch (err) {
-      if (err.name === 'AbortError') throw err;
+      // Si el usuario canceló, no reintentamos. Si fue timeout/red, sí.
+      if (externalSignal?.aborted) throw err;
       if (attempt === retries) throw err;
-      await new Promise(r => setTimeout(r, delayMs));
+      await sleep(delayMs * (attempt + 1));
     }
   }
 }
@@ -221,15 +233,23 @@ function buildWorksParams({ query, subtype, sort, perPage, page, precise, apiKey
 }
 
 // Intenta primero por el proxy; si no está disponible, va directo a OpenAlex.
+// Un timeout del proxy (típico en el primer arranque en frío de Cloud Run) NO
+// debe abortar la búsqueda: se cae a la API directa en vez de fallar.
 async function fetchOpenAlex(params, signal) {
   try {
-    const res = await fetchWithRetry(`${PROXY}?${params}`, { signal });
+    // Un solo intento contra el proxy, con timeout corto: si está arrancando
+    // en frío preferimos la API directa antes que hacer esperar al usuario.
+    const res = await fetchWithRetry(`${PROXY}?${params}`, {
+      signal,
+      timeoutMs: PROXY_TIMEOUT_MS
+    }, 0);
     // 200/429/503 son respuestas válidas de OpenAlex: no se reintenta directo.
     if (res.ok || res.status === 429 || res.status === 503) return res;
   } catch (err) {
-    if (err?.name === 'AbortError' || err?.name === 'TimeoutError') throw err;
+    if (signal?.aborted) throw err;
+    console.warn('[OpenAlex proxy] Falló el proxy, usando API directa:', err?.name || err);
   }
-  return fetchWithRetry(`${BASE}?${params}`, { signal });
+  return fetchWithRetry(`${BASE}?${params}`, { signal }, 1, 800);
 }
 
 async function fetchWorksPage(params, signal) {

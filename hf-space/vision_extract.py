@@ -13,15 +13,16 @@ import json
 import os
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import httpx
 import pymupdf
 
-VISION_DPI = int(os.getenv('VISION_DPI', '144'))
+VISION_DPI = int(os.getenv('VISION_DPI', '128'))
 VISION_JPEG_QUALITY = int(os.getenv('VISION_JPEG_QUALITY', '82'))
-VISION_MAX_TOKENS = int(os.getenv('VISION_MAX_TOKENS', '16000'))
+VISION_MAX_TOKENS = int(os.getenv('VISION_MAX_TOKENS', '4096'))
 VISION_TIMEOUT = int(os.getenv('VISION_TIMEOUT', '300'))
 VISION_CONCURRENCY = max(1, int(os.getenv('VISION_CONCURRENCY', '6')))
 VISION_MAX_ATTEMPTS = max(2, int(os.getenv('VISION_MAX_ATTEMPTS', '4')))
@@ -31,58 +32,41 @@ FIGURE_DPI = int(os.getenv('FIGURE_DPI', '200'))
 DEFAULT_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
 DEFAULT_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
 
-PAGE_PROMPT = """Eres un sistema experto en digitalizacion y traduccion de articulos cientificos.
+PAGE_PROMPT = """Eres un sistema experto en digitalizacion y traduccion de articulos cientificos. Recibes la IMAGEN de UNA pagina y devuelves un UNICO objeto JSON valido.
 
-Recibes la IMAGEN de UNA pagina de un articulo academico. Devuelve un UNICO objeto JSON valido.
+IDIOMA (OBLIGATORIO): todo el contenido debe quedar en ESPANOL: block.text, block.items, block.caption, block.headers, block.rows, block.text de ecuaciones, document.title_es, subtitle_es, abstract_es, keywords_es y footnotes[].text. La unica excepcion son las entradas de la bibliografia, que se conservan intactas, y page_header/page_footer, que se copian literalmente.
+- Traduce tambien las citas textuales entre comillas y cualquier frase en ingles. No dejes oraciones ni fragmentos de prosa en ingles.
+- No traduzcas: nombres de instituciones y universidades, revistas, siglas (DSM-5-TR, CBT, fMRI), nombres de escalas e inventarios (Beck Depression Inventory), nombres propios, titulos de obras, formulas, DOIs y URLs.
+- Si una cita textual es imprescindible en su idioma, traducila y agrega el original entre parentesis solo cuando cambie el sentido.
 
-REGLA DE IDIOMA (OBLIGATORIA): TODOS los campos de texto de contenido deben estar en ESPANOL:
-block.text, block.items, block.caption, block.headers, block.rows, block.text de ecuaciones,
-page_header/page_footer (si tienen prosa), document.title_es, document.subtitle_es,
-document.abstract_es, document.keywords_es y footnotes[].text.
-La unica excepcion son las entradas de la lista de referencias bibliograficas, que se conservan
-en su idioma original. Si devuelves el texto original en ingles, el resultado es incorrecto.
+LECTURA FIEL
+- Lee TODO el contenido visible. No resumas, omitas, inventes ni recortes parrafos.
+- Orden: en varias columnas, termina cada columna de arriba a abajo y avanza de izquierda a derecha. Si un parrafo continua al inicio de la columna siguiente de la MISMA pagina, unelo en un solo block.
+- Si el primer bloque continua una frase de la pagina anterior, marca layout.continues_previous = true y no repitas lo ya transcripto.
+- Conserva puntuacion, citas numericas ([1], [2,3]), siglas, simbolos de afiliacion, formulas y DOIs.
 
-1. LECTURA Y TRANSCRIPCION FIEL
-- Lee y comprende TODO el contenido visible. NO resumas, NO omitas, NO inventes, NO recortes parrafos.
-- Orden de lectura: si hay varias columnas, termina cada columna de arriba a abajo antes de pasar a la siguiente; las columnas se leen de izquierda a derecha.
-- Si el primer bloque de texto continua una frase de la pagina anterior, marca layout.continues_previous = true y NO repitas lo que ya estaba en la pagina anterior.
-- Conserva signos de puntuacion, citas numericas ([1], [2,3]), siglas, simbolos de afiliacion (*, †, ‡), formulas y DOIs.
+ESTRUCTURA
+- page_header/page_footer: cabeceras y pies editoriales (revista, ISSN, "Page X of Y", copyright, volumen, DOI), copiados LITERALMENTE sin traducir. NUNCA van en blocks.
+- El titulo, subtitulo, autores, afiliaciones, abstract y palabras clave van en document SOLO en la pagina 1. En las paginas siguientes devolve esas claves como null o [].
+- Un running head o titulo repetido va en page_header, nunca como heading. Un heading debe ser una seccion real y nueva.
+- Abstract: solo document.abstract_es (traduccion completa; si ya esta en espanol, copialo tal cual). No dupliques el original ni lo pongas en blocks.
+- Notas al pie: solo las fisicamente al pie. En el texto dejá la marca [^marcador]. Las citas [1] no son notas al pie.
+- Referencias: heading "Referencias" + block type="list" con una entrada por item, sin traducir.
+- Tablas: type="table" con caption, headers y rows; nunca como parrafos.
+- Figuras: solo graficos, diagramas, fotografias o esquemas cientificos. Ignora logos, iconos y adornos. Caption traducido y bbox normalizado [x0,y0,x1,y1] que cubra solo el area grafica, por ENCIMA de la leyenda.
+- Ecuaciones: type="equation" con latex si es posible; text como respaldo.
 
-2. TRADUCCION
-- Traduce al espanol academico natural TODO el contenido de prosa: cuerpo, titulos de seccion, subtitulos, abstract, palabras clave, pies de figura y de tabla, y notas al pie. El campo text de cada block debe ser la TRADUCCION, nunca el original.
-- NO traduzcas la lista de referencias bibliograficas: conserva cada entrada exactamente como aparece.
-- Manten el mismo nivel de detalle y el mismo numero de parrafos que el original.
-- Conserva nombres propios, siglas y terminos tecnicos precisos (p. ej. "sesgo atencional", "DSM-5-TR").
-
-3. ESTRUCTURA
-- page_header / page_footer: cabecera y pie editoriales (nombre de revista, ISSN, logo, "Page X of Y", copyright, volume, issue, URL). NUNCA los incluyas en blocks.
-- El titulo, subtitulo, autores, afiliaciones, abstract y palabras clave van en document. En blocks no los repitas. Si un campo no aparece en esta pagina, usa null o [].
-- Abstract: document.abstract_original (original completo) y document.abstract_es (traduccion completa). No lo pongas en blocks.
-- Notas al pie: solo las notas fisicamente al pie de pagina (simbolos *, †, letras o numeros pequenos). En el texto deja la marca como [^marcador]. Las citas [1] dentro del texto NO son notas al pie.
-- Referencias: cuando aparezca la bibliografia, usa un heading "Referencias" seguido de un block type="list" con una entrada por item (sin traducir).
-- Tablas: block type="table" con caption, headers y rows. Nunca como parrafos.
-- Figuras: solo figuras cientificas reales (graficos, diagramas, fotografias, esquemas). Ignora logos, iconos, marcas de agua y adornos. Incluye caption traducido y bbox normalizado [x0,y0,x1,y1] (0-1, relativo a la pagina) que cubra ESTRICTAMENTE el area grafica: el bbox debe terminar justo en el borde inferior de la imagen, por ENCIMA de la primera linea de la leyenda. Nunca incluyas la leyenda, el pie "Fig. N..." ni texto corrido dentro del bbox.
-- Ecuaciones: type="equation" con latex si es posible; usa text como respaldo.
-
-Devuelve SOLO JSON, sin markdown ni texto adicional, con esta forma:
-
+Devuelve SOLO JSON, sin markdown ni texto extra:
 {
   "page": 1,
   "layout": {"columns": 2, "continues_previous": false},
-  "page_header": "texto o vacio",
-  "page_footer": "texto o vacio",
-  "document": {
-    "title": null, "title_es": null,
-    "subtitle": null, "subtitle_es": null,
-    "authors": [], "affiliations": [],
-    "journal": null, "year": null, "doi": null,
-    "abstract_original": null, "abstract_es": null,
-    "keywords": [], "keywords_es": [],
-    "language": "en"
-  },
+  "page_header": "", "page_footer": "",
+  "document": {"title": null, "title_es": null, "subtitle": null, "subtitle_es": null,
+    "authors": [], "affiliations": [], "journal": null, "year": null, "doi": null,
+    "abstract_original": null, "abstract_es": null, "keywords": [], "keywords_es": [], "language": "en"},
   "blocks": [
     {"type": "heading", "level": 1, "text": "titulo de seccion TRADUCIDO"},
-    {"type": "paragraph", "text": "parrafo TRADUCIDO al espanol"},
+    {"type": "paragraph", "text": "parrafo TRADUCIDO"},
     {"type": "list", "ordered": false, "items": ["item TRADUCIDO"]},
     {"type": "quote", "text": "cita TRADUCIDA"},
     {"type": "table", "caption": "...", "headers": ["..."], "rows": [["..."]]},
@@ -190,6 +174,39 @@ def _clean_list_items(items: list[str], ordered: bool) -> list[str]:
             continue
         cleaned.append(text)
     return cleaned
+
+
+_TERMINAL_PUNCT_RE = re.compile(r'[.!?…:;)"»”\]]\s*$')
+_WORD_HYPHEN_RE = re.compile(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]-$')
+
+
+def _merge_broken_paragraphs(blocks: list[dict]) -> list[dict]:
+    """Une parrafos cortados por un salto de columna dentro de la misma pagina.
+
+    El modelo a veces devuelve dos bloques donde la prosa seguia de una columna
+    a la siguiente. Solo se unen si el primero no cierra con puntuacion final,
+    para no pegar parrafos legitimos que terminan en dos puntos o punto y coma.
+    """
+    merged: list[dict] = []
+    for block in blocks:
+        if (merged and block.get('type') == 'paragraph'
+                and merged[-1].get('type') == 'paragraph'):
+            previous = (merged[-1].get('text') or '').rstrip()
+            current = (block.get('text') or '').lstrip()
+            if previous and current and not _TERMINAL_PUNCT_RE.search(previous):
+                if _WORD_HYPHEN_RE.search(previous) and current[:1].islower():
+                    merged[-1]['text'] = previous[:-1] + current
+                else:
+                    merged[-1]['text'] = previous + ' ' + current
+                continue
+        merged.append(block)
+    return merged
+
+
+def _norm_heading(text: object) -> str:
+    raw = unicodedata.normalize('NFKD', str(text or ''))
+    ascii_text = ''.join(ch for ch in raw if not unicodedata.combining(ch)).lower()
+    return re.sub(r'[^a-z0-9]+', '', ascii_text)
 
 
 def normalize_page_payload(obj: dict, page_number: int) -> dict:
@@ -300,7 +317,7 @@ def normalize_page_payload(obj: dict, page_number: int) -> dict:
         'page_header': _as_text(obj.get('page_header')),
         'page_footer': _as_text(obj.get('page_footer')),
         'document': doc,
-        'blocks': blocks,
+        'blocks': _merge_broken_paragraphs(blocks),
         'footnotes': footnotes,
     }
 
@@ -313,13 +330,18 @@ async def _request_page(client: httpx.AsyncClient, url: str, api_key: str, model
                         image_b64: str, page_number: int) -> tuple[dict, dict]:
     payload = {
         'model': model,
-        'messages': [{
-            'role': 'user',
-            'content': [
-                {'type': 'text', 'text': PAGE_PROMPT},
-                {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + image_b64}},
-            ],
-        }],
+        # El prompt va como system para que DeepSeek reutilice el prefijo
+        # cacheado en todas las paginas y baje el costo de entrada.
+        'messages': [
+            {'role': 'system', 'content': PAGE_PROMPT},
+            {
+                'role': 'user',
+                'content': [
+                    {'type': 'text', 'text': f'Pagina {page_number}. Extrae y traduce al espanol.'},
+                    {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + image_b64}},
+                ],
+            },
+        ],
         'temperature': 0.1,
         'stream': False,
         'response_format': {'type': 'json_object'},
@@ -393,12 +415,16 @@ def _artifact_lines(page: dict) -> set[str]:
     return lines
 
 
-def _looks_like_artifact(text: str, artifacts: set[str]) -> bool:
+def _looks_like_artifact(text: str, artifacts: set[str], is_heading: bool = False) -> bool:
     norm = _norm_artifact(text)
     if not norm:
         return True
     if norm in artifacts:
         return True
+    # En headings solo se acepta coincidencia exacta: el substring borraba
+    # secciones legitimas cuando el running head incluia su nombre.
+    if is_heading:
+        return False
     if len(norm) < 40 and any(norm in art or art in norm for art in artifacts):
         return True
     return False
@@ -440,35 +466,56 @@ def _renumber_footnotes(page: dict, counter: list[int]) -> None:
             block['caption'] = replace(block['caption'])
 
 
-_REFERENCE_HEADINGS = (
-    'referencias', 'referenciasbibliograficas', 'references', 'bibliografia',
+_REFERENCE_MARKERS = (
+    'referencia', 'references', 'bibliografia', 'bibliography',
+    'literatura citada', 'literature cited', 'works cited',
 )
+
+
+def _reference_heading_text(text: object) -> bool:
+    title = re.sub(r'[^a-záéíóúñ ]', ' ', str(text or '').lower())
+    title = re.sub(r'\s+', ' ', title).strip()
+    return any(marker in title for marker in _REFERENCE_MARKERS)
 
 
 def _is_reference_heading(block: dict) -> bool:
     if block.get('type') != 'heading':
         return False
-    title = re.sub(r'[^a-záéíóúñ]', '', (block.get('text') or '').lower())
-    return title in _REFERENCE_HEADINGS
+    return _reference_heading_text(block.get('text'))
 
 
 def _join_split_items(previous: list[str], incoming: list[str]) -> list[str]:
     """Une una lista partida por un salto de pagina.
 
     Si el ultimo item termina en guion de particion ("de-") y el primero de la
-    pagina siguiente continua en minuscula ("pression..."), se reconstruye la
-    palabra; asi no quedan restos como "de- pression" ni reinicios de numero.
+    pagina siguiente continua en minuscula o digito ("pression", "5"), se
+    reconstruye la palabra; asi no quedan restos como "de- pression".
     """
     merged = list(previous)
     for item in incoming:
         text = item.strip()
         if not text:
             continue
-        if merged and re.search(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]-$', merged[-1]) and text[:1].islower():
+        if (merged and _WORD_HYPHEN_RE.search(merged[-1])
+                and (text[:1].islower() or text[:1].isdigit())):
             merged[-1] = merged[-1][:-1] + text
         else:
             merged.append(text)
     return merged
+
+
+def _overlap_words(previous: str, current: str, min_words: int = 3,
+                   max_words: int = 12) -> int:
+    """Palabras repetidas al final de un parrafo y al inicio del siguiente."""
+    prev_words = previous.split()
+    next_words = current.split()
+    limit = min(max_words, len(prev_words), len(next_words))
+    for size in range(limit, min_words - 1, -1):
+        tail = [re.sub(r'\W+', '', w).lower() for w in prev_words[-size:]]
+        head = [re.sub(r'\W+', '', w).lower() for w in next_words[:size]]
+        if tail == head and any(tail):
+            return size
+    return 0
 
 
 def _collect_references(blocks: list[dict]) -> list[str]:
@@ -476,8 +523,7 @@ def _collect_references(blocks: list[dict]) -> list[str]:
     in_refs = False
     for block in blocks:
         if block.get('type') == 'heading':
-            title = re.sub(r'[^a-záéíóúñ]', '', (block.get('text') or '').lower())
-            in_refs = title in _REFERENCE_HEADINGS
+            in_refs = _reference_heading_text(block.get('text'))
             continue
         if in_refs and block.get('type') == 'list':
             references.extend(block.get('items') or [])
@@ -507,6 +553,8 @@ def merge_pages(pages: list[dict]) -> dict:
     footnotes: list[dict] = []
     counter = [0]
     in_references = False
+    seen_headings: set[str] = set()
+    title_key = _norm_heading(document.get('title_es') or document.get('title') or '')
     for page in pages:
         _renumber_footnotes(page, counter)
         footnotes.extend(page.get('footnotes') or [])
@@ -514,8 +562,18 @@ def merge_pages(pages: list[dict]) -> dict:
         page_blocks = []
         for block in page.get('blocks') or []:
             text = block.get('text') or block.get('caption') or ''
-            if text and _looks_like_artifact(text, artifacts):
+            if text and _looks_like_artifact(
+                text, artifacts, is_heading=block.get('type') == 'heading'
+            ):
                 continue
+            if block.get('type') == 'heading':
+                key = _norm_heading(block.get('text'))
+                # Un heading identico al titulo del articulo o repetido en otra
+                # pagina es un running head, no una seccion nueva.
+                if key and (key == title_key or key in seen_headings):
+                    continue
+                if key:
+                    seen_headings.add(key)
             block = dict(block)
             block['page'] = page.get('page')
             page_blocks.append(block)
@@ -531,15 +589,28 @@ def merge_pages(pages: list[dict]) -> dict:
                     prev.get('items') or [], first.get('items') or [])
                 prev['ordered'] = bool(prev.get('ordered') or first.get('ordered'))
                 page_blocks = page_blocks[1:]
-            elif continues and prev.get('type') == 'paragraph' and first.get('type') == 'paragraph':
+            elif prev.get('type') == 'paragraph' and first.get('type') == 'paragraph':
                 prev_text = prev.get('text', '').rstrip()
                 next_text = first.get('text', '').lstrip()
-                if prev_text and next_text:
-                    if re.search(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]-$', prev_text) and next_text[:1].islower():
+                # El modelo a veces repite el final de la pagina anterior: se
+                # recorta el solapamiento antes de decidir si hay continuidad.
+                overlap = _overlap_words(prev_text, next_text)
+                if overlap and next_text:
+                    next_text = ' '.join(next_text.split()[overlap:])
+                join = bool(
+                    next_text and (
+                        continues
+                        or not _TERMINAL_PUNCT_RE.search(prev_text)
+                    )
+                )
+                if join:
+                    if _WORD_HYPHEN_RE.search(prev_text) and next_text[:1].islower():
                         prev['text'] = prev_text[:-1] + next_text
                     else:
                         prev['text'] = prev_text + ' ' + next_text
                     page_blocks = page_blocks[1:]
+                elif next_text != (first.get('text') or '').lstrip():
+                    first['text'] = next_text
 
         for block in page_blocks:
             if _is_reference_heading(block):
@@ -694,7 +765,10 @@ async def extract_document(pdf_bytes: bytes, api_keys: list[str], model: Optiona
 
     render_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(min(VISION_CONCURRENCY, len(api_keys), total))
-    usage_total = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    usage_total = {
+        'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0,
+        'prompt_cache_hit_tokens': 0, 'prompt_cache_miss_tokens': 0,
+    }
     done = [0]
     started = time.perf_counter()
 
@@ -718,11 +792,22 @@ async def extract_document(pdf_bytes: bytes, api_keys: list[str], model: Optiona
                     progress(done[0], total)
                 return page_obj
 
-        results = await asyncio.gather(*(process(i) for i in range(total)))
+        # Calentar el prefijo cacheado con la primera pagina antes del fan-out.
+        # Si todas las paginas salen a la vez, ninguna encuentra el prefijo ya
+        # generado y DeepSeek cobra el prompt completo en cada una.
+        first = await process(0)
+        rest = await asyncio.gather(*(process(i) for i in range(1, total)))
+        results = [first, *rest]
 
     merged = merge_pages(results)
     merged['document']['model'] = selected_model
     figures = crop_figures(doc, merged, Path(images_dir), doc_id) if images_dir and doc_id else 0
+    prompt = usage_total['prompt_tokens']
+    hits = usage_total['prompt_cache_hit_tokens']
+    log_fn(
+        f'[VISION] cache de prompt: {hits}/{prompt} '
+        f'({hits / prompt:.0%})' if prompt else '[VISION] cache de prompt: sin datos'
+    )
     merged['stats'] = {
         'pages': total,
         'figures': figures,
