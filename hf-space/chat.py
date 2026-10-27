@@ -49,14 +49,14 @@ ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '460')))
 # continuacion acotada en vez de entregar una respuesta cortada a mitad.
 MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '900')))
 CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '500')))
-# Modo profundo (detras del plan de pago): mas fuentes, abstracts mas largos y
-# respuestas extensas. La relevancia minima sube para que las 20+ fuentes no
+# Modo profundo (marcado PRO): mas fuentes, abstracts mas largos y respuestas
+# extensas, con secciones plegables en la interfaz. La relevancia minima sube para que las 20+ fuentes no
 # incluyan papers apenas relacionados.
 DEEP_MAX_SOURCES = max(MAX_SOURCES, int(os.getenv('CHAT_DEEP_MAX_SOURCES', '22')))
 DEEP_ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_DEEP_ABSTRACT_CHARS', '560')))
-DEEP_MAX_OUTPUT = max(600, int(os.getenv('CHAT_DEEP_MAX_OUTPUT_TOKENS', '2200')))
+DEEP_MAX_OUTPUT = max(600, int(os.getenv('CHAT_DEEP_MAX_OUTPUT_TOKENS', '3200')))
 DEEP_MIN_RELEVANCE = float(os.getenv('CHAT_DEEP_MIN_RELEVANCE', '0.18'))
-DEEP_WORD_TARGET = os.getenv('CHAT_DEEP_WORDS', '750 a 1000')
+DEEP_WORD_TARGET = os.getenv('CHAT_DEEP_WORDS', '1250 a 1450')
 QUICK_WORD_TARGET = os.getenv('CHAT_QUICK_WORDS', '280 a 380')
 DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '3')))
@@ -119,6 +119,7 @@ SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado 
 ## Formato (capas, de lo general a lo específico)
 1. **Una frase de respuesta** (máximo 2), sin encabezado: qué se sabe y cuál es la salvedad principal.
 2. **## Hallazgos clave** — viñetas, una idea por viñeta, 1 a 2 frases, con su cita y el nivel de respaldo (meta-análisis, ensayo pequeño, correlacional, teoría). Nada de párrafos largos.
+   En modo profundo, entre la frase y los hallazgos va **## Lo que cambia la conclusión**: las condiciones, poblaciones o resultados que matizan o invierten la respuesta, para que nadie se lleve una conclusión equivocada por no desplegar el resto.
 3. **## Dónde la evidencia no coincide** — SOLO resultados o conclusiones que se contradicen entre fuentes (una reporta aumento y otra reducción, una encuentra efecto y otra no), con qué podría explicarlo (muestra, método, población). Los límites metodológicos NO van acá. Si las fuentes no se contradicen, escribí una sola línea: "Ninguna fuente recuperada reporta resultados contradictorios" y seguí.
 4. **## Límites y qué buscar** — 3 viñetas: qué parte de la pregunta queda sin respaldo directo, qué sesgo o muestra limita las conclusiones, y qué estudio concreto las resolvería (diseño, población, medida). Podés nombrar conceptos o autores a buscar, nunca papers inventados.
 - Tabla solo si comparás 3 o más elementos (estudios, marcos, niveles): máximo 4 columnas y 6 filas, celdas de 1 a 8 palabras, con cita en la celda. Si no cabe, va en prosa.
@@ -1559,15 +1560,21 @@ def depth_profile(depth: str) -> dict:
             'min_rel': DEEP_MIN_RELEVANCE,
             'words': DEEP_WORD_TARGET,
             'instruction': (
-                'Redactá en español con el formato en capas, en MODO PROFUNDO. '
-                'Desarrollá, en este orden: (1) 2 a 3 frases de respuesta; '
-                '(2) "## Hallazgos clave" con 6 a 8 viñetas; '
-                '(3) "## Mecanismos y modelos propuestos" con 1 o 2 párrafos que '
-                'distingan teoría de evidencia directa; '
-                '(4) una tabla comparativa si hay 3 o más estudios comparables; '
-                '(5) "## Dónde la evidencia no coincide" con 2 a 3 contradicciones; '
-                '(6) "## Límites y qué buscar" con 4 viñetas. '
-                f'Extensión: {DEEP_WORD_TARGET} palabras; no cierres antes de 700. '
+                'Redactá en español en MODO PROFUNDO, con esta estructura exacta y sin '
+                'numerar los títulos. (1) 2 a 4 frases de respuesta directa, sin encabezado. '
+                '(2) "## Lo que cambia la conclusión" con 4 a 6 viñetas: condiciones, '
+                'poblaciones, dosis o resultados que matizan, limitan o invierten la '
+                'respuesta; acá va todo lo que un lector necesita para no quedarse con una '
+                'conclusión equivocada si no despliega lo demás. '
+                '(3) "## Hallazgos clave" con 6 a 8 viñetas, cita y nivel de respaldo. '
+                '(4) "## Mecanismos y modelos propuestos", 1 o 2 párrafos que separen '
+                'teoría de evidencia directa. '
+                '(5) "## Comparación de estudios" con una tabla si hay 3 o más estudios '
+                'comparables. '
+                '(6) "## Dónde la evidencia no coincide" con 2 a 4 contradicciones entre '
+                'resultados. '
+                '(7) "## Límites y qué buscar" con 4 viñetas. '
+                f'Extensión: {DEEP_WORD_TARGET} palabras; no cierres antes de 1150. '
                 'Cada afirmación relevante con su cita [n].'
             ),
         }

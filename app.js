@@ -5125,7 +5125,15 @@ function updateChatFilterLabel() {
   const access = CHAT_ACCESS_META[getChatAccess()].label;
   if (el.chatFilterLabel) el.chatFilterLabel.textContent = `${depth} · ${access}`;
   if (el.btnChatFilter) {
-    el.btnChatFilter.title = `Extensión ${depth} · papers: ${access}`;
+    // El botón es solo un ícono: el estado actual viaja en el tooltip y en el
+    // punto indicador, que se enciende cuando no está en la opción por defecto.
+    const text = `Extensión ${depth} · papers ${access}`;
+    el.btnChatFilter.title = text;
+    el.btnChatFilter.setAttribute('aria-label', text);
+    el.btnChatFilter.classList.toggle(
+      'has-filter',
+      getChatDepth() === 'deep' || getChatAccess() !== 'all',
+    );
   }
 }
 
@@ -5458,7 +5466,7 @@ function updateChatBubble(wrap, msg) {
     if (msg.streaming) {
       updateStreamingAnswer(answerEl, msg, content);
     } else {
-      answerEl.innerHTML = renderChatMarkdown(content, msg.sources || []);
+      answerEl.innerHTML = renderChatMarkdown(content, msg.sources || [], msg.depth === 'deep');
       msg._render = null;
     }
   } else if (msg.streaming) {
@@ -5524,7 +5532,7 @@ function updateStreamingAnswer(answerEl, msg, visible) {
       return;
     }
   }
-  answerEl.innerHTML = renderChatMarkdown(visible, msg.sources || []);
+  answerEl.innerHTML = renderChatMarkdown(visible, msg.sources || [], false);
   state.text = visible;
   state.block = chatLastBlock(answerEl);
 }
@@ -5651,7 +5659,7 @@ function linkifyChatCitations(root, sources) {
   });
 }
 
-function renderChatMarkdown(text, sources) {
+function renderChatMarkdown(text, sources, fold = false) {
   let html = '';
   const source = String(text || '');
   if (window.marked && typeof window.marked.parse === 'function') {
@@ -5675,8 +5683,74 @@ function renderChatMarkdown(text, sources) {
     table.parentNode.insertBefore(wrapTable, table);
     wrapTable.appendChild(table);
   });
+  if (fold) foldChatSections(container);
   linkifyChatCitations(container, sources || []);
   return container.innerHTML;
+}
+
+// ─── Secciones plegables (extensión profunda) ───
+// Lo que puede cambiar la conclusión se lee sin desplegar nada; el respaldo,
+// los mecanismos y el detalle quedan plegados detrás de cada encabezado.
+const CHAT_FOLD_CORE = /conclusi|lo que cambia|respuesta/i;
+
+function chatFoldElement(group) {
+  const section = document.createElement('section');
+  section.className = 'chat-fold';
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'chat-fold-head';
+  head.setAttribute('aria-expanded', 'false');
+  const title = document.createElement('span');
+  title.className = 'chat-fold-title';
+  title.textContent = group.title;
+  const caret = document.createElement('i');
+  caret.className = 'ph-bold ph-caret-down chat-fold-caret';
+  head.append(title, caret);
+  const body = document.createElement('div');
+  body.className = 'chat-fold-body';
+  body.hidden = true;
+  group.nodes.slice(1).forEach(node => body.appendChild(node));
+  section.append(head, body);
+  return section;
+}
+
+function foldChatSections(container) {
+  const groups = [];
+  let current = null;
+  [...container.children].forEach(node => {
+    if (node.tagName === 'H2') {
+      current = { title: node.textContent.trim(), nodes: [node] };
+      groups.push(current);
+    } else if (current) {
+      current.nodes.push(node);
+    }
+  });
+  const foldable = groups.filter(g => g.nodes.length > 1);
+  if (foldable.length < 2) return;
+
+  const lead = [...container.children].slice(0, [...container.children].indexOf(groups[0].nodes[0]));
+  let coreIdx = groups.findIndex(g => CHAT_FOLD_CORE.test(g.title));
+  if (coreIdx < 0) coreIdx = 0;
+
+  container.innerHTML = '';
+  lead.forEach(node => container.appendChild(node));
+  const folds = [];
+  groups.forEach((group, idx) => {
+    if (idx === coreIdx || group.nodes.length < 2) {
+      group.nodes.forEach(node => container.appendChild(node));
+      return;
+    }
+    folds.push(chatFoldElement(group));
+  });
+  folds.forEach(fold => container.appendChild(fold));
+
+  if (folds.length) {
+    const bar = document.createElement('div');
+    bar.className = 'chat-folds-bar';
+    bar.innerHTML = '<button type="button" class="chat-fold-all" data-fold-all="1" aria-expanded="false">'
+      + '<i class="ph-bold ph-caret-double-down"></i><span>Expandir todo</span></button>';
+    container.insertBefore(bar, folds[0]);
+  }
 }
 
 function autosizeChatInput() {
@@ -6010,10 +6084,6 @@ function setupChatEventListeners() {
     if (!btn) return;
 
     if (btn.dataset.depth) {
-      if (btn.dataset.locked === '1') {
-        showToast('La extensión profunda llega con el plan pago. Mientras tanto, Rápida busca hasta 12 fuentes.');
-        return;
-      }
       setChatDepth(btn.dataset.depth);
       const chat = getActiveChat();
       if (chat) {
@@ -6051,9 +6121,45 @@ function setupChatEventListeners() {
       return;
     }
 
+    const foldHead = e.target.closest('.chat-fold-head');
+    if (foldHead) {
+      const section = foldHead.closest('.chat-fold');
+      const body = section?.querySelector('.chat-fold-body');
+      const open = !(body && !body.hidden);
+      if (body) body.hidden = !open;
+      foldHead.setAttribute('aria-expanded', open ? 'true' : 'false');
+      section?.classList.toggle('is-open', open);
+      return;
+    }
+
+    const foldAll = e.target.closest('[data-fold-all]');
+    if (foldAll) {
+      const answer = foldAll.closest('.chat-answer');
+      const folds = answer ? [...answer.querySelectorAll('.chat-fold')] : [];
+      const expand = folds.some(fold => fold.querySelector('.chat-fold-body')?.hidden);
+      folds.forEach(fold => {
+        const body = fold.querySelector('.chat-fold-body');
+        const head = fold.querySelector('.chat-fold-head');
+        if (body) body.hidden = !expand;
+        head?.setAttribute('aria-expanded', expand ? 'true' : 'false');
+        fold.classList.toggle('is-open', expand);
+      });
+      foldAll.setAttribute('aria-expanded', expand ? 'true' : 'false');
+      const label = foldAll.querySelector('span');
+      if (label) label.textContent = expand ? 'Plegar todo' : 'Expandir todo';
+      return;
+    }
+
     const upsell = e.target.closest('[data-upsell="pro"]');
     if (upsell) {
-      showToast('El plan Pro con respuestas profundas (20+ fuentes) llega pronto.');
+      setChatDepth('deep');
+      const chat = getActiveChat();
+      if (chat) {
+        chat.depth = 'deep';
+        chat.updatedAt = Date.now();
+        persistChats();
+      }
+      showToast('Extensión Profunda activada: más fuentes, más matices y secciones desplegables.');
       return;
     }
 

@@ -440,10 +440,9 @@
           autocomplete="off" enterkeyhint="send"></textarea>
         <div class="chat-filter" id="chat-filter">
           <button type="button" class="chat-filter-btn" id="btn-chat-filter" aria-haspopup="true"
-            aria-expanded="false" aria-controls="chat-access-seg" title="Opciones de búsqueda">
+            aria-expanded="false" aria-controls="chat-access-seg" aria-label="Opciones de búsqueda"
+            title="Opciones de búsqueda">
             <i class="ph-bold ph-sliders-horizontal" id="chat-filter-icon"></i>
-            <span id="chat-filter-label">Rápida · Todas</span>
-            <i class="ph-bold ph-caret-up chat-filter-caret"></i>
           </button>
           <div class="chat-filter-menu" id="chat-access-seg" role="group" aria-label="Opciones de búsqueda" hidden>
             <div class="chat-menu-group">
@@ -452,9 +451,9 @@
                 <i class="ph-bold ph-lightning"></i><span>Rápida</span>
                 <i class="ph-bold ph-check chat-check"></i>
               </button>
-              <button type="button" class="chat-access-option is-locked" data-depth="deep" data-locked="1" aria-pressed="false">
+              <button type="button" class="chat-access-option" data-depth="deep" aria-pressed="false">
                 <i class="ph-bold ph-stack"></i><span>Profunda</span>
-                <span class="chat-lock-tag">Plan pago</span>
+                <span class="chat-lock-tag is-pro">PRO</span>
               </button>
             </div>
             <div class="chat-menu-group">
