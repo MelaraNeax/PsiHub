@@ -520,6 +520,8 @@ class ChatRequest(BaseModel):
     question: str
     query: Optional[str] = None
     access: str = 'all'
+    # 'quick' (hasta 12 fuentes) o 'deep' (20+, plan de pago).
+    depth: str = 'quick'
     history: list[dict] = []
     client_id: str = ''
 
@@ -795,6 +797,7 @@ async def api_summarize_pdf(
 async def api_chat(request: ChatRequest):
     """Chat de investigacion con streaming SSE (OpenAlex + DeepSeek)."""
     access = request.access if request.access in ('all', 'free', 'oneclick') else 'all'
+    depth = 'deep' if str(request.depth).lower() == 'deep' else 'quick'
     question = (request.question or '').strip()
     if not question:
         raise HTTPException(status_code=400, detail='Falta la pregunta.')
@@ -810,6 +813,7 @@ async def api_chat(request: ChatRequest):
         probe_fn=probe_pdf,
         log_fn=log,
         client_id=request.client_id,
+        depth=depth,
     )
     return StreamingResponse(
         generator,

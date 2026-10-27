@@ -2167,7 +2167,8 @@ function formatAPAReference(paper) {
     if (formatted.length === 1) {
       authorsStr = formatted[0];
     } else if (formatted.length === 2) {
-      authorsStr = `${formatted[0]} & ${formatted[1]}`;
+      // APA 7 pide coma antes del ampersand también con dos autores.
+      authorsStr = `${formatted[0]}, & ${formatted[1]}`;
     } else if (formatted.length > 2 && formatted.length <= 7) {
       authorsStr = `${formatted.slice(0, -1).join(', ')}, & ${formatted[formatted.length - 1]}`;
     } else if (formatted.length > 7) {
@@ -4934,6 +4935,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const CHAT_STORE_KEY = 'psyhub_chats_v2';
 const CHAT_ACCESS_KEY = 'psyhub_chat_access';
+const CHAT_DEPTH_KEY = 'psyhub_chat_depth';
+
+// La extensión profunda queda detrás del plan de pago (próximamente): el
+// backend ya la soporta, la app solo la muestra bloqueada.
+const CHAT_DEPTH_META = {
+  quick: { label: 'Rápida', hint: 'hasta 12 fuentes' },
+  deep: { label: 'Profunda', hint: '20+ fuentes, plan pago' }
+};
 const CHAT_MAX_STORED = 40;
 
 // Migración de la caché local de conversaciones: descarta las respuestas del
@@ -5097,22 +5106,49 @@ const CHAT_ACCESS_META = {
   oneclick: { label: '1 clic', icon: 'ph-hand-pointing' }
 };
 
+function getChatDepth() {
+  const active = el.chatAccessSeg?.querySelector('.chat-access-option[data-depth].is-active');
+  return active?.dataset.depth === 'deep' ? 'deep' : 'quick';
+}
+
+function updateChatFilterLabel() {
+  const depth = CHAT_DEPTH_META[getChatDepth()].label;
+  const access = CHAT_ACCESS_META[getChatAccess()].label;
+  if (el.chatFilterLabel) el.chatFilterLabel.textContent = `${depth} · ${access}`;
+  if (el.btnChatFilter) {
+    el.btnChatFilter.title = `Extensión ${depth} · papers: ${access}`;
+  }
+}
+
 function setChatAccess(access, { persist = true } = {}) {
   const value = access === 'free' || access === 'oneclick' ? access : 'all';
   if (el.chatAccessSeg) {
-    el.chatAccessSeg.querySelectorAll('.chat-access-option').forEach(btn => {
+    el.chatAccessSeg.querySelectorAll('.chat-access-option[data-access]').forEach(btn => {
       const on = btn.dataset.access === value;
       btn.classList.toggle('is-active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
   }
-  const meta = CHAT_ACCESS_META[value];
-  if (el.chatFilterLabel) el.chatFilterLabel.textContent = meta.label;
-  if (el.chatFilterIcon) el.chatFilterIcon.className = `ph-bold ${meta.icon}`;
-  if (el.btnChatFilter) el.btnChatFilter.title = `Acceso: ${meta.label}`;
   if (persist) {
     try { localStorage.setItem(CHAT_ACCESS_KEY, value); } catch { }
   }
+  updateChatFilterLabel();
+  return value;
+}
+
+function setChatDepth(depth, { persist = true } = {}) {
+  const value = depth === 'deep' ? 'deep' : 'quick';
+  if (el.chatAccessSeg) {
+    el.chatAccessSeg.querySelectorAll('.chat-access-option[data-depth]').forEach(btn => {
+      const on = btn.dataset.depth === value;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  if (persist) {
+    try { localStorage.setItem(CHAT_DEPTH_KEY, value); } catch { }
+  }
+  updateChatFilterLabel();
   return value;
 }
 
@@ -5126,8 +5162,13 @@ function toggleChatFilter(open) {
 function initChat() {
   if (!el.chatMessages) return;
   let saved = 'all';
-  try { saved = localStorage.getItem(CHAT_ACCESS_KEY) || 'all'; } catch { }
+  let savedDepth = 'quick';
+  try {
+    saved = localStorage.getItem(CHAT_ACCESS_KEY) || 'all';
+    savedDepth = localStorage.getItem(CHAT_DEPTH_KEY) || 'quick';
+  } catch { }
   setChatAccess(saved, { persist: false });
+  setChatDepth(savedDepth, { persist: false });
 
   if (!S.activeChatId && S.chats.length) {
     S.activeChatId = [...S.chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0].id;
@@ -5261,14 +5302,49 @@ function flashChatAction(btn, iconClass) {
   }, 1400);
 }
 
+// Copiar entrega texto plano: sin encabezados Markdown ni pipes de tabla,
+// porque se pega en WhatsApp, correo o Word, no en un visor de Markdown.
+function markdownToPlainText(md) {
+  let text = String(md || '');
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)');
+  text = text.split('\n').map(line => {
+    const t = line.trim();
+    if (/^\|?\s*:?-{2,}/.test(t)) return null;
+    if (t.startsWith('|')) {
+      const cells = t.replace(/^\||\|$/g, '').split('|').map(c => c.trim()).filter(Boolean);
+      return cells.length ? `• ${cells.join(' — ')}` : null;
+    }
+    return line;
+  }).filter(line => line !== null).join('\n');
+  text = text.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*\n]+)\*/g, '$1');
+  text = text.replace(/`([^`]+)`/g, '$1');
+  text = text.replace(/^\s*[-*]\s+/gm, '• ');
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function buildChatPlainText(msg) {
+  const question = chatQuestionFor(msg);
+  const parts = [];
+  if (question) parts.push(question);
+  parts.push(markdownToPlainText(msg.content || ''));
+  const sources = msg.sources || [];
+  if (sources.length) {
+    const lines = sources.map((source, i) => `${i + 1}. ${formatAPAReference(source)}`);
+    parts.push(`Fuentes consultadas\n\n${lines.join('\n')}`);
+  }
+  return parts.join('\n\n').trim();
+}
+
 async function copyChatAnswer(msg, btn) {
+  const plain = buildChatPlainText(msg);
   try {
-    await navigator.clipboard.writeText(String(msg.content || '').trim());
+    await navigator.clipboard.writeText(plain);
     flashChatAction(btn, 'ph-check');
   } catch {
     // Fallback para contextos sin permiso de portapapeles.
     const area = document.createElement('textarea');
-    area.value = String(msg.content || '').trim();
+    area.value = plain;
     area.style.position = 'fixed';
     area.style.opacity = '0';
     document.body.appendChild(area);
@@ -5388,7 +5464,7 @@ function updateChatBubble(wrap, msg) {
   }
 
   if (sourcesEl) {
-    sourcesEl.innerHTML = renderChatSourcesHtml(msg.sources || [], msg.id);
+    sourcesEl.innerHTML = renderChatSourcesHtml(msg.sources || [], msg.id, !!msg.sourcesOpen);
   }
 
   if (actionsEl) actionsEl.hidden = !!msg.streaming || !fullContent;
@@ -5443,7 +5519,19 @@ function updateStreamingAnswer(answerEl, msg, visible) {
   state.block = chatLastBlock(answerEl);
 }
 
-function renderChatSourcesHtml(sources, msgId) {
+function chatSourceAuthors(source) {
+  const authors = Array.isArray(source.authors) ? source.authors.filter(Boolean) : [];
+  if (!authors.length) return '';
+  const surname = name => {
+    const parts = String(name).trim().split(/\s+/);
+    return parts[parts.length - 1] || '';
+  };
+  if (authors.length === 1) return surname(authors[0]);
+  if (authors.length === 2) return `${surname(authors[0])} y ${surname(authors[1])}`;
+  return `${surname(authors[0])} et al.`;
+}
+
+function renderChatSourcesHtml(sources, msgId, open = false) {
   if (!Array.isArray(sources) || !sources.length) return '';
 
   const items = sources.map((source, index) => {
@@ -5452,7 +5540,8 @@ function renderChatSourcesHtml(sources, msgId) {
       || (source.accessCategory)
       || (source.isAutoDownloadable ? 'oneclick' : (source.isOa ? 'free' : 'paid'));
     const badge = accessBadgeFor(category);
-    const meta = [source.year, source.journal].filter(Boolean).join(' · ');
+    const authors = chatSourceAuthors(source);
+    const meta = [authors, source.year, source.journal].filter(Boolean).join(' · ');
     return `
       <button class="chat-source" data-mid="${esc(msgId)}" data-idx="${index}" title="Abrir ficha en PsiHub">
         <span class="chat-source-num">${index + 1}</span>
@@ -5464,9 +5553,18 @@ function renderChatSourcesHtml(sources, msgId) {
       </button>`;
   }).join('');
 
+  // La lista va plegada: con 12-22 fuentes abiertas tapaba la respuesta.
   return `
-    <div class="chat-sources-head"><i class="ph-bold ph-books"></i> Fuentes consultadas</div>
-    <div class="chat-sources">${items}</div>`;
+    <button type="button" class="chat-sources-toggle" data-sources-toggle="${esc(msgId)}"
+      aria-expanded="${open ? 'true' : 'false'}">
+      <i class="ph-bold ph-books"></i>
+      <span>Fuentes consultadas</span>
+      <span class="chat-sources-count">${sources.length}</span>
+      <i class="ph-bold ph-caret-down chat-sources-caret"></i>
+    </button>
+    <div class="chat-sources-list" ${open ? '' : 'hidden'}>
+      <div class="chat-sources">${items}</div>
+    </div>`;
 }
 
 function sanitizeChatHtml(root) {
@@ -5680,6 +5778,7 @@ async function sendChatMessage() {
 
   const access = getChatAccess();
   chat.access = access;
+  chat.depth = getChatDepth();
   try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
 
   const userMsg = {
@@ -5736,6 +5835,7 @@ async function sendChatMessage() {
         question,
         query,
         access,
+        depth: getChatDepth(),
         history,
         client_id: getChatClientId()
       })
@@ -5880,6 +5980,23 @@ function setupChatEventListeners() {
   el.chatAccessSeg?.addEventListener('click', (e) => {
     const btn = e.target.closest('.chat-access-option');
     if (!btn) return;
+
+    if (btn.dataset.depth) {
+      if (btn.dataset.locked === '1') {
+        showToast('La extensión profunda llega con el plan pago. Mientras tanto, Rápida busca hasta 12 fuentes.');
+        return;
+      }
+      setChatDepth(btn.dataset.depth);
+      const chat = getActiveChat();
+      if (chat) {
+        chat.depth = getChatDepth();
+        chat.updatedAt = Date.now();
+        persistChats();
+      }
+      toggleChatFilter(false);
+      return;
+    }
+
     const access = setChatAccess(btn.dataset.access);
     const chat = getActiveChat();
     if (chat) {
@@ -5891,6 +6008,21 @@ function setupChatEventListeners() {
   });
 
   el.chatMessages?.addEventListener('click', (e) => {
+    const sourcesToggle = e.target.closest('.chat-sources-toggle');
+    if (sourcesToggle) {
+      const msg = chatMessageFrom(e.target, sourcesToggle);
+      if (!msg) return;
+      msg.sourcesOpen = !msg.sourcesOpen;
+      const list = sourcesToggle.parentElement?.querySelector('.chat-sources-list');
+      if (list) list.toggleAttribute('hidden', !msg.sourcesOpen);
+      sourcesToggle.setAttribute('aria-expanded', msg.sourcesOpen ? 'true' : 'false');
+      if (msg.sourcesOpen) {
+        const chat = getActiveChat();
+        if (chat) persistChats();
+      }
+      return;
+    }
+
     const actionBtn = e.target.closest('.chat-action');
     if (actionBtn) {
       const msg = chatMessageFrom(e.target, actionBtn);

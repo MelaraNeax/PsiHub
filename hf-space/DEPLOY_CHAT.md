@@ -97,6 +97,10 @@ actualiza la que pasás en `--update-env-vars`.
 | `CHAT_ABSTRACT_CHARS` | `460` | Recorte de cada abstract (conserva inicio, resultados y cierre) |
 | `CHAT_MAX_OUTPUT_TOKENS` | `900` | Largo máximo de la respuesta de investigación |
 | `CHAT_CONTINUATION_TOKENS` | `500` | Continuación que se pide si la respuesta llega al tope anterior |
+| `CHAT_DEEP_MAX_SOURCES` | `22` | Fuentes en la extensión profunda (plan pago) |
+| `CHAT_DEEP_ABSTRACT_CHARS` | `560` | Recorte de abstract en modo profundo |
+| `CHAT_DEEP_MAX_OUTPUT_TOKENS` | `2200` | Tope de salida del modo profundo |
+| `CHAT_DEEP_MIN_RELEVANCE` | `0.18` | Umbral de relevancia más estricto con 20+ fuentes |
 | `CHAT_DIRECT_TOKENS` | `800` | Tope de las respuestas de charla y acompañamiento |
 | `CHAT_HISTORY_MESSAGES` | `3` | Turnos de historial que se reenvían |
 | `CHAT_HISTORY_CHARS` | `450` | Recorte de cada turno del historial |

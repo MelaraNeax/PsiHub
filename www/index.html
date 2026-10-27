@@ -21,7 +21,7 @@
     rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web" defer></script>
   <link rel="stylesheet" href="style.css?v=40">
-  <link rel="stylesheet" href="style-chat.css?v=2">
+  <link rel="stylesheet" href="style-chat.css?v=3">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
 </head>
 
@@ -440,21 +440,37 @@
           autocomplete="off" enterkeyhint="send"></textarea>
         <div class="chat-filter" id="chat-filter">
           <button type="button" class="chat-filter-btn" id="btn-chat-filter" aria-haspopup="true"
-            aria-expanded="false" aria-controls="chat-access-seg" title="Tipo de acceso">
-            <i class="ph-bold ph-books" id="chat-filter-icon"></i>
-            <span id="chat-filter-label">Todas</span>
+            aria-expanded="false" aria-controls="chat-access-seg" title="Opciones de búsqueda">
+            <i class="ph-bold ph-sliders-horizontal" id="chat-filter-icon"></i>
+            <span id="chat-filter-label">Rápida · Todas</span>
             <i class="ph-bold ph-caret-up chat-filter-caret"></i>
           </button>
-          <div class="chat-filter-menu" id="chat-access-seg" role="group" aria-label="Tipo de acceso" hidden>
-            <button type="button" class="chat-access-option is-active" data-access="all" aria-pressed="true">
-              <i class="ph-bold ph-books"></i><span>Todas</span><i class="ph-bold ph-check chat-check"></i>
-            </button>
-            <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
-              <i class="ph-bold ph-lock-open"></i><span>Gratis</span><i class="ph-bold ph-check chat-check"></i>
-            </button>
-            <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
-              <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span><i class="ph-bold ph-check chat-check"></i>
-            </button>
+          <div class="chat-filter-menu" id="chat-access-seg" role="group" aria-label="Opciones de búsqueda" hidden>
+            <div class="chat-menu-group">
+              <span class="chat-menu-label">Extensión</span>
+              <button type="button" class="chat-access-option" data-depth="quick" aria-pressed="true">
+                <i class="ph-bold ph-lightning"></i><span>Rápida</span>
+                <i class="ph-bold ph-check chat-check"></i>
+              </button>
+              <button type="button" class="chat-access-option is-locked" data-depth="deep" data-locked="1" aria-pressed="false">
+                <i class="ph-bold ph-stack"></i><span>Profunda</span>
+                <span class="chat-lock-tag">Plan pago</span>
+              </button>
+            </div>
+            <div class="chat-menu-group">
+              <span class="chat-menu-label">Tipo de paper</span>
+              <button type="button" class="chat-access-option" data-access="all" aria-pressed="true">
+                <i class="ph-bold ph-books"></i><span>Todos</span><i class="ph-bold ph-check chat-check"></i>
+              </button>
+              <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
+                <i class="ph-bold ph-lock-open"></i><span>Gratis</span>
+                <i class="ph-bold ph-check chat-check"></i>
+              </button>
+              <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
+                <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span>
+                <i class="ph-bold ph-check chat-check"></i>
+              </button>
+            </div>
           </div>
         </div>
         <button type="submit" class="chat-send-btn" id="btn-chat-send" aria-label="Enviar">
@@ -781,7 +797,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=20261027"></script>
+  <script type="module" src="app.js?v=20261028"></script>
 </body>
 
 </html>

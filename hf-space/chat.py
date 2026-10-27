@@ -40,15 +40,24 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
 CHAT_PIPELINE_VERSION = '2026-10-26-layered-answers-v4'
 
-# Presupuesto de contexto: 10 fuentes con ~460 caracteres de resumen cubren
+# Presupuesto de contexto: 12 fuentes con ~460 caracteres de resumen cubren
 # mejor cada constructo (y dejan entrar papers discrepantes) sin disparar el
 # costo: el digest queda en ~5.2k caracteres, similar a la version anterior.
-MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '10')))
+MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '12')))
 ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '460')))
 # Tope de salida. Si el modelo lo alcanza igual, stream_chat pide una
 # continuacion acotada en vez de entregar una respuesta cortada a mitad.
 MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '900')))
 CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '500')))
+# Modo profundo (detras del plan de pago): mas fuentes, abstracts mas largos y
+# respuestas extensas. La relevancia minima sube para que las 20+ fuentes no
+# incluyan papers apenas relacionados.
+DEEP_MAX_SOURCES = max(MAX_SOURCES, int(os.getenv('CHAT_DEEP_MAX_SOURCES', '22')))
+DEEP_ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_DEEP_ABSTRACT_CHARS', '560')))
+DEEP_MAX_OUTPUT = max(600, int(os.getenv('CHAT_DEEP_MAX_OUTPUT_TOKENS', '2200')))
+DEEP_MIN_RELEVANCE = float(os.getenv('CHAT_DEEP_MIN_RELEVANCE', '0.18'))
+DEEP_WORD_TARGET = os.getenv('CHAT_DEEP_WORDS', '750 a 1000')
+QUICK_WORD_TARGET = os.getenv('CHAT_QUICK_WORDS', '280 a 380')
 DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '3')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '450')))
@@ -109,15 +118,15 @@ SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado 
 
 ## Formato (capas, de lo general a lo específico)
 1. **Una frase de respuesta** (máximo 2), sin encabezado: qué se sabe y cuál es la salvedad principal.
-2. **## Hallazgos clave** — 3 a 5 viñetas. Cada viñeta: una idea, 1 a 2 frases, con su cita y el nivel de respaldo (meta-análisis, ensayo pequeño, correlacional, teoría). Nada de párrafos largos.
-3. **## Dónde la evidencia no coincide** — 1 a 3 viñetas con discrepancias, resultados nulos o vacíos de cobertura. Si no hay ninguna, una línea diciéndolo.
-4. **## Qué falta y qué buscar** — 2 viñetas: qué parte de la pregunta queda sin respaldo directo y qué tipo de estudio la resolvería. Podés nombrar conceptos o autores a buscar, nunca papers inventados.
+2. **## Hallazgos clave** — viñetas, una idea por viñeta, 1 a 2 frases, con su cita y el nivel de respaldo (meta-análisis, ensayo pequeño, correlacional, teoría). Nada de párrafos largos.
+3. **## Dónde la evidencia no coincide** — SOLO resultados o conclusiones que se contradicen entre fuentes (una reporta aumento y otra reducción, una encuentra efecto y otra no), con qué podría explicarlo (muestra, método, población). Los límites metodológicos NO van acá. Si las fuentes no se contradicen, escribí una sola línea: "Ninguna fuente recuperada reporta resultados contradictorios" y seguí.
+4. **## Límites y qué buscar** — 3 viñetas: qué parte de la pregunta queda sin respaldo directo, qué sesgo o muestra limita las conclusiones, y qué estudio concreto las resolvería (diseño, población, medida). Podés nombrar conceptos o autores a buscar, nunca papers inventados.
 - Tabla solo si comparás 3 o más elementos (estudios, marcos, niveles): máximo 4 columnas y 6 filas, celdas de 1 a 8 palabras, con cita en la celda. Si no cabe, va en prosa.
+- Si en los hallazgos aparece un constructo vecino al que se pregunta (por ejemplo rumiación junto a hiperreflexividad, o relajación junto a mindfulness), aclaralo en la misma viñeta: "la rumiación no equivale a hiperreflexividad". No dejes la equivalencia implícita.
 - Negrita para el término técnico que el lector debe retener. Sin párrafos de relleno ni despedidas.
-- Extensión objetivo: 280 a 380 palabras (230 si la pregunta es simple). Es un techo, no una cuota: cada viñeta extra debe aportar algo nuevo.
 
 ## Contenido
-- Usá únicamente las FUENTES numeradas. Apoyate en las que tratan el tema y descartá sin citar las tangenciales.
+- Usá únicamente las FUENTES numeradas. Citá solo las que aportan algo; está bien no citar todas, y está mal listar una fuente que no usaste.
 - Cada afirmación relevante lleva su cita: [1], [2], [1][3]. Nunca cites un número que no exista en la lista.
 - Para hallazgos centrales nombrá autor y año en la prosa ("Hasenkamp et al. (2012) [3]"), con diseño y muestra solo si la fuente los declara.
 - Priorizá meta-análisis y revisiones sistemáticas; los trabajos fundacionales sirven para afirmaciones históricas.
@@ -197,6 +206,7 @@ Cuando el modo sea "research":
   - "terms": 2 a 4 terminos EN INGLES propios de ESE constructo (nombre canonico, sinonimos, nombre del modelo; expandi siglas). Evita terminos genericos (study, effect, brain, treatment). NUNCA sustituyas el constructo por un vecino (hiperreflexividad no es rumination).
   - "not": 0 a 2 conceptos vecinos que NO son equivalentes ([] si no hay).
   - "queries": 1 a 2 consultas EN INGLES de 2 a 7 palabras con el vocabulario del constructo; la segunda agrega metodo, poblacion o modelo para desambiguar.
+  - Si el constructo tiene autores o trabajos fundacionales claros (hiperreflexividad → Sass, Parnas; DMN → Raichle, Brewer; mindfulness → Kabat-Zinn), sumá una consulta con el apellido para recuperarlos: "hyperreflexivity Sass Parnas".
 - "bridge": si hay 2 o mas conceptos, 1 consulta que los une; si hay uno, [].
 - "review": 1 consulta para meta-analisis o revisiones sistematicas del tema central.
 - Total de consultas (concepts + bridge + review): 3 a 8. Sin comillas, comodines, parentesis, operadores booleanos ni puntuacion.
@@ -936,15 +946,18 @@ def _score_source(
     return score, relevance
 
 
-def _select_sources(items: list[dict], n_concepts: int, limit: int) -> list[dict]:
+def _select_sources(
+    items: list[dict], n_concepts: int, limit: int, min_rel: Optional[float] = None,
+) -> list[dict]:
     """Seleccion con cupos: puente > un cupo por concepto > revisiones > resto.
 
     `items` llega ordenado por puntaje. Garantiza que cada constructo de la
     pregunta tenga sus mejores papers directos aunque otro domine el ranking.
     """
+    threshold = MIN_RELEVANCE if min_rel is None else max(min_rel, MIN_RELEVANCE)
     pool = [
         it for it in items
-        if it['rel'] >= MIN_RELEVANCE or any(c >= DIRECT_REL for c in it['crel'])
+        if it['rel'] >= threshold or any(c >= DIRECT_REL for c in it['crel'])
     ]
     # Si hay contexto suficiente, fuera los papers que tratan un concepto pero
     # no la pregunta (DMN en Alzheimer cuando se pregunta por esquizofrenia).
@@ -1137,6 +1150,8 @@ async def search_sources(
     plan: Optional[dict] = None,
     question: str = '',
     scope: str = 'psy',
+    limit: Optional[int] = None,
+    min_rel: Optional[float] = None,
 ) -> tuple[list[dict], dict]:
     """Busca papers por concepto, puente y revision; devuelve los mas afines.
 
@@ -1156,7 +1171,8 @@ async def search_sources(
     concepts = _plan_concepts(plan)
 
     cache_key = (
-        f'{access}|{scope}|' + '|'.join(sorted(q.lower() for q in queries))
+        f'{access}|{scope}|{limit or MAX_SOURCES}|'
+        + '|'.join(sorted(q.lower() for q in queries))
         + '#' + '|'.join(c['name'].lower() for c in concepts)
     )
     cached = _search_cache.get(cache_key)
@@ -1289,7 +1305,10 @@ async def search_sources(
                 items.sort(key=lambda it: it['score'], reverse=True)
                 log_fn(f'[chat-enrich] {filled} campos completados')
 
-    related = [it['source'] for it in _select_sources(items, len(concepts), MAX_SOURCES)]
+    related = [
+        it['source']
+        for it in _select_sources(items, len(concepts), limit or MAX_SOURCES, min_rel)
+    ]
 
     if access == 'oneclick' and probe_fn is not None:
         related = await _probe_oneclick(related, probe_fn)
@@ -1406,7 +1425,7 @@ _QUANT_RESULT_RE = re.compile(
 )
 
 
-def _clip_abstract(abstract: str) -> str:
+def _clip_abstract(abstract: str, limit: Optional[int] = None) -> str:
     """Recorta conservando objetivo, resultados cuantitativos y conclusión.
 
     El corte ciego 40/60 perdía justo los tamaños de efecto y los valores p
@@ -1414,13 +1433,14 @@ def _clip_abstract(abstract: str) -> str:
     las dos últimas oraciones completas, más cualquier oración de la primera
     mitad que traiga un resultado numérico.
     """
+    budget = int(limit or ABSTRACT_CHARS)
     text = re.sub(r'\s+', ' ', (abstract or '').strip())
-    if len(text) <= ABSTRACT_CHARS:
+    if len(text) <= budget:
         return text
     sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
     if len(sentences) < 3:
-        head_len = int(ABSTRACT_CHARS * 0.4)
-        tail_len = ABSTRACT_CHARS - head_len
+        head_len = int(budget * 0.4)
+        tail_len = budget - head_len
         return f'{text[:head_len].rstrip()} [...] {text[-tail_len:].lstrip()}'
     picked: list[str] = [sentences[0]]
     half = max(1, len(sentences) // 2)
@@ -1431,14 +1451,14 @@ def _clip_abstract(abstract: str) -> str:
         if sentence not in picked:
             picked.append(sentence)
     clipped = ' '.join(picked)
-    if len(clipped) > ABSTRACT_CHARS:
-        clipped = clipped[:ABSTRACT_CHARS].rsplit(' ', 1)[0].rstrip(' ,;:')
+    if len(clipped) > budget:
+        clipped = clipped[:budget].rsplit(' ', 1)[0].rstrip(' ,;:')
     if not clipped.endswith(('.', '!', '?', '…')):
         clipped += ' […]'
     return clipped
 
 
-def _digest(sources: list[dict]) -> str:
+def _digest(sources: list[dict], abstract_chars: Optional[int] = None) -> str:
     blocks: list[str] = []
     for index, source in enumerate(sources, start=1):
         title = source.get('title') or 'Sin título'
@@ -1448,7 +1468,7 @@ def _digest(sources: list[dict]) -> str:
         if not abstract:
             abstract = 'OpenAlex no incluye el resumen de este artículo.'
         else:
-            abstract = _clip_abstract(abstract)
+            abstract = _clip_abstract(abstract, abstract_chars)
         access = {
             'oneclick': 'PDF directo (1 clic)',
             'free': 'acceso abierto',
@@ -1511,6 +1531,44 @@ def _concept_notes(plan: Optional[dict], meta: Optional[dict]) -> str:
     return '\n\n'.join(out) + '\n\n' if out else ''
 
 
+def depth_profile(depth: str) -> dict:
+    """Parametros de contexto y salida segun la extension elegida en la app."""
+    if str(depth).lower() == 'deep':
+        return {
+            'depth': 'deep',
+            'sources': DEEP_MAX_SOURCES,
+            'abstract': DEEP_ABSTRACT_CHARS,
+            'max_tokens': DEEP_MAX_OUTPUT,
+            'min_rel': DEEP_MIN_RELEVANCE,
+            'words': DEEP_WORD_TARGET,
+            'instruction': (
+                'Redactá en español con el formato en capas, en MODO PROFUNDO. '
+                'Desarrollá, en este orden: (1) 2 a 3 frases de respuesta; '
+                '(2) "## Hallazgos clave" con 6 a 8 viñetas; '
+                '(3) "## Mecanismos y modelos propuestos" con 1 o 2 párrafos que '
+                'distingan teoría de evidencia directa; '
+                '(4) una tabla comparativa si hay 3 o más estudios comparables; '
+                '(5) "## Dónde la evidencia no coincide" con 2 a 3 contradicciones; '
+                '(6) "## Límites y qué buscar" con 4 viñetas. '
+                f'Extensión: {DEEP_WORD_TARGET} palabras; no cierres antes de 700. '
+                'Cada afirmación relevante con su cita [n].'
+            ),
+        }
+    return {
+        'depth': 'quick',
+        'sources': MAX_SOURCES,
+        'abstract': ABSTRACT_CHARS,
+        'max_tokens': MAX_OUTPUT_TOKENS,
+        'min_rel': MIN_RELEVANCE,
+        'words': QUICK_WORD_TARGET,
+        'instruction': (
+            'Redactá en español con el formato en capas, en MODO RÁPIDO: '
+            '3 a 5 hallazgos, 1 a 3 discrepancias y 3 viñetas en Límites y qué buscar. '
+            f'Extensión: {QUICK_WORD_TARGET} palabras y las citas [n] indicadas.'
+        ),
+    }
+
+
 def _history_messages(history: Optional[list[dict]]) -> list[dict]:
     if not history:
         return []
@@ -1531,7 +1589,9 @@ def _build_messages(
     outline: Optional[list[str]] = None,
     plan: Optional[dict] = None,
     meta: Optional[dict] = None,
+    depth: str = 'quick',
 ) -> list[dict]:
+    profile = depth_profile(depth)
     messages: list[dict] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
     messages.extend(_history_messages(history))
     axes = ''
@@ -1556,10 +1616,8 @@ def _build_messages(
             f'{axes}'
             f'{searched}'
             f'{_concept_notes(plan, meta)}'
-            f'FUENTES DISPONIBLES:\n{_digest(sources)}\n\n'
-            'Redactá en español con el formato en capas (frase de respuesta, '
-            'Hallazgos clave, Dónde la evidencia no coincide, Qué falta y qué buscar), '
-            '280 a 380 palabras y las citas [n] indicadas.'
+            f'FUENTES DISPONIBLES:\n{_digest(sources, profile["abstract"])}\n\n'
+            f"{profile['instruction']}"
         ),
     })
     return messages
@@ -1843,6 +1901,7 @@ async def stream_chat(
     probe_fn: Optional[Callable[[str], Awaitable[dict]]] = None,
     log_fn: Callable[[str], None] = print,
     client_id: str = '',
+    depth: str = 'quick',
 ) -> AsyncIterator[str]:
     """Genera eventos SSE: status, delta, sources, done o error.
 
@@ -1850,6 +1909,7 @@ async def stream_chat(
     lea como una redaccion y la lista de papers aparezca recien entonces.
     """
     started = time.time()
+    profile = depth_profile(depth)
     question = (question or '').strip()[:2000]
     if not question:
         yield _sse({'type': 'error', 'message': 'La pregunta esta vacia.'})
@@ -1876,6 +1936,7 @@ async def stream_chat(
             'access': access,
             'query': meta.get('query') or query,
             'cached': bool(meta.get('cached')),
+            'depth': profile['depth'],
         })
 
     def finish(usage: dict, mode: str, sources_count: int, candidates: int) -> tuple[dict, float]:
@@ -1891,6 +1952,7 @@ async def stream_chat(
             'model': CHAT_MODEL,
             'source': 'chat',
             'mode': mode,
+            'depth': profile['depth'],
             'access': access,
             'sources': sources_count,
             'candidates': candidates,
@@ -1979,6 +2041,8 @@ async def stream_chat(
             plan=plan,
             question=question,
             scope=_plan_scope(plan),
+            limit=profile['sources'],
+            min_rel=profile['min_rel'],
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] busqueda fallo: {type(exc).__name__}: {_redact(exc)}')
@@ -2015,13 +2079,16 @@ async def stream_chat(
 
     messages = _build_messages(
         question, sources, history, _plan_outline(plan), plan=plan, meta=search_meta,
+        depth=profile['depth'],
     )
     usage: dict = {}
     parts: list[str] = []
     finish_reason: Optional[str] = None
 
     try:
-        async for kind, value in _stream_completion(messages, api_keys, log_fn):
+        async for kind, value in _stream_completion(
+            messages, api_keys, log_fn, max_tokens=profile['max_tokens'],
+        ):
             if kind == 'usage':
                 usage = value
             elif kind == 'finish':
@@ -2046,8 +2113,9 @@ async def stream_chat(
         ]
         cont_usage: dict = {}
         try:
+            cont_tokens = CONTINUATION_TOKENS if profile['depth'] == 'quick' else CONTINUATION_TOKENS * 2
             async for kind, value in _stream_completion(
-                cont_messages, api_keys, log_fn, max_tokens=CONTINUATION_TOKENS,
+                cont_messages, api_keys, log_fn, max_tokens=cont_tokens,
             ):
                 if kind == 'usage':
                     cont_usage = value
