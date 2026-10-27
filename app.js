@@ -5217,7 +5217,10 @@ function buildChatExportMarkdown(msg) {
   if (sources.length) {
     const lines = sources.map((s, i) => {
       const meta = [s.year, s.journal].filter(Boolean).join(' · ');
-      const doi = s.doi ? ` https://doi.org/${s.doi}` : '';
+      // OpenAlex ya entrega el DOI como URL completa; prefijarlo otra vez
+      // producía "https://doi.org/https://doi.org/10...".
+      const rawDoi = String(s.doi || '').replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
+      const doi = rawDoi ? ` https://doi.org/${rawDoi}` : '';
       return `${i + 1}. ${s.title || 'Sin título'}${meta ? ` (${meta})` : ''}${doi}`;
     });
     parts.push(`## Fuentes consultadas\n\n${lines.join('\n')}`);

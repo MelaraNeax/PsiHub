@@ -38,13 +38,17 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
 # Marca de la version del pipeline de chat. Se expone en /health para poder
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
-CHAT_PIPELINE_VERSION = '2026-10-26-lean-answers-v3'
+CHAT_PIPELINE_VERSION = '2026-10-26-layered-answers-v4'
 
-# Presupuesto de contexto: 7 fuentes con ~650 caracteres de resumen mantienen
-# 2-3 papers directos por concepto y dejan la respuesta total en ~2-3k tokens.
-MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '7')))
-ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '650')))
-MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '1000')))
+# Presupuesto de contexto: 10 fuentes con ~460 caracteres de resumen cubren
+# mejor cada constructo (y dejan entrar papers discrepantes) sin disparar el
+# costo: el digest queda en ~5.2k caracteres, similar a la version anterior.
+MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '10')))
+ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '460')))
+# Tope de salida. Si el modelo lo alcanza igual, stream_chat pide una
+# continuacion acotada en vez de entregar una respuesta cortada a mitad.
+MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '900')))
+CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '500')))
 DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '3')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '450')))
@@ -97,25 +101,27 @@ GATED_HOST_RE = re.compile(
 SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado en psicología, psiquiatría y psicoterapia. Respondés siempre en español, con tono claro, académico y directo, con tildes, eñes y signos de apertura.
 
 ## Rigor conceptual
-- Definí cada constructo como lo definen las fuentes que lo tratan directamente, nombrando su tradición y autores. No lo reemplaces por un concepto vecino que se le parece (hiperreflexividad ≠ rumiación; mindfulness ≠ relajación; disociación ≠ desrealización). Si recibís DISTINCIONES CONCEPTUALES, explicá en qué difieren. Si ninguna fuente trata el constructo, decilo al principio.
+- Definí cada constructo como lo definen las fuentes que lo tratan directamente, nombrando su tradición y autor. Cada definición lleva su cita. Si ninguna fuente recuperada lo define, escribí que no hay definición disponible en las fuentes en vez de reemplazarlo por un concepto vecino (hiperreflexividad ≠ rumiación; mindfulness ≠ relajación; disociación ≠ desrealización). Si recibís DISTINCIONES CONCEPTUALES, explicá en qué difieren.
 - Distinguí tres niveles de respaldo: evidencia experimental o meta-analítica, evidencia observacional/correlacional, y teoría, analogía o hipótesis mecanística. Calibrá el verbo: "muestra" solo para experimentos y meta-análisis; "se asocia" para correlaciones; "sugiere/propone" para teoría o muestras pequeñas.
 - Puentes entre niveles (neural ↔ fenomenológico, teoría ↔ clínica): indicá si alguna fuente examina el vínculo. Si no, presentalo como "puente teórico no puesto a prueba". Prohibido afirmar identidades o causas sin evidencia directa.
-- Cuando las fuentes discrepen, mostrá la discrepancia y qué la explica (muestra, método, población); no la promedies ni la escondas.
+- Si las fuentes discrepan, mostrá la discrepancia y qué la explica (muestra, método, población); no la promedies ni la escondas.
+- "No encontré" no es "no existe": cuando algo no aparezca, decí qué se buscó y que el silencio es de esta búsqueda, no del campo.
 
-## Formato
-- Abrí con 2 a 3 frases que respondan de frente la pregunta, sin encabezado, nombrando los conceptos centrales y la salvedad principal.
-- Seguí con 2 a 4 secciones "## " de título corto y específico. Cada sección: 1 párrafo de 4 a 6 frases. Cada sección debe aportar evidencia, mecanismo o matiz nuevo; no repitas ideas.
-- Usá tablas para comparar marcos, fases, estudios o niveles de evidencia: incluí al menos una siempre que compares 3 o más elementos. Máximo 4 columnas y 6 filas; celdas de 1 a 8 palabras, sin párrafos ni listas dentro de una celda; una cita por fila. Si no cabe, resumí en prosa.
-- Viñetas solo para listas breves. Negrita para el término técnico que el lector debe retener.
-- Cerrá con "## Límites de la evidencia" en 3 o 4 líneas: qué parte de la pregunta no tiene respaldo directo y qué sesgos o muestras limitan las conclusiones.
-- Extensión objetivo: 450 a 650 palabras (350 a 450 si la pregunta es simple). No rellenes con generalidades ni repitas para llegar a una extensión.
+## Formato (capas, de lo general a lo específico)
+1. **Una frase de respuesta** (máximo 2), sin encabezado: qué se sabe y cuál es la salvedad principal.
+2. **## Hallazgos clave** — 3 a 5 viñetas. Cada viñeta: una idea, 1 a 2 frases, con su cita y el nivel de respaldo (meta-análisis, ensayo pequeño, correlacional, teoría). Nada de párrafos largos.
+3. **## Dónde la evidencia no coincide** — 1 a 3 viñetas con discrepancias, resultados nulos o vacíos de cobertura. Si no hay ninguna, una línea diciéndolo.
+4. **## Qué falta y qué buscar** — 2 viñetas: qué parte de la pregunta queda sin respaldo directo y qué tipo de estudio la resolvería. Podés nombrar conceptos o autores a buscar, nunca papers inventados.
+- Tabla solo si comparás 3 o más elementos (estudios, marcos, niveles): máximo 4 columnas y 6 filas, celdas de 1 a 8 palabras, con cita en la celda. Si no cabe, va en prosa.
+- Negrita para el término técnico que el lector debe retener. Sin párrafos de relleno ni despedidas.
+- Extensión objetivo: 280 a 380 palabras (230 si la pregunta es simple). Es un techo, no una cuota: cada viñeta extra debe aportar algo nuevo.
 
 ## Contenido
 - Usá únicamente las FUENTES numeradas. Apoyate en las que tratan el tema y descartá sin citar las tangenciales.
-- Cada afirmación relevante lleva su cita: [1], [2], [1][3]. En tablas, citá dentro de la celda.
+- Cada afirmación relevante lleva su cita: [1], [2], [1][3]. Nunca cites un número que no exista en la lista.
 - Para hallazgos centrales nombrá autor y año en la prosa ("Hasenkamp et al. (2012) [3]"), con diseño y muestra solo si la fuente los declara.
 - Priorizá meta-análisis y revisiones sistemáticas; los trabajos fundacionales sirven para afirmaciones históricas.
-- Cubrí cada eje de "EJES QUE LA RESPUESTA DEBE CUBRIR" integrado en alguna sección, no como lista. Si un eje no tiene fuentes, decilo.
+- Cubrí cada eje de "EJES QUE LA RESPUESTA DEBE CUBRIR" dentro de las capas, sin repetirlos como lista. Si un eje no tiene fuentes, decilo.
 - Sintetizá: extraé hallazgos y conclusión, no copies el abstract.
 - No inventes datos, autores, años, muestras ni resultados. No incluyas URLs, DOIs ni referencias finales: la interfaz ya muestra las fuentes."""
 
@@ -147,6 +153,12 @@ Respondé en español, con calidez y sin dramatismo, en 120 a 180 palabras.
   un plan o medios, y alentá a buscar ayuda inmediata.
 - No cites papers, no des estadísticas, no prometas confidencialidad absoluta y no
   reemplaces la atención de emergencia."""
+
+# Se usa solo cuando la respuesta alcanzo max_tokens: retoma el texto donde
+# quedo en vez de reiniciarlo, y asegura el cierre en capas.
+CONTINUE_PROMPT = """Tu respuesta anterior se cortó por límite de longitud. Continuá EXACTAMENTE desde la última palabra, sin repetir nada de lo ya escrito ni reiniciar secciones.
+
+Si todavía no escribiste "## Dónde la evidencia no coincide" ni "## Qué falta y qué buscar", escribilas ahora con el formato pedido. Terminá la respuesta; no agregues despedidas ni resúmenes de lo anterior."""
 
 # Bloque fijo de recursos: lo agrega el servidor, no el modelo, para que los
 # números no se inventen ni se deformen.
@@ -1526,20 +1538,47 @@ def _build_messages(
     if outline:
         axes = (
             'EJES QUE LA RESPUESTA DEBE CUBRIR (no los repitas como lista: integralos '
-            'en las secciones):\n- ' + '\n- '.join(outline) + '\n\n'
+            'en las capas):\n- ' + '\n- '.join(outline) + '\n\n'
+        )
+    searched = ''
+    queries = (meta or {}).get('queries') or []
+    if queries:
+        # Le da al modelo materia prima para distinguir "no encontré" de
+        # "no existe" sin inventar una metodología de búsqueda.
+        searched = (
+            f'CONSULTAS QUE SE HICIERON EN OPENALEX ({len(queries)}): '
+            + '; '.join(str(q) for q in queries[:8]) + '\n\n'
         )
     messages.append({
         'role': 'user',
         'content': (
             f'PREGUNTA DEL USUARIO:\n{question.strip()}\n\n'
             f'{axes}'
+            f'{searched}'
             f'{_concept_notes(plan, meta)}'
             f'FUENTES DISPONIBLES:\n{_digest(sources)}\n\n'
-            'Redactá en español una respuesta compacta (450-650 palabras) con el'
-            ' párrafo de apertura, 2 a 4 secciones y las citas [n] indicadas.'
+            'Redactá en español con el formato en capas (frase de respuesta, '
+            'Hallazgos clave, Dónde la evidencia no coincide, Qué falta y qué buscar), '
+            '280 a 380 palabras y las citas [n] indicadas.'
         ),
     })
     return messages
+
+
+_CITE_RE = re.compile(r'\[(\d{1,2})\]')
+
+
+def _citation_report(answer: str, total: int) -> tuple[list[int], list[int]]:
+    """Devuelve (citadas, sin citar) para detectar citas rotas en los logs.
+
+    No corrige la respuesta en vuelo (llega en streaming), pero deja rastro
+    cuando el modelo cita un numero inexistente o deja fuentes sin usar.
+    """
+    cited = sorted({int(n) for n in _CITE_RE.findall(answer or '')})
+    out_of_range = [n for n in cited if n < 1 or n > total]
+    used = {n for n in cited if 1 <= n <= total}
+    uncited = [n for n in range(1, total + 1) if n not in used]
+    return out_of_range, uncited
 
 
 def _direct_messages(
@@ -1763,6 +1802,9 @@ async def _stream_completion(
                         choices = chunk.get('choices') or []
                         if not choices:
                             continue
+                        reason = choices[0].get('finish_reason')
+                        if reason:
+                            yield ('finish', reason)
                         delta = (choices[0].get('delta') or {}).get('content') or ''
                         if delta:
                             produced = True
@@ -1975,18 +2017,53 @@ async def stream_chat(
         question, sources, history, _plan_outline(plan), plan=plan, meta=search_meta,
     )
     usage: dict = {}
+    parts: list[str] = []
+    finish_reason: Optional[str] = None
 
     try:
         async for kind, value in _stream_completion(messages, api_keys, log_fn):
             if kind == 'usage':
                 usage = value
+            elif kind == 'finish':
+                finish_reason = value
             elif kind == 'delta':
+                parts.append(value)
                 yield _sse({'type': 'delta', 'text': value})
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] generacion fallo: {type(exc).__name__}: {exc}')
         yield sources_event(sources, search_meta)
         yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
         return
+
+    # Si el modelo agoto max_tokens (finish_reason == 'length'), la respuesta
+    # quedaba cortada a mitad de una seccion y sin el cierre util. En vez de
+    # entregarla asi, se pide una unica continuacion acotada y se suma al flujo.
+    if finish_reason == 'length' and ''.join(parts).strip():
+        log_fn('[chat] respuesta truncada: pidiendo continuacion')
+        cont_messages = messages + [
+            {'role': 'assistant', 'content': ''.join(parts)},
+            {'role': 'user', 'content': CONTINUE_PROMPT},
+        ]
+        cont_usage: dict = {}
+        try:
+            async for kind, value in _stream_completion(
+                cont_messages, api_keys, log_fn, max_tokens=CONTINUATION_TOKENS,
+            ):
+                if kind == 'usage':
+                    cont_usage = value
+                elif kind == 'delta':
+                    parts.append(value)
+                    yield _sse({'type': 'delta', 'text': value})
+        except Exception as exc:  # noqa: BLE001
+            log_fn(f'[chat] continuacion fallo: {type(exc).__name__}: {exc}')
+        usage = _merge_usage(usage, cont_usage)
+
+    out_of_range, uncited = _citation_report(''.join(parts), len(sources))
+    if out_of_range or len(uncited) >= max(3, len(sources) // 2):
+        log_fn(
+            f'[chat-citas] fuera de rango: {out_of_range or "ninguna"} | '
+            f'sin citar: {uncited or "ninguna"}'
+        )
 
     usage = _merge_usage(usage, route_usage)
     cost, elapsed = finish(usage, mode, len(sources), candidates)

@@ -93,9 +93,10 @@ actualiza la que pasás en `--update-env-vars`.
 | Variable | Default | Para qué sirve |
 |---|---|---|
 | `CHAT_MODEL` | `deepseek-flash` | Modelo de chat |
-| `CHAT_MAX_SOURCES` | `7` | Papers enviados al modelo por respuesta |
-| `CHAT_ABSTRACT_CHARS` | `650` | Recorte de cada abstract (conserva inicio, resultados y cierre) |
-| `CHAT_MAX_OUTPUT_TOKENS` | `1000` | Largo máximo de la respuesta de investigación |
+| `CHAT_MAX_SOURCES` | `10` | Papers enviados al modelo por respuesta |
+| `CHAT_ABSTRACT_CHARS` | `460` | Recorte de cada abstract (conserva inicio, resultados y cierre) |
+| `CHAT_MAX_OUTPUT_TOKENS` | `900` | Largo máximo de la respuesta de investigación |
+| `CHAT_CONTINUATION_TOKENS` | `500` | Continuación que se pide si la respuesta llega al tope anterior |
 | `CHAT_DIRECT_TOKENS` | `800` | Tope de las respuestas de charla y acompañamiento |
 | `CHAT_HISTORY_MESSAGES` | `3` | Turnos de historial que se reenvían |
 | `CHAT_HISTORY_CHARS` | `450` | Recorte de cada turno del historial |
@@ -148,14 +149,23 @@ constructo abundante no desplace a otro minoritario. Se envían al modelo los
 `CHAT_MAX_SOURCES` mejores, con autor, año, diseño, muestra y citas.
 
 **Paso 4 — redacción.** El texto se transmite en streaming y las fuentes viajan
-al final. La respuesta abre con un párrafo sustantivo (sin la etiqueta "respuesta
-breve"), sigue con 2-4 secciones con títulos propios y un párrafo cada una,
-usa tablas Markdown compactas (máx. 4 columnas × 6 filas) para comparar
-marcos/fases, distingue explícitamente entre evidencia experimental,
-correlacional y analogía, y cierra con límites de la evidencia. Extensión
-objetivo: 450-650 palabras (350-450 si la pregunta es simple). El servidor
-añade además un bloque de cobertura y distinciones conceptuales para que el
-modelo declare las brechas en vez de rellenarlas.
+al final. La respuesta se arma en capas para que se lea rápido sin perder
+matiz:
+
+1. una o dos frases de respuesta directa con la salvedad principal;
+2. **Hallazgos clave** — 3 a 5 viñetas, cada una con su cita y su nivel de
+   respaldo (meta-análisis, ensayo pequeño, correlacional, teoría);
+3. **Dónde la evidencia no coincide** — discrepancias, nulos o ausencias;
+4. **Qué falta y qué buscar** — qué parte de la pregunta no tiene respaldo y
+   qué tipo de estudio la resolvería.
+
+Se permite una tabla Markdown compacta (máx. 4 columnas × 6 filas) cuando se
+comparan 3 o más elementos. Extensión objetivo: 280-380 palabras (230 si la
+pregunta es simple). El servidor añade un bloque de cobertura, las consultas
+realizadas y las distinciones conceptuales, para que el modelo declare las
+brechas en vez de rellenarlas, y registra en el log `[chat-citas]` si quedaron
+citas fuera de rango o fuentes sin usar. Si el modelo agota `CHAT_MAX_OUTPUT_TOKENS`,
+se pide una única continuación acotada en lugar de entregar el texto cortado.
 
 ## Endpoints auxiliares (costo cero o mínimo)
 
