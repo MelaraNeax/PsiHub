@@ -5689,9 +5689,10 @@ function renderChatMarkdown(text, sources, fold = false) {
 }
 
 // ─── Secciones plegables (extensión profunda) ───
-// Lo que puede cambiar la conclusión se lee sin desplegar nada; el respaldo,
-// los mecanismos y el detalle quedan plegados detrás de cada encabezado.
-const CHAT_FOLD_CORE = /conclusi|lo que cambia|respuesta/i;
+// Solo se pliega el respaldo técnico: mecanismos, comparación de estudios,
+// metodología y detalle. Lo que matiza o invierte la conclusión se lee siempre,
+// desplegado, porque esconderlo es justo lo que no queremos.
+const CHAT_FOLD_DETAIL = /mecanis|\bmodelos\b|comparaci[oó]n|dise[nñ]o de los estudios|metodolog|detalle|t[eé]cnic|respaldo|referencias|muestreo/i;
 
 function chatFoldElement(group) {
   const section = document.createElement('section');
@@ -5715,9 +5716,10 @@ function chatFoldElement(group) {
 }
 
 function foldChatSections(container) {
+  const original = [...container.children];
   const groups = [];
   let current = null;
-  [...container.children].forEach(node => {
+  original.forEach(node => {
     if (node.tagName === 'H2') {
       current = { title: node.textContent.trim(), nodes: [node] };
       groups.push(current);
@@ -5725,32 +5727,32 @@ function foldChatSections(container) {
       current.nodes.push(node);
     }
   });
-  const foldable = groups.filter(g => g.nodes.length > 1);
-  if (foldable.length < 2) return;
+  // Un encabezado sin cuerpo no se pliega: no hay nada que esconder y el
+  // lector perdería el título sin ganar espacio.
+  const foldedGroups = groups.filter(g => g.nodes.length > 1 && CHAT_FOLD_DETAIL.test(g.title));
+  if (!foldedGroups.length) return;
 
-  const lead = [...container.children].slice(0, [...container.children].indexOf(groups[0].nodes[0]));
-  let coreIdx = groups.findIndex(g => CHAT_FOLD_CORE.test(g.title));
-  if (coreIdx < 0) coreIdx = 0;
+  const foldFor = new Map(foldedGroups.map(g => [g.nodes[0], chatFoldElement(g)]));
+  const consumed = new Set();
+  foldedGroups.forEach(g => g.nodes.forEach(node => consumed.add(node)));
 
   container.innerHTML = '';
-  lead.forEach(node => container.appendChild(node));
-  const folds = [];
-  groups.forEach((group, idx) => {
-    if (idx === coreIdx || group.nodes.length < 2) {
-      group.nodes.forEach(node => container.appendChild(node));
+  original.forEach(node => {
+    if (!consumed.has(node)) {
+      container.appendChild(node);
       return;
     }
-    folds.push(chatFoldElement(group));
+    const fold = foldFor.get(node);
+    if (!fold) return; // ya viaja dentro del plegado
+    if (!container.querySelector('.chat-folds-bar')) {
+      const bar = document.createElement('div');
+      bar.className = 'chat-folds-bar';
+      bar.innerHTML = '<button type="button" class="chat-fold-all" data-fold-all="1" aria-expanded="false">'
+        + '<i class="ph-bold ph-caret-double-down"></i><span>Expandir todo</span></button>';
+      container.appendChild(bar);
+    }
+    container.appendChild(fold);
   });
-  folds.forEach(fold => container.appendChild(fold));
-
-  if (folds.length) {
-    const bar = document.createElement('div');
-    bar.className = 'chat-folds-bar';
-    bar.innerHTML = '<button type="button" class="chat-fold-all" data-fold-all="1" aria-expanded="false">'
-      + '<i class="ph-bold ph-caret-double-down"></i><span>Expandir todo</span></button>';
-    container.insertBefore(bar, folds[0]);
-  }
 }
 
 function autosizeChatInput() {

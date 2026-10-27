@@ -38,7 +38,7 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
 # Marca de la version del pipeline de chat. Se expone en /health para poder
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
-CHAT_PIPELINE_VERSION = '2026-10-26-layered-answers-v4'
+CHAT_PIPELINE_VERSION = '2026-10-26-layered-answers-v5'
 
 # Presupuesto de contexto: 12 fuentes con ~460 caracteres de resumen cubren
 # mejor cada constructo (y dejan entrar papers discrepantes) sin disparar el
@@ -118,8 +118,7 @@ SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado 
 
 ## Formato (capas, de lo general a lo específico)
 1. **Una frase de respuesta** (máximo 2), sin encabezado: qué se sabe y cuál es la salvedad principal.
-2. **## Hallazgos clave** — viñetas, una idea por viñeta, 1 a 2 frases, con su cita y el nivel de respaldo (meta-análisis, ensayo pequeño, correlacional, teoría). Nada de párrafos largos.
-   En modo profundo, entre la frase y los hallazgos va **## Lo que cambia la conclusión**: las condiciones, poblaciones o resultados que matizan o invierten la respuesta, para que nadie se lleve una conclusión equivocada por no desplegar el resto.
+2. **## Hallazgos clave** — viñetas, una idea por viñeta, 1 a 2 frases, con su cita y el nivel de respaldo (meta-análisis, ensayo pequeño, correlacional, teoría). Nada de párrafos largos. Todo lo que matiza, limita o invierte la respuesta (condiciones, poblaciones, dosis) va acá, en las primeras viñetas: es lo que el lector necesita para no quedarse con una conclusión equivocada.
 3. **## Dónde la evidencia no coincide** — SOLO resultados o conclusiones que se contradicen entre fuentes (una reporta aumento y otra reducción, una encuentra efecto y otra no), con qué podría explicarlo (muestra, método, población). Los límites metodológicos NO van acá. Si las fuentes no se contradicen, escribí una sola línea: "Ninguna fuente recuperada reporta resultados contradictorios" y seguí.
 4. **## Límites y qué buscar** — 3 viñetas: qué parte de la pregunta queda sin respaldo directo, qué sesgo o muestra limita las conclusiones, y qué estudio concreto las resolvería (diseño, población, medida). Podés nombrar conceptos o autores a buscar, nunca papers inventados.
 - Tabla solo si comparás 3 o más elementos (estudios, marcos, niveles): máximo 4 columnas y 6 filas, celdas de 1 a 8 palabras, con cita en la celda. Si no cabe, va en prosa.
@@ -168,7 +167,7 @@ Respondé en español, con calidez y sin dramatismo, en 120 a 180 palabras.
 # quedo en vez de reiniciarlo, y asegura el cierre en capas.
 CONTINUE_PROMPT = """Tu respuesta anterior se cortó por límite de longitud. Continuá EXACTAMENTE desde la última palabra, sin repetir nada de lo ya escrito ni reiniciar secciones.
 
-Si todavía no escribiste "## Dónde la evidencia no coincide" ni "## Qué falta y qué buscar", escribilas ahora con el formato pedido. Terminá la respuesta; no agregues despedidas ni resúmenes de lo anterior."""
+Si todavía no escribiste "## Dónde la evidencia no coincide" ni "## Límites y qué buscar", escribilas ahora con el formato pedido. Terminá la respuesta; no agregues despedidas ni resúmenes de lo anterior."""
 
 # Bloque fijo de recursos: lo agrega el servidor, no el modelo, para que los
 # números no se inventen ni se deformen.
@@ -1562,18 +1561,17 @@ def depth_profile(depth: str) -> dict:
             'instruction': (
                 'Redactá en español en MODO PROFUNDO, con esta estructura exacta y sin '
                 'numerar los títulos. (1) 2 a 4 frases de respuesta directa, sin encabezado. '
-                '(2) "## Lo que cambia la conclusión" con 4 a 6 viñetas: condiciones, '
-                'poblaciones, dosis o resultados que matizan, limitan o invierten la '
-                'respuesta; acá va todo lo que un lector necesita para no quedarse con una '
-                'conclusión equivocada si no despliega lo demás. '
-                '(3) "## Hallazgos clave" con 6 a 8 viñetas, cita y nivel de respaldo. '
-                '(4) "## Mecanismos y modelos propuestos", 1 o 2 párrafos que separen '
+                '(2) "## Hallazgos clave" con 6 a 8 viñetas, cita y nivel de respaldo; las '
+                'primeras viñetas van a lo que matiza, limita o invierte la respuesta '
+                '(condiciones, poblaciones, dosis), porque eso tiene que leerse sin abrir '
+                'nada. '
+                '(3) "## Mecanismos y modelos propuestos", 1 o 2 párrafos que separen '
                 'teoría de evidencia directa. '
-                '(5) "## Comparación de estudios" con una tabla si hay 3 o más estudios '
+                '(4) "## Comparación de estudios" con una tabla si hay 3 o más estudios '
                 'comparables. '
-                '(6) "## Dónde la evidencia no coincide" con 2 a 4 contradicciones entre '
+                '(5) "## Dónde la evidencia no coincide" con 2 a 4 contradicciones entre '
                 'resultados. '
-                '(7) "## Límites y qué buscar" con 4 viñetas. '
+                '(6) "## Límites y qué buscar" con 4 viñetas. '
                 f'Extensión: {DEEP_WORD_TARGET} palabras; no cierres antes de 1150. '
                 'Cada afirmación relevante con su cita [n].'
             ),
