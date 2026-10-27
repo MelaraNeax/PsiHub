@@ -1,10 +1,16 @@
-"""Chat de investigacion: OpenAlex -> digest de abstracts -> DeepSeek streaming.
+"""Chat de investigacion: Europe PMC (OpenAlex de respaldo) -> digest -> DeepSeek.
 
-Objetivo de tokens: el modelo solo recibe un digest compacto (titulo, ano,
-revista y un recorte del abstract) de como maximo 8 papers. Los abstracts se
-guardan en Markdown (memoria + disco + GCS) para no reconstruirlos ni volver a
-pagarlos en consultas repetidas. El prompt de sistema es estable para que el
-cache automatico de DeepSeek pueda reutilizar el prefijo.
+Motor primario Europe PMC: devuelve el tipo de estudio de cada paper
+(meta-analisis, revision sistematica, ECA), el acceso abierto real y, para los
+articulos del PMC, el texto completo. Con eso se prioriza la evidencia
+sintetizada y los ensayos grandes por encima del paper suelto, y el modelo
+puede leer resultados y conclusiones del articulo entero, no solo su resumen.
+
+Objetivo de tokens: el modelo recibe un digest compacto (titulo, ano, revista,
+recorte del resumen y, cuando existe, un extracto del texto completo). Los
+abstracts se guardan en Markdown (memoria + disco + GCS) para no reconstruirlos
+ni volver a pagarlos en consultas repetidas. El prompt de sistema es estable
+para que el cache automatico de DeepSeek reutilice el prefijo.
 
 Cada respuesta registra su costo en el ledger (`kind: chat`) y deja una linea
 `[cost-chat]` en stdout, que Cloud Run envia a Cloud Logging.
@@ -25,6 +31,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+import europepmc
 import storage
 import enrich
 from costs import estimate_cost, record_cost
@@ -38,7 +45,7 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
 # Marca de la version del pipeline de chat. Se expone en /health para poder
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
-CHAT_PIPELINE_VERSION = '2026-10-26-layered-answers-v5'
+CHAT_PIPELINE_VERSION = '2026-10-27-europepmc-v6'
 
 # Presupuesto de contexto: 12 fuentes con ~460 caracteres de resumen cubren
 # mejor cada constructo (y dejan entrar papers discrepantes) sin disparar el
@@ -87,6 +94,16 @@ DIRECT_REL = 0.7
 SNOWBALL_SEEDS = max(0, int(os.getenv('CHAT_SNOWBALL_SEEDS', '3')))
 SNOWBALL_IDS = max(0, int(os.getenv('CHAT_SNOWBALL_IDS', '80')))
 
+# Lectura del articulo completo (solo acceso abierto con texto en PMC). Se
+# incluye un extracto de resultados y conclusion, no el paper entero: alcanza
+# para citar el resultado real y mantiene el digest barato.
+CHAT_FULLTEXT = os.getenv('CHAT_FULLTEXT', '1').strip() not in {'0', 'false', 'no'}
+FULLTEXT_QUICK = max(0, int(os.getenv('CHAT_FULLTEXT_QUICK', '4')))
+FULLTEXT_DEEP = max(0, int(os.getenv('CHAT_FULLTEXT_DEEP', '8')))
+FULLTEXT_CHARS = max(400, int(os.getenv('CHAT_FULLTEXT_CHARS', '1200')))
+FULLTEXT_CONCURRENCY = max(1, int(os.getenv('CHAT_FULLTEXT_CONCURRENCY', '4')))
+ABSTRACT_FILL = max(0, int(os.getenv('CHAT_ABSTRACT_FILL', '24')))
+
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
 ABSTRACT_DIR = CACHE_DIR / 'abstracts'
 ABSTRACT_DIR.mkdir(parents=True, exist_ok=True)
@@ -129,7 +146,9 @@ SYSTEM_PROMPT = """Eres el asistente de investigación de PsiHub, especializado 
 - Usá únicamente las FUENTES numeradas. Citá solo las que aportan algo; está bien no citar todas, y está mal listar una fuente que no usaste.
 - Cada afirmación relevante lleva su cita: [1], [2], [1][3]. Nunca cites un número que no exista en la lista.
 - Para hallazgos centrales nombrá autor y año en la prosa ("Hasenkamp et al. (2012) [3]"), con diseño y muestra solo si la fuente los declara.
-- Priorizá meta-análisis y revisiones sistemáticas; los trabajos fundacionales sirven para afirmaciones históricas.
+- Priorizá meta-análisis y revisiones sistemáticas, y entre ellos los recientes; después ensayos aleatorizados grandes; los trabajos fundacionales sirven para afirmaciones históricas.
+- Si una fuente trae "Texto completo (pasajes clave)", esos párrafos son resultados y conclusión reales del artículo: usalos para cifras, tamaños de efecto y conclusiones exactas, que el resumen suele omitir o redondear. Si una fuente solo trae resumen, no le atribuyas detalles que no aparezcan ahí.
+- Al describir cómo se llegó a la conclusión, distinguí lo que reporta cada fuente de lo que es tu síntesis: el lector tiene que poder ver sobre qué evidencia se sostiene cada afirmación.
 - Cubrí cada eje de "EJES QUE LA RESPUESTA DEBE CUBRIR" dentro de las capas, sin repetirlos como lista. Si un eje no tiene fuentes, decilo.
 - Sintetizá: extraé hallazgos y conclusión, no copies el abstract.
 - No inventes datos, autores, años, muestras ni resultados. No incluyas URLs, DOIs ni referencias finales: la interfaz ya muestra las fuentes."""
@@ -188,7 +207,7 @@ SUPPORT_FOOTER = """
 # Router + planificacion de la busqueda (una sola llamada)
 # ---------------------------------------------------------------------------
 
-ROUTER_PROMPT = """Eres el router y bibliotecario cientifico de PsiHub, una app de psicologia basada en evidencia. Decidis que necesita el mensaje y, si necesita investigacion, preparas la busqueda en OpenAlex. Respondes SOLO con un objeto JSON valido, sin texto adicional.
+ROUTER_PROMPT = """Eres el router y bibliotecario cientifico de PsiHub, una app de psicologia basada en evidencia. Decidis que necesita el mensaje y, si necesita investigacion, preparas la busqueda en Europe PMC (biomedicina y psicologia, acceso abierto). Respondes SOLO con un objeto JSON valido, sin texto adicional.
 
 FORMATOS:
 {"mode": "research", "concepts": [{"name": "...", "kind": "theory", "terms": ["..."], "not": ["..."], "queries": ["..."]}], "bridge": ["..."], "review": ["..."], "keywords": ["..."], "outline": ["..."], "scope": "psy"}
@@ -538,6 +557,56 @@ def _access_category(work: dict, pdf_url: Optional[str]) -> str:
 
 
 def _work_to_source(work: dict) -> dict:
+    """Convierte un work (Europe PMC u OpenAlex) en la fuente interna del chat."""
+    epmc = work.get('epmc') or {}
+    if epmc:
+        abstract = europepmc.clean_text(work.get('abstract_text'), 12000)
+        authors = [
+            (a.get('author') or {}).get('display_name')
+            for a in (work.get('authorships') or [])
+            if (a.get('author') or {}).get('display_name')
+        ]
+        journal = epmc.get('journal')
+        key = epmc.get('key') or europepmc.work_key(work)
+        is_oa = bool((work.get('open_access') or {}).get('is_oa'))
+        has_xml = bool(epmc.get('xml_url'))
+        pdf_url = epmc.get('pdf_url')
+        if has_xml:
+            access_category = 'oneclick'
+        elif is_oa:
+            access_category = 'free'
+        else:
+            access_category = 'paid'
+        return {
+            # La misma clave que devuelve el buscador (`med:123`, `pmc:PMC…`):
+            # así el favorito, la ficha y el lector reconocen el paper.
+            'id': key,
+            'openalexId': key,
+            'engine': 'europepmc',
+            'pmcid': epmc.get('pmcid'),
+            'pmid': epmc.get('pmid'),
+            'doi': work.get('doi'),
+            'title': work.get('title') or 'Sin titulo',
+            'authors': authors,
+            'year': work.get('publication_year'),
+            'journal': journal,
+            'citations': work.get('cited_by_count') or 0,
+            'abstract': abstract,
+            'topics': list(epmc.get('keywords') or [])[:5],
+            'type': work.get('type'),
+            'design': list(epmc.get('design') or []),
+            'pubTypes': list(epmc.get('pub_types') or []),
+            'journalImpact': epmc.get('journal_impact'),
+            'isOa': is_oa,
+            'oaStatus': (work.get('open_access') or {}).get('oa_status'),
+            'oaUrl': (work.get('open_access') or {}).get('oa_url'),
+            'pdfUrl': pdf_url,
+            'isAutoDownloadable': has_xml,
+            'hasFullText': has_xml,
+            'accessCategory': access_category,
+            'accessChecked': False,
+        }
+
     abstract = _reconstruct_abstract(work.get('abstract_inverted_index'))
     authors = [
         (a.get('author') or {}).get('display_name')
@@ -564,6 +633,7 @@ def _work_to_source(work: dict) -> dict:
     return {
         'id': work.get('id'),
         'openalexId': work_id,
+        'engine': 'openalex',
         'doi': work.get('doi'),
         'title': work.get('title') or 'Sin titulo',
         'authors': authors,
@@ -751,22 +821,28 @@ _WEAK_VENUE_RE = re.compile(
 
 
 def _study_design(source: dict) -> tuple[list[str], str]:
-    """Etiquetas de diseno y tamano muestral extraidos del resumen (heuristica).
+    """Etiquetas de diseno y tamano muestral a partir del registro y del resumen.
 
-    Sirven para que el modelo calibre el nivel de evidencia sin inventar nada:
-    solo se reporta lo que el propio resumen declara.
+    Cuando el motor declara el tipo de publicacion (Europe PMC trae
+    ``Meta-Analysis``, ``Systematic Review``, ``Randomized Controlled Trial``)
+    esa etiqueta manda: es metadata curada, no una heuristica sobre el texto.
+    Sin ella se cae a patrones del titulo y el resumen, para no inventar nada.
     """
     text = _normalize(f"{source.get('title') or ''} {source.get('abstract') or ''}")
+    declared = ' | '.join(str(t) for t in (source.get('pubTypes') or [])).lower()
     tags: list[str] = []
-    if re.search(r'meta-?analy', text):
+    if re.search(r'meta-?analy', declared) or re.search(r'meta-?analy', text):
         tags.append('meta-análisis')
-    elif re.search(r'systematic review|scoping review|umbrella review|systematic literature', text):
+    elif (re.search(r'systematic review|scoping review|umbrella review|systematic literature', declared)
+          or re.search(r'systematic review|scoping review|umbrella review|systematic literature', text)):
         tags.append('revisión sistemática')
-    elif source.get('type') == 'review':
+    elif source.get('type') == 'review' or re.search(r'\breview\b', declared):
         tags.append('revisión narrativa')
-    if re.search(r'randomi[sz]ed (?:controlled )?trial|randomi[sz]ed controlled|\brct\b', text):
+    if re.search(r'randomi[sz]ed (?:controlled )?trial|randomi[sz]ed controlled|\brct\b', declared) \
+            or re.search(r'randomi[sz]ed (?:controlled )?trial|randomi[sz]ed controlled|\brct\b', text):
         tags.append('ECA')
-    elif re.search(r'clinical trial|pilot study|open-label|quasi-experiment', text):
+    elif re.search(r'clinical trial|pilot study|open-label|quasi-experiment', declared) \
+            or re.search(r'clinical trial|pilot study|open-label|quasi-experiment', text):
         tags.append('ensayo/piloto')
     if re.search(r'fmri|functional magnetic|resting.state|neuroimag|\bpet\b', text):
         tags.append('neuroimagen')
@@ -807,6 +883,17 @@ def _study_design(source: dict) -> tuple[list[str], str]:
             unit = 'estudios' if m.group(2) in ('studies', 'trials') else 'participantes'
             sample = f'{m.group(1)} {unit}'
     return tags[:3], sample
+
+
+def _sample_size(sample: str) -> int:
+    """Numero entero detras de una etiqueta como 'n=1,024' o '1240 participantes'."""
+    m = re.search(r'(\d[\d,]*)', sample or '')
+    if not m:
+        return 0
+    try:
+        return int(m.group(1).replace(',', ''))
+    except ValueError:
+        return 0
 
 
 def _phrase_in(tokens: list[str], phrase_tokens: list[str]) -> bool:
@@ -933,15 +1020,45 @@ def _score_source(
         score += min(math.log1p(per_year), 3.0) * 0.25
     if year >= now_year - 6:
         score += 0.30
+    # Jerarquia de evidencia: las sintesis pesan mas que cualquier estudio
+    # primario, y una sintesis reciente pesa mas que una de hace veinte anos.
+    # Es la prioridad que el usuario pidio: meta-analisis y revisiones
+    # sistematicas primero, luego ECA grandes, luego recencia e impacto.
     design = source.get('design') or []
+    recent = bool(year) and year >= now_year - 8
     if 'meta-análisis' in design:
-        score += 0.6
+        score += 2.4 if recent else 1.6
     elif 'revisión sistemática' in design:
-        score += 0.45
-    elif source.get('type') == 'review':
-        score += 0.2
-    if 'ECA' in design:
+        score += 2.0 if recent else 1.3
+    elif source.get('type') == 'review' or 'revisión narrativa' in design:
         score += 0.3
+    if 'revisión sistemática' in design or 'meta-análisis' in design:
+        # Una sintesis sin resumen no sirve para sintetizar la respuesta.
+        if not source.get('abstract'):
+            score -= 1.0
+    if 'ECA' in design:
+        n_sample = _sample_size(source.get('sample') or '')
+        if n_sample >= 500:
+            score += 0.9
+        elif n_sample >= 200:
+            score += 0.7
+        elif n_sample:
+            score += 0.3
+        else:
+            # ECA sin muestra declarada: sigue siendo evidencia alta, pero no
+            # se le presume tamano grande.
+            score += 0.25
+        if recent:
+            score += 0.2
+    # Impacto de la revista (posicion relativa 0-1). Desconocido = 0.5, asi que
+    # solo separa a las revistas de prestigio de las de bajo impacto.
+    impact = source.get('journalImpact')
+    if isinstance(impact, (int, float)):
+        score += (float(impact) - 0.5) * 1.2
+    # Teoricos y psicologia blanda: valen cuando la pregunta es conceptual, no
+    # cuando pide evidencia clinica. Se premian solo por citas, ya contadas.
+    if 'teórico/conceptual' in design and year and now_year - year >= 10:
+        score += 0.2
     # Revistas ajenas al dominio (artes, ingenieria, negocios) en temas psi.
     if scope == 'psy' and _WEAK_VENUE_RE.search(str(source.get('journal') or '')):
         score -= 1.5
@@ -1016,20 +1133,72 @@ def _coverage(sources: list[dict], concepts: list[dict]) -> tuple[list[dict], Op
     return coverage, bridge
 
 
+def _spec(
+    query: str,
+    access: str,
+    per_page: int,
+    sort: Optional[str] = None,
+    mode: str = 'broad',
+    scope: str = 'psy',
+) -> dict:
+    """Consulta independiente del motor (Europe PMC u OpenAlex)."""
+    return {
+        'q': query,
+        'access': access,
+        'per_page': per_page,
+        'sort': sort,
+        'mode': mode,
+        'scope': scope,
+    }
+
+
+async def _engine_search(spec: dict, client: Optional[httpx.AsyncClient]) -> list[dict]:
+    """Europe PMC primero; OpenAlex solo si el motor primario falla.
+
+    Un fallo aislado no cambia de motor: `EngineState` tolera dos seguidos. Si
+    Europe PMC queda caido, el resto de la busqueda sigue por OpenAlex sin
+    romper la respuesta.
+    """
+    if europepmc.STATE.available:
+        try:
+            works, _meta = await europepmc.search(
+                spec['q'],
+                page_size=spec['per_page'],
+                access=spec['access'],
+                sort=spec.get('sort'),
+                scope=spec.get('scope') or 'psy',
+                mode=spec.get('mode') or 'broad',
+                client_=client,
+            )
+            europepmc.STATE.ok()
+            return works
+        except Exception as exc:  # noqa: BLE001 - se cae al respaldo
+            europepmc.STATE.fail(exc)
+            print(f'[chat-search] Europe PMC fallo: {type(exc).__name__}: {_redact(exc)}', flush=True)
+    payload = await _openalex_get(
+        _params(
+            spec['q'], spec['access'], spec['per_page'],
+            sort=spec.get('sort'), mode=spec.get('mode') or 'broad',
+            scope=spec.get('scope') or 'psy',
+        ),
+        client,
+    )
+    return [w for w in (payload.get('results') or []) if isinstance(w, dict)]
+
+
 async def _collect(
-    params: dict,
+    spec: dict,
     semaphore: asyncio.Semaphore,
     log_fn: Callable[[str], None],
     client: Optional[httpx.AsyncClient] = None,
 ) -> Optional[list[dict]]:
-    """None si la consulta fallo (para distinguir caida de OpenAlex de cero resultados)."""
+    """None si la consulta fallo (para no confundir caida del motor con cero resultados)."""
     async with semaphore:
         try:
-            payload = await _openalex_get(params, client)
+            return await _engine_search(spec, client)
         except Exception as exc:  # noqa: BLE001 - una consulta caida no invalida el resto
             log_fn(f'[chat-search] consulta fallo: {type(exc).__name__}: {_redact(exc)}')
             return None
-    return [w for w in (payload.get('results') or []) if isinstance(w, dict)]
 
 
 def _title_source(work: dict) -> dict:
@@ -1042,12 +1211,13 @@ def _title_source(work: dict) -> dict:
     }
 
 
-def _seed_reference_ids(
+async def _seed_reference_ids(
     works: list[dict],
     limit: int,
     concepts: Optional[list[dict]] = None,
+    log_fn: Callable[[str], None] = print,
 ) -> list[str]:
-    """IDs que citan los trabajos semilla (revisiones y clasicos primero).
+    """Claves que citan los trabajos semilla (revisiones y clasicos primero).
 
     Los papers fundacionales de un constructo suelen no contener las palabras
     clave de la pregunta, pero si aparecen en las referencias de las revisiones
@@ -1062,8 +1232,7 @@ def _seed_reference_ids(
 
     def add(work: dict) -> None:
         key = _work_key(work)
-        refs = work.get('referenced_works')
-        if not key or key in seen_seeds or not isinstance(refs, list) or not refs:
+        if not key or key in seen_seeds:
             return
         seen_seeds.add(key)
         seeds.append(work)
@@ -1093,38 +1262,60 @@ def _seed_reference_ids(
 
     # Cupo parejo por semilla: una revision muy citada no debe acaparar la expansion.
     per_seed = max(8, limit // len(seeds))
-    ids: list[str] = []
+    keys: list[str] = []
     seen: set[str] = set()
     for work in seeds:
         taken = 0
-        for ref in work.get('referenced_works') or []:
-            rid = str(ref or '').rstrip('/').rsplit('/', 1)[-1]
-            if not rid.startswith('W') or rid in seen:
-                continue
-            seen.add(rid)
-            ids.append(rid)
-            taken += 1
-            if taken >= per_seed or len(ids) >= limit:
-                break
-        if len(ids) >= limit:
+        epmc_key = str((work.get('epmc') or {}).get('key') or '')
+        if epmc_key and (work.get('epmc') or {}).get('has_references'):
+            for ref in await europepmc.references(epmc_key, per_seed * 2):
+                if ref in seen:
+                    continue
+                seen.add(ref)
+                keys.append(ref)
+                taken += 1
+                if taken >= per_seed or len(keys) >= limit:
+                    break
+        else:
+            for ref in work.get('referenced_works') or []:
+                rid = str(ref or '').rstrip('/').rsplit('/', 1)[-1]
+                if not rid.startswith('W') or rid in seen:
+                    continue
+                seen.add(rid)
+                keys.append(rid)
+                taken += 1
+                if taken >= per_seed or len(keys) >= limit:
+                    break
+        if len(keys) >= limit:
             break
-    return ids
+    log_fn(f'[chat-search] semillas: {len(seeds)} | referencias: {len(keys)}')
+    return keys
 
 
 async def _fetch_works_by_id(
-    ids: list[str],
+    keys: list[str],
     semaphore: asyncio.Semaphore,
     log_fn: Callable[[str], None],
     client: Optional[httpx.AsyncClient] = None,
 ) -> list[dict]:
-    """Recupera trabajos concretos por ID, sin filtro de campo ni de tipo.
+    """Recupera trabajos concretos por clave, sin filtro de campo ni de tipo.
 
     Sin restriccion de disciplina: los clasicos de fenomenologia o filosofia de
     la mente quedan fuera de los campos de psicologia y medicina.
     """
     works: list[dict] = []
-    for start in range(0, len(ids), 50):
-        batch = ids[start:start + 50]
+    epmc_keys = [k for k in keys if ':' in k]
+    openalex_ids = [k for k in keys if ':' not in k]
+
+    if epmc_keys:
+        async with semaphore:
+            try:
+                works.extend(await europepmc.fetch_by_ids(epmc_keys, client_=client))
+            except Exception as exc:  # noqa: BLE001 - expansion opcional
+                log_fn(f'[chat-search] expansion EPMC fallo: {type(exc).__name__}: {_redact(exc)}')
+
+    for start in range(0, len(openalex_ids), 50):
+        batch = openalex_ids[start:start + 50]
         params: dict = {
             'filter': 'openalex_id:' + '|'.join(batch),
             'per-page': str(len(batch)),
@@ -1154,6 +1345,7 @@ async def search_sources(
     scope: str = 'psy',
     limit: Optional[int] = None,
     min_rel: Optional[float] = None,
+    depth: str = 'quick',
 ) -> tuple[list[dict], dict]:
     """Busca papers por concepto, puente y revision; devuelve los mas afines.
 
@@ -1172,8 +1364,9 @@ async def search_sources(
     queries = [s['q'] for s in specs]
     concepts = _plan_concepts(plan)
 
+    engine_name = 'Europe PMC' if europepmc.STATE.available else 'OpenAlex'
     cache_key = (
-        f'{access}|{scope}|{limit or MAX_SOURCES}|'
+        f'{access}|{scope}|{depth}|{limit or MAX_SOURCES}|'
         + '|'.join(sorted(q.lower() for q in queries))
         + '#' + '|'.join(c['name'].lower() for c in concepts)
     )
@@ -1188,12 +1381,13 @@ async def search_sources(
             'cached': True,
             'coverage': extra.get('coverage', []),
             'bridge_direct': extra.get('bridge_direct'),
+            'engine': extra.get('engine', engine_name),
             # Sin esto, una pregunta repetida perdia el conteo del aviso Pro.
             'relevant': extra.get('relevant', len(cached[1])),
         }
 
     # Una sola conexion HTTP para todas las consultas: menos handshakes, menos
-    # picos de tasa y mejor latencia cuando OpenAlex esta saturado.
+    # picos de tasa y mejor latencia cuando el motor esta saturado.
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY)
     pool: dict[str, dict] = {}
     consensus: dict[str, int] = {}
@@ -1205,25 +1399,25 @@ async def search_sources(
         for spec in specs:
             sc = 'broad' if spec['kind'] == 'theory' else scope
             tasks.append(_collect(
-                _params(spec['q'], access, SEARCH_RESULTS, mode='precise', scope=sc),
+                _spec(spec['q'], access, SEARCH_RESULTS, mode='precise', scope=sc),
                 semaphore, log_fn, client,
             ))
             # El buscador general solo donde aporta cobertura: consulta canonica,
             # puente y revision. Asi se evitan pasadas redundantes.
             if spec['first'] or spec['role'] in ('bridge', 'review'):
                 tasks.append(_collect(
-                    _params(spec['q'], access, SEARCH_RESULTS, mode='broad', scope=sc),
+                    _spec(spec['q'], access, SEARCH_RESULTS, mode='broad', scope=sc),
                     semaphore, log_fn, client,
                 ))
             if spec['first']:
                 tasks.append(_collect(
-                    _params(spec['q'], access, 12, sort='cited_by_count:desc', mode='precise', scope=sc),
+                    _spec(spec['q'], access, 12, sort='cited_by_count:desc', mode='precise', scope=sc),
                     semaphore, log_fn, client,
                 ))
         groups = await asyncio.gather(*tasks)
         failed = sum(1 for g in groups if g is None)
         if failed and all(g is None for g in groups):
-            raise RuntimeError('OpenAlex no respondió a ninguna consulta.')
+            raise RuntimeError('El motor de búsqueda no respondió a ninguna consulta.')
         if failed:
             log_fn(f'[chat-search] {failed}/{len(groups)} consultas fallaron')
 
@@ -1239,7 +1433,7 @@ async def search_sources(
         # Segunda pasada: referencias de los mejores candidatos. Trae los papers
         # fundacionales (Sass & Parnas, Brewer, Raichle…) que las palabras clave
         # de la pregunta no alcanzan y que suelen citar las revisiones del tema.
-        seed_ids = _seed_reference_ids(list(pool.values()), SNOWBALL_IDS, concepts)
+        seed_ids = await _seed_reference_ids(list(pool.values()), SNOWBALL_IDS, concepts, log_fn)
         if seed_ids:
             ref_works = await _fetch_works_by_id(seed_ids, semaphore, log_fn, client)
             added = 0
@@ -1249,6 +1443,21 @@ async def search_sources(
                     pool[key] = work
                     added += 1
             log_fn(f'[chat-search] expansion por referencias: {len(seed_ids)} ids | {added} nuevos')
+
+    # Los registros que existen solo en PMC no traen resumen en el buscador.
+    # Sin resumen no se pueden puntuar ni citar, asi que se completa desde el
+    # XML de los candidatos con mas citas (el mismo XML que luego usa el lector).
+    missing_abstract = [
+        work for work in pool.values()
+        if (work.get('epmc') or {}).get('pmcid') and not work.get('abstract_text')
+    ]
+    if missing_abstract:
+        missing_abstract.sort(key=lambda w: -int(w.get('cited_by_count') or 0))
+        filled = await europepmc.fill_abstracts(
+            missing_abstract, limit=ABSTRACT_FILL, concurrency=6,
+        )
+        if filled:
+            log_fn(f'[chat-search] resumen recuperado del texto completo: {filled}')
 
     source_items = [(work, _work_to_source(work)) for work in pool.values()]
     candidates = len(source_items)
@@ -1332,8 +1541,13 @@ async def search_sources(
             if s.get('accessCategory') in ('free', 'oneclick')
         ]
     elif access == 'paid':
-        # is_oa:false ya filtra en OpenAlex; esto descarta falsos negativos.
+        # is_oa:false ya filtra en el buscador; esto descarta falsos negativos.
         related = [s for s in related if s.get('accessCategory') == 'paid']
+
+    # Texto completo de las sintesis y los estudios principales: es lo que
+    # permite responder con los resultados reales y no solo con el resumen.
+    fulltext_count = FULLTEXT_DEEP if depth.lower() == 'deep' else FULLTEXT_QUICK
+    await _attach_full_text(related, fulltext_count, log_fn)
 
     coverage, bridge_direct = _coverage(related, concepts)
     if coverage:
@@ -1346,7 +1560,7 @@ async def search_sources(
         time.time() + SEARCH_CACHE_TTL, related,
         {
             'candidates': candidates, 'coverage': coverage, 'bridge_direct': bridge_direct,
-            'relevant': relevant_total,
+            'relevant': relevant_total, 'engine': engine_name,
         },
     )
     if len(_search_cache) > 300:
@@ -1360,6 +1574,7 @@ async def search_sources(
         'coverage': coverage,
         'bridge_direct': bridge_direct,
         'relevant': relevant_total,
+        'engine': engine_name,
     }
 
 
@@ -1475,6 +1690,74 @@ def _clip_abstract(abstract: str, limit: Optional[int] = None) -> str:
     return clipped
 
 
+async def _attach_full_text(
+    sources: list[dict],
+    count: int,
+    log_fn: Callable[[str], None] = print,
+) -> int:
+    """Lee el texto completo (XML JATS) de las mejores fuentes de PMC.
+
+    No todos los articulos estan en PMC, y no todos los que estan son de acceso
+    abierto, asi que esto es un extra: si el XML no llega, la fuente conserva
+    su resumen y el chat funciona igual. Se piden primero las sintesis
+    (meta-analisis y revisiones), porque son las que fijan la conclusion.
+    """
+    if not CHAT_FULLTEXT or count <= 0:
+        return 0
+    eligible = [
+        s for s in sources
+        if s.get('pmcid') and s.get('hasFullText') and not s.get('fullText')
+    ]
+    if not eligible:
+        return 0
+
+    def priority(source: dict) -> tuple[int, int]:
+        design = source.get('design') or []
+        rank = 2 if 'meta-análisis' in design else 1 if 'revisión sistemática' in design else 0
+        return (-rank, -int(source.get('citations') or 0))
+
+    # Se intenta con el doble de candidatos: parte del catalogo de PMC no tiene
+    # XML de acceso abierto, y se prefiere llegar al cupo con la siguiente.
+    chosen = sorted(eligible, key=priority)[:count * 2]
+    semaphore = asyncio.Semaphore(FULLTEXT_CONCURRENCY)
+
+    async def read(source: dict) -> None:
+        async with semaphore:
+            try:
+                xml_text = await europepmc.full_text_xml_cached(str(source['pmcid']))
+            except Exception as exc:  # noqa: BLE001 - el texto completo es opcional
+                log_fn(f'[chat-fulltext] {source["pmcid"]} fallo: {type(exc).__name__}: {_redact(exc)}')
+                return
+            if not xml_text:
+                return
+            try:
+                sections = europepmc.key_sections(xml_text, budget=FULLTEXT_CHARS)
+            except Exception:  # noqa: BLE001 - XML atipico
+                sections = ''
+            if sections:
+                source['fullText'] = sections
+                # El resumen de PMC a veces llega vacio en el buscador: el XML
+                # es la unica via para tener uno.
+                if not source.get('abstract'):
+                    abstract = europepmc.xml_abstract(xml_text)
+                    if abstract:
+                        source['abstract'] = abstract
+
+    await asyncio.gather(*(read(source) for source in chosen))
+    # Se conservan solo las primeras `count` lecturas exitosas: el contexto del
+    # prompt no crece de más y las sobrantes quedan sin texto.
+    kept = 0
+    for source in chosen:
+        if not source.get('fullText'):
+            continue
+        kept += 1
+        if kept > count:
+            source.pop('fullText', None)
+    if kept:
+        log_fn(f'[chat-fulltext] texto completo de {min(kept, count)}/{len(chosen)} papers')
+    return min(kept, count)
+
+
 def _digest(sources: list[dict], abstract_chars: Optional[int] = None) -> str:
     blocks: list[str] = []
     for index, source in enumerate(sources, start=1):
@@ -1483,7 +1766,7 @@ def _digest(sources: list[dict], abstract_chars: Optional[int] = None) -> str:
         journal = source.get('journal') or 'Revista no informada'
         abstract = (source.get('abstract') or '').strip()
         if not abstract:
-            abstract = 'OpenAlex no incluye el resumen de este artículo.'
+            abstract = 'El registro no incluye el resumen de este artículo.'
         else:
             abstract = _clip_abstract(abstract, abstract_chars)
         access = {
@@ -1500,10 +1783,13 @@ def _digest(sources: list[dict], abstract_chars: Optional[int] = None) -> str:
         tags = ', '.join(design)
         if source.get('sample'):
             tags += f' · {source["sample"]}'
-        blocks.append(
+        block = (
             f'[{index}] {who} · {title} · {journal} · {access} · {tags} · {citations} citas\n'
             f'Resumen: {abstract}'
         )
+        if source.get('fullText'):
+            block += f'\nTexto completo (pasajes clave): {source["fullText"]}'
+        blocks.append(block)
     return '\n\n'.join(blocks)
 
 
@@ -1624,13 +1910,22 @@ def _build_messages(
         )
     searched = ''
     queries = (meta or {}).get('queries') or []
+    engine = (meta or {}).get('engine') or 'Europe PMC'
+    fulltext_n = sum(1 for s in sources if s.get('fullText'))
     if queries:
         # Le da al modelo materia prima para distinguir "no encontré" de
         # "no existe" sin inventar una metodología de búsqueda.
         searched = (
-            f'CONSULTAS QUE SE HICIERON EN OPENALEX ({len(queries)}): '
-            + '; '.join(str(q) for q in queries[:8]) + '\n\n'
+            f'CONSULTAS QUE SE HICIERON EN {str(engine).upper()} ({len(queries)}): '
+            + '; '.join(str(q) for q in queries[:8]) + '\n'
         )
+        if fulltext_n:
+            searched += (
+                f'De {len(sources)} fuentes, {fulltext_n} se leyeron a texto completo '
+                '(resultados y conclusión del artículo); el resto solo por resumen, '
+                'que va indicado en cada fuente.\n'
+            )
+        searched += '\n'
     messages.append({
         'role': 'user',
         'content': (
@@ -1944,6 +2239,7 @@ async def stream_chat(
             'id', 'openalexId', 'doi', 'title', 'authors', 'year', 'journal',
             'citations', 'isOa', 'oaUrl', 'pdfUrl', 'isAutoDownloadable',
             'accessCategory', 'type', 'design', 'sample', 'enrichedBy',
+            'engine', 'pmcid', 'pmid', 'hasFullText', 'journalImpact',
         )
         public_sources = []
         for source in sources:
@@ -1951,6 +2247,9 @@ async def stream_chat(
             item['access'] = source.get('accessCategory') or (
                 'free' if source.get('isOa') else 'paid'
             )
+            # Marca de metodo: si la fuente se leyo completa o solo por resumen.
+            if source.get('fullText'):
+                item['readFullText'] = True
             public_sources.append(item)
         return _sse({
             'type': 'sources',
@@ -2052,7 +2351,7 @@ async def stream_chat(
     query_count = len(_plan_queries(plan, question, query or question))
     yield _sse({
         'type': 'status',
-        'text': f'Buscando en {query_count} consultas de OpenAlex…',
+        'text': f'Buscando en {query_count} consultas de Europe PMC…',
     })
 
     try:
@@ -2066,17 +2365,18 @@ async def stream_chat(
             scope=_plan_scope(plan),
             limit=profile['sources'],
             min_rel=profile['min_rel'],
+            depth=profile['depth'],
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] busqueda fallo: {type(exc).__name__}: {_redact(exc)}')
         text = str(exc)
         if '429' in text or 'no respondió' in text:
             message = (
-                'OpenAlex alcanzó su límite de consultas por hoy. Probá más tarde '
-                'o configurá OPENALEX_API_KEY en el servidor.'
+                'El motor de búsqueda alcanzó su límite de consultas por ahora. '
+                'Probá en unos minutos.'
             )
         else:
-            message = 'No se pudo buscar en OpenAlex. Intenta de nuevo.'
+            message = 'No se pudo buscar en Europe PMC. Intenta de nuevo.'
         yield _sse({'type': 'error', 'message': message})
         return
 

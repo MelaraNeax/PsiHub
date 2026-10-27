@@ -1,8 +1,12 @@
 # Deploy del Chat IA — PsiHub
 
 El chat **no necesita un servidor ni una cuenta nuevos**: usa el mismo
-servicio de Cloud Run que ya atiende la traducción de PDF y el proxy de
-OpenAlex, y las mismas API keys de DeepSeek que ya tenés configuradas.
+servicio de Cloud Run que ya atiende la traducción de PDF y la búsqueda
+bibliográfica, y las mismas API keys de DeepSeek que ya tenés configuradas.
+
+El motor de búsqueda es **Europe PMC** (abstract, tipo de estudio, acceso
+abierto verificado y XML completo del PMC). **OpenAlex** queda como respaldo
+automático si Europe PMC no responde; no hay que configurar nada para eso.
 
 - Servicio: `mi-servidor-api` (región `southamerica-east1`)
 - URL: `https://mi-servidor-api-42204102300.southamerica-east1.run.app`
@@ -104,16 +108,25 @@ actualiza la que pasás en `--update-env-vars`.
 | `CHAT_DIRECT_TOKENS` | `800` | Tope de las respuestas de charla y acompañamiento |
 | `CHAT_HISTORY_MESSAGES` | `3` | Turnos de historial que se reenvían |
 | `CHAT_HISTORY_CHARS` | `450` | Recorte de cada turno del historial |
-| `CHAT_SEARCH_CACHE_TTL` | `1800` | Segundos de caché de búsquedas OpenAlex |
+| `CHAT_SEARCH_CACHE_TTL` | `1800` | Segundos de caché de búsquedas del motor |
 | `CHAT_SEARCH_RESULTS` | `20` | Papers que se piden por cada consulta |
 | `CHAT_ONECLICK_CANDIDATES` | `12` | PDFs que se verifican cuando el filtro es "1 clic" |
 | `CHAT_MIN_RELEVANCE` | `0.14` | Umbral de relevancia para descartar papers |
-| `CHAT_SEARCH_CONCURRENCY` | `4` | Consultas simultáneas contra OpenAlex |
+| `CHAT_SEARCH_CONCURRENCY` | `4` | Consultas simultáneas contra el motor |
 | `CHAT_PLANNER_TOKENS` | `550` | Tope de tokens del router/planificador |
 | `CHAT_ENRICH` | `1` | Completa abstract/año/DOI con Crossref, Europe PMC y Semantic Scholar |
 | `CHAT_ENRICH_CANDIDATES` | `18` | Papers candidatos que se intentan enriquecer por búsqueda |
 | `CHAT_SNOWBALL_SEEDS` | `3` | Trabajos semilla cuyas referencias se expanden (`0` desactiva) |
 | `CHAT_SNOWBALL_IDS` | `80` | Máximo de referencias recuperadas por búsqueda |
+| `EUROPEPMC_API_KEY` | vacío | Key opcional de Europe PMC. Sin ella funciona igual, con el límite público de consultas |
+| `EUROPEPMC_BASE` | `https://www.ebi.ac.uk/europepmc/webservices/rest` | Endpoint de Europe PMC |
+| `EUROPEPMC_TIMEOUT` | `20` | Segundos de espera por consulta |
+| `EUROPEPMC_CACHE_TTL` | `900` | Caché de resultados del motor |
+| `CHAT_FULLTEXT` | `1` | Lee el texto completo (XML del PMC) de los papers de acceso abierto |
+| `CHAT_FULLTEXT_QUICK` | `4` | Papers completos leídos en la investigación rápida |
+| `CHAT_FULLTEXT_DEEP` | `8` | Papers completos leídos en la investigación profunda |
+| `CHAT_FULLTEXT_CHARS` | `1200` | Pasajes clave que se envían al modelo por paper completo |
+| `CHAT_ABSTRACT_FILL` | `24` | Resúmenes que se completan desde el XML del PMC |
 
 ### Cómo decide y cómo busca
 
@@ -138,8 +151,9 @@ y el alcance (`psy`, o `broad` si la pregunta cruza disciplinas ajenas a
 psicología/medicina).
 
 **Paso 2 — recuperación.** Cada consulta se lanza dos veces en paralelo contra
-OpenAlex (título+resumen y buscador general) y la primera consulta de cada
-concepto suma una pasada ordenada por citas. Los conceptos teóricos se buscan
+Europe PMC (título+resumen y buscador general) y la primera consulta de cada
+concepto suma una pasada ordenada por citas. A los papers de acceso abierto del
+PMC se les completa el resumen desde el XML cuando falta. Los conceptos teóricos se buscan
 sin filtro de campo para que entre la fenomenología. Después se expande por
 referencias: se toman hasta 3 trabajos semilla (uno por concepto, más revisiones)
 y se recuperan sus referencias, que es donde suelen estar los clásicos
@@ -301,6 +315,6 @@ npm run sync
 |---|---|
 | `503 No hay API key de DeepSeek configurada` | Falta `DEEPSEEK_API_CHAT` o `DEEPSEEK_API_KEY_1` en Cloud Run |
 | La respuesta llega de golpe, sin streaming | Un proxy intermedio está buffereando; Cloud Run ya envía `X-Accel-Buffering: no`. Evitá proxys propios |
-| `OpenAlex alcanzó su límite de consultas por hoy` | Cuota diaria compartida por IP agotada; configurá `OPENALEX_API_KEY` (gratuita) para usar tu propio presupuesto |
+| `El buscador alcanzó su límite de consultas` | Cuota pública de Europe PMC agotada para esa IP; configurá `EUROPEPMC_API_KEY` (gratuita) en Cloud Run |
 | El chat responde pero no cita papers | Pregunta demasiado específica; probá términos más amplios o `access: all` |
 | `chat_keys: 0` en `/health` | La variable no llegó al servicio; revisá el deploy |

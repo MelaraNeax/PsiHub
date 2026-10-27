@@ -13,6 +13,7 @@ import io
 import ipaddress
 import json
 import os
+import re
 import time
 from collections import deque
 from pathlib import Path
@@ -30,6 +31,8 @@ import gradio as gr
 
 import storage
 import enrich
+import europepmc
+import pmc_translate
 import summarize as summarize_service
 from costs import (PRICE_INPUT, PRICE_OUTPUT, admin_token_matches, estimate_cost,
                    list_costs, record_cost, summarize)
@@ -404,6 +407,154 @@ async def process_url(url: str, model: Optional[str] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Articulos de Europe PMC: XML JATS en vez de PDF
+# ---------------------------------------------------------------------------
+# Para los articulos del PMC no se descarga el PDF ni se usan modelos de vision:
+# el articulo llega como XML estructurado, se traduce por bloques y se generan
+# el Markdown y el PDF en espanol. Es mas barato, no pierde tablas ni formulas y
+# funciona incluso cuando el editor bloquea la descarga del PDF.
+
+PMC_XML_DIR = CACHE_DIR / 'pmc_xml'
+PMC_XML_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _pmc_doc_id(pmcid: str) -> str:
+    return hashlib.sha256(f'pmc:{pmcid}'.encode('utf-8')).hexdigest()
+
+
+async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pmc') -> dict:
+    """Traduce el articulo completo de un registro PMC a Markdown y PDF."""
+    clean = re.sub(r'[^A-Za-z0-9]', '', str(pmcid or '')).upper()
+    if not clean.startswith('PMC'):
+        clean = f'PMC{clean}'
+    if clean == 'PMC':
+        raise ValueError('Falta el identificador PMC.')
+
+    xml_text = await europepmc.full_text_xml_cached(clean)
+    if not xml_text:
+        raise ValueError(
+            'Este articulo no tiene texto completo abierto en el PMC; '
+            'probá con el PDF original o con otra fuente.'
+        )
+    if not DEEPSEEK_API_KEYS:
+        raise RuntimeError('No hay API key de DeepSeek configurada.')
+
+    selected_model = (model or '').strip() or DEEPSEEK_MODEL
+    doc_id = _pmc_doc_id(clean)
+    # El sufijo separa el pipeline PMC del de vision: un documento viejo —de
+    # cuando el XML se guardaba sin traducir— no debe servirse como si fuera la
+    # traduccion actual.
+    key = cache_key(xml_text.encode('utf-8'), selected_model) + '_pmc2'
+
+    cached = load_cache(key)
+    if cached:
+        ensure_artifacts(cached)
+        _attach_urls(cached, doc_id)
+        # En PMC el "original" es el XML, no hay PDF de origen que ofrecer.
+        cached['pdf_url'] = cached.get('translated_pdf_url')
+        log(f'[PMC] Cache hit: {doc_id[:12]}...')
+        return cached
+
+    log(f'[PMC] Procesando {clean} ({len(xml_text):,} caracteres de XML, modelo: {selected_model})')
+    document = europepmc.xml_to_document(xml_text)
+    document, stats = await pmc_translate.translate_document(
+        document, DEEPSEEK_API_KEYS, model=selected_model, log_fn=log,
+    )
+
+    paths = _artifact_paths(doc_id)
+    markdown = document_to_markdown(document)
+    paths['md'].write_text(markdown, encoding='utf-8')
+    paths['json'].write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding='utf-8')
+    _persist_artifact(doc_id, 'md', paths['md'])
+    _persist_artifact(doc_id, 'json', paths['json'])
+    try:
+        (PMC_XML_DIR / f'{clean}.xml').write_text(xml_text, encoding='utf-8')
+    except Exception:  # noqa: BLE001 - el XML ya esta en el cache del motor
+        pass
+
+    pdf_error = None
+    try:
+        document_to_pdf(document, paths['pdf'], IMAGES_STORE_DIR / doc_id)
+        _persist_artifact(doc_id, 'pdf', paths['pdf'])
+    except Exception as exc:  # noqa: BLE001 - no bloquear la traduccion por el PDF
+        pdf_error = str(exc)
+        log(f'[PMC] Error generando PDF: {exc}')
+
+    meta = document.get('document', {})
+    usage = (stats or {}).get('usage') or {}
+    cost = estimate_cost(usage)
+    record_cost({
+        'doc_id': doc_id,
+        'kind': 'translation',
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'title': meta.get('title_es') or meta.get('title') or '',
+        'pages': 0,
+        'model': selected_model,
+        'source': source,
+        'elapsed_sec': (stats or {}).get('elapsed_sec'),
+        **cost,
+    })
+    log(f"[Cost] {doc_id[:12]}… PMC · {cost['total_tokens']} tokens · ${cost['cost_usd']:.4f} USD")
+
+    blocks = document.get('blocks') or []
+    document_metadata = {
+        'title': meta.get('title_es') or meta.get('title'),
+        'title_original': meta.get('title'),
+        'subtitle': meta.get('subtitle_es') or meta.get('subtitle'),
+        'authors': meta.get('authors') or [],
+        'journal': meta.get('journal'),
+        'year': meta.get('year'),
+        'doi': meta.get('doi'),
+        'pmcid': meta.get('pmcid') or clean,
+        'abstract': meta.get('abstract_es') or meta.get('abstract_original'),
+        'keywords': meta.get('keywords_es') or meta.get('keywords') or [],
+        'language': meta.get('language') or 'English',
+        'columns': 1,
+    }
+
+    result = {
+        'success': True,
+        'document_id': doc_id,
+        'engine': 'europepmc',
+        'source_kind': 'xml',
+        'pmcid': clean,
+        'markdown': markdown,
+        'document_json': document,
+        'document_metadata': document_metadata,
+        'layout': document.get('layout', {}),
+        'quality_score': 95 if meta.get('title') and blocks else 80,
+        'quality_report': {'average_score': 95 if blocks else 80, 'page_scores': {}},
+        'ocr_stats': {
+            'engine': 'jats-xml',
+            'pages_total': 0,
+            'pages_analyzed': 0,
+            'pages_mistral': 0,
+            'estimated_cost_usd': 0,
+        },
+        'translation_stats': {
+            'status': 'complete',
+            'pages': 0,
+            'blocks': (stats or {}).get('blocks'),
+            'translated_blocks': (stats or {}).get('translated'),
+            'usage': usage,
+            'elapsed_sec': (stats or {}).get('elapsed_sec'),
+            'estimated_cost_usd': cost['cost_usd'],
+        },
+        'images_extracted': 0,
+        'source_language': 'English',
+        'model_used': selected_model,
+        'pdf_error': pdf_error,
+    }
+    _attach_urls(result, doc_id)
+    # Sin PDF de origen: el boton "ver PDF" muestra el PDF traducido.
+    result['pdf_url'] = result.get('translated_pdf_url')
+
+    save_cache(key, result)
+    log(f'[PMC] Documento procesado: {doc_id[:12]}...')
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Verificacion de PDFs descargables
 # ---------------------------------------------------------------------------
 # El navegador no puede confirmar una descarga directa cuando el servidor del
@@ -493,6 +644,30 @@ async def probe_pdf(url: str) -> dict[str, object]:
     return verdict
 
 
+async def probe_pmc(pmcid: str) -> dict:
+    """Confirma que existe el articulo completo en XML para un registro PMC."""
+    clean = re.sub(r'[^A-Za-z0-9]', '', pmcid or '').upper()
+    if not clean.startswith('PMC'):
+        clean = f'PMC{clean}'
+    if clean == 'PMC':
+        return {'ok': False, 'reason': 'missing-id'}
+    async with _pmc_probe_lock:
+        now = time.time()
+        cached = _pdf_probe_cache.get(f'pmc:{clean}')
+        if cached and cached[0] > now:
+            return cached[1]
+    xml_text = await europepmc.full_text_xml_cached(clean)
+    verdict: dict = {'ok': bool(xml_text), 'reason': 'verified' if xml_text else 'no-fulltext'}
+    if xml_text:
+        verdict['chars'] = len(xml_text)
+    async with _pmc_probe_lock:
+        _pdf_probe_cache[f'pmc:{clean}'] = (time.time() + PDF_PROBE_CACHE_TTL, verdict)
+    return verdict
+
+
+_pmc_probe_lock = asyncio.Lock()
+
+
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
@@ -508,8 +683,13 @@ app.add_middleware(
 
 
 class TranslateRequest(BaseModel):
-    url: str
+    url: str = ''
     model: Optional[str] = None
+    # Ruta preferente: articulo abierto del PMC leido desde su XML.
+    pmcid: Optional[str] = None
+    doi: Optional[str] = None
+    paper_id: Optional[str] = None
+    id: Optional[str] = None
 
 
 class CheckPdfsRequest(BaseModel):
@@ -610,8 +790,31 @@ async def api_source_pdf(document_id: str):
 @app.post('/api/translate')
 async def api_translate(request: TranslateRequest):
     try:
-        result = await process_url(request.url, request.model)
+        pmcid = (request.pmcid or '').strip()
+        if not pmcid:
+            # El frontend manda la clave del motor como paper_id (p. ej.
+            # "pmc:PMC123"); tambien se acepta una URL de Europe PMC.
+            for raw in (request.paper_id, request.id, request.url):
+                match = re.search(r'(PMC\d{4,})', str(raw or ''), re.I)
+                if match:
+                    pmcid = match.group(1)
+                    break
+        if pmcid:
+            try:
+                return JSONResponse(content=await process_pmc(pmcid, request.model))
+            except ValueError as exc:
+                # Sin texto completo en PMC: si hay URL de PDF, se usa el
+                # pipeline de vision como antes.
+                if not request.url:
+                    raise
+                log(f'[PMC] {pmcid} sin texto completo ({exc}); se intenta el PDF.')
+        url = (request.url or '').strip()
+        if not url:
+            raise HTTPException(status_code=400, detail='Falta la URL del documento.')
+        result = await process_url(url, request.model)
         return JSONResponse(content=result)
+    except HTTPException:
+        raise
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=400, detail=f'Error descargando el PDF: {exc}')
     except Exception as exc:  # noqa: BLE001
@@ -669,11 +872,104 @@ async def api_openalex(request: Request):
 
 
 @app.get('/api/check-pdf')
-async def api_check_pdf(url: str = Query('')):
+async def api_check_pdf(url: str = Query(''), pmcid: str = Query('')):
+    if pmcid.strip():
+        return JSONResponse(content=await probe_pmc(pmcid.strip()))
     url = url.strip()
     if not url:
         raise HTTPException(status_code=400, detail='Falta la URL.')
     return JSONResponse(content=await probe_pdf(url))
+
+
+# ---------------------------------------------------------------------------
+# Busqueda: Europe PMC (motor primario) con OpenAlex como respaldo
+# ---------------------------------------------------------------------------
+
+@app.get('/api/search')
+async def api_search(
+    query: str = Query(''),
+    cursor: str = Query('*'),
+    page_size: int = Query(0, ge=0, le=100),
+    access: str = Query('all'),
+    sort: str = Query(''),
+    scope: str = Query('psy'),
+    mode: str = Query('broad'),
+):
+    """Pagina de resultados ya normalizada para la interfaz.
+
+    El cursor es opaco: el cliente guarda el que devuelve cada pagina. Europe
+    PMC no admite saltar a una pagina arbitraria, asi que el frontend encadena
+    cursores en vez de calcular offsets.
+    """
+    text = (query or '').strip()
+    if not text:
+        raise HTTPException(status_code=400, detail='Falta la consulta.')
+    if not europepmc.STATE.available:
+        raise HTTPException(status_code=503, detail='Europe PMC no está disponible en este momento.')
+
+    size = page_size or europepmc.EPMC_PAGE_SIZE
+    try:
+        works, meta = await europepmc.search(
+            text,
+            page_size=size,
+            cursor=cursor or '*',
+            access=access,
+            sort=sort or None,
+            scope=scope,
+            mode=mode,
+            # Relevancia: el orden propio del motor es "lo mas nuevo primero",
+            # asi que para la interfaz se mezcla con los mas citados.
+            balanced=not sort or sort == 'relevance',
+        )
+    except Exception as exc:  # noqa: BLE001
+        europepmc.STATE.fail(exc)
+        log(f'[EPMC] busqueda fallida: {type(exc).__name__}: {exc}')
+        raise HTTPException(status_code=502, detail='No se pudo contactar a Europe PMC.') from exc
+    europepmc.STATE.ok()
+
+    # Los registros que solo viven en PMC no traen resumen en la busqueda; sin
+    # el, la tarjeta queda vacia. Se completa con el XML (que ademas queda
+    # cacheado para el lector y el chat).
+    try:
+        await europepmc.fill_abstracts(works, limit=min(len(works), 10))
+    except Exception as exc:  # noqa: BLE001 - el resumen es opcional
+        log(f'[EPMC] abstracts: {type(exc).__name__}: {exc}')
+
+    papers = [europepmc.to_paper(w) for w in works]
+    return JSONResponse(content={
+        'results': papers,
+        'meta': {
+            'count': meta.get('count', len(papers)),
+            'cursor': meta.get('cursor', ''),
+            'engine': 'europepmc',
+            'pageSize': size,
+        },
+    })
+
+
+@app.get('/api/work')
+async def api_work(key: str = Query(''), doi: str = Query('')):
+    """Ficha de un paper por clave `src:id` o DOI (favoritos e historias)."""
+    clean_key = (key or '').strip().lower()
+    clean_doi = (doi or '').strip()
+    try:
+        if clean_key and ':' in clean_key:
+            source, _, ident = clean_key.partition(':')
+            works = await europepmc.fetch_by_ids([f'{source}:{ident}'])
+            if works:
+                return JSONResponse(content=europepmc.to_paper(works[0]))
+            raise HTTPException(status_code=404, detail='Paper no encontrado.')
+        if clean_doi:
+            work = await europepmc.lookup_doi(clean_doi)
+            if work:
+                return JSONResponse(content=europepmc.to_paper(work))
+            raise HTTPException(status_code=404, detail='DOI no encontrado.')
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        europepmc.STATE.fail(exc)
+        raise HTTPException(status_code=502, detail='No se pudo contactar a Europe PMC.') from exc
+    raise HTTPException(status_code=400, detail='Falta la clave o el DOI.')
 
 
 @app.post('/api/check-pdfs')
@@ -795,7 +1091,7 @@ async def api_summarize_pdf(
 
 @app.post('/api/chat')
 async def api_chat(request: ChatRequest):
-    """Chat de investigacion con streaming SSE (OpenAlex + DeepSeek)."""
+    """Chat de investigacion con streaming SSE (Europe PMC + DeepSeek)."""
     access = request.access if request.access in ('all', 'free', 'oneclick', 'paid') else 'all'
     depth = 'deep' if str(request.depth).lower() == 'deep' else 'quick'
     question = (request.question or '').strip()
@@ -890,6 +1186,10 @@ async def health():
         'chat_keys': len(CHAT_API_KEYS),
         'chat_pipeline': chat_service.CHAT_PIPELINE_VERSION,
         'pipeline_version': PIPELINE_VERSION,
+        'search_engine': 'europepmc',
+        'search_fallback': 'openalex',
+        'europepmc': europepmc.STATE.snapshot(),
+        'europepmc_key': bool(europepmc.EPMC_API_KEY),
         'enrich': True,
         'summarize': bool(CHAT_API_KEYS),
     }

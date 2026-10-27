@@ -3,7 +3,7 @@
  * Spotify aesthetic · OpenAlex · Traducción MyMemory
  */
 
-import { fetchPapers, fetchWorkById } from './src/services/openalex.js?v=39';
+import { fetchPapers, fetchWorkById } from './src/services/search.js?v=40';
 import { translateToSpanish, translateBatch, translateToEnglish } from './src/services/translate.js?v=2';
 
 // ═══════════════════════════════════════════════════
@@ -1003,8 +1003,8 @@ async function doFetch({ nextPage = false } = {}) {
     if (isFirstPage) {
       const timedOut = err.name === 'TimeoutError' || /timed out|timeout/i.test(err.message || '');
       el.resultsErrorMsg.textContent = timedOut
-        ? 'OpenAlex tardó demasiado en responder. Probá de nuevo en unos segundos.'
-        : (err.message || 'Error de conexión con OpenAlex.');
+        ? 'El buscador tardó demasiado en responder. Probá de nuevo en unos segundos.'
+        : (err.message || 'Error de conexión con el buscador.');
       showResultsState('error');
     } else {
       // La página no se dio por cargada: "Reintentar" vuelve a pedir la misma.
@@ -1016,7 +1016,7 @@ async function doFetch({ nextPage = false } = {}) {
   } finally {
     if (el.resultsLoading) {
       const label = el.resultsLoading.querySelector('p');
-      if (label) label.textContent = 'Buscando en OpenAlex…';
+      if (label) label.textContent = 'Buscando en Europe PMC…';
     }
     if (!signal.aborted) {
       S.loading = false;
@@ -1488,6 +1488,12 @@ function pumpPdfChecks() {
 
 async function checkPaperPdf(paper) {
   if (!paper || paper.pdfChecking) return;
+  // Los papers de PMC no tienen PDF del editor: el backend arma el PDF desde
+  // el XML, así que se marcan como descarga directa sin sondear una URL.
+  if (paper.pmcid && paper.hasFullText) {
+    applyPdfResult(paper, true, 'pmc-xml');
+    return;
+  }
   const url = paper.pdfUrl || paper.oaUrl;
   if (!url) {
     applyPdfResult(paper, false, 'no-url');
@@ -1539,6 +1545,10 @@ function validatePdfUrls(papers) {
  */
 async function verifyPaperOneClick(paper, signal) {
   if (!paper) return false;
+  if (paper.pmcid && paper.hasFullText) {
+    applyPdfResult(paper, true, 'pmc-xml');
+    return true;
+  }
   if (paper.pdfChecked) return paper.isAutomatic === true;
 
   const url = paper.pdfUrl || paper.oaUrl;
@@ -2032,11 +2042,11 @@ async function openModal(paper, corriente) {
       });
     }
 
-    // Si el paper no tiene abstract o es un resumen sintético previo, buscar el abstract original en OpenAlex
+    // Si el paper no tiene abstract o es un resumen sintético previo, buscar el abstract original en el buscador
     const isAiSummary = paper.abstract && paper.abstract.includes('\n\n') && (paper.abstract.startsWith('¿') || paper.abstract.includes('?'));
     if ((!paper.abstract || isAiSummary) && (paper.id || paper.doi)) {
       const abstractEl = document.getElementById('modal-abstract-text');
-      if (abstractEl) abstractEl.textContent = 'Cargando abstract original desde OpenAlex…';
+      if (abstractEl) abstractEl.textContent = 'Cargando abstract original…';
       try {
         const lookupId = (paper.doi ? (paper.doi.startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`) : paper.id);
         const controller = new AbortController();
@@ -2050,7 +2060,7 @@ async function openModal(paper, corriente) {
           } else {
             const absEl = document.getElementById('modal-abstract-text');
             if (absEl && S.currentPaper?.id === paper.id) {
-              absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">OpenAlex no incluyó el abstract original para este artículo.</span>';
+              absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">El buscador no incluyó el abstract original para este artículo.</span>';
               const langEl = document.getElementById('modal-abstract-lang');
               if (langEl) langEl.style.display = 'none';
             }
@@ -2080,7 +2090,7 @@ async function openModal(paper, corriente) {
         } else if (!full && S.currentPaper?.id === paper.id) {
           const absEl = document.getElementById('modal-abstract-text');
           if (absEl) {
-            absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">OpenAlex no incluyó el abstract original para este artículo.</span>';
+            absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">El buscador no incluyó el abstract original para este artículo.</span>';
             const langEl = document.getElementById('modal-abstract-lang');
             if (langEl) langEl.style.display = 'none';
           }
@@ -2089,7 +2099,7 @@ async function openModal(paper, corriente) {
         console.warn('[openModal] No se pudo obtener detalle de OpenAlex:', errOpenAlex);
         const absEl = document.getElementById('modal-abstract-text');
         if (absEl && S.currentPaper?.id === paper.id) {
-          absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">OpenAlex no incluyó el abstract original para este artículo.</span>';
+          absEl.innerHTML = '<span style="opacity: 0.75; font-style: italic;">El buscador no incluyó el abstract original para este artículo.</span>';
           const langEl = document.getElementById('modal-abstract-lang');
           if (langEl) langEl.style.display = 'none';
         }
@@ -2220,7 +2230,7 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
     }
   }
 
-  const abstractContent = paper.abstract || 'OpenAlex no incluyó el abstract original para este artículo.';
+  const abstractContent = paper.abstract || 'El buscador no incluyó el abstract original para este artículo.';
   const authors = Array.isArray(paper.authors) ? paper.authors : [];
   let authorsStr = '';
   if (authors.length > 0) {
@@ -2900,6 +2910,9 @@ async function startPaperSummary(kind = 'basic') {
 async function openReaderModal(paperUrl, paperId, paperObj) {
   const paper = paperObj || S.currentPaper;
   const effectiveId = paperId || paper?.id || paperUrl;
+  // Los papers de PMC no traen un PDF del editor: el backend traduce el XML.
+  // Por eso no exigir un enlace para abrirlos.
+  const pmcId = paper?.pmcid && paper?.hasFullText ? paper.pmcid : null;
   restoreReaderForTranslation();
 
   // 1. Revisar si la traducción ya existe (en memoria o en almacenamiento persistente)
@@ -2943,7 +2956,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
 
   // 2. Si verificamos que el PDF no es de descarga libre, no mostramos
   //    traducción automática: el usuario debe descargarlo y subirlo.
-  if (paper && paper.pdfChecked && paper.isAutomatic === false) {
+  if (paper && paper.pdfChecked && paper.isAutomatic === false && !pmcId) {
     S.readerPaperId = effectiveId;
     S.readerPdfUrl = paperUrl || paper?.pdfUrl || paper?.oaUrl || null;
     S.readerDocId = null;
@@ -2960,7 +2973,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
   }
 
   // 3. Si no está traducido y no hay enlace directo, mostrar pantalla amigable de requisito
-  if (!paperUrl) {
+  if (!paperUrl && !pmcId) {
     S.readerPaperId = effectiveId;
     S.readerPdfUrl = null;
     S.readerDocId = null;
@@ -3062,7 +3075,13 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       const data = await fetchWithBackgroundRetry(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: paperUrl, paper_id: effectiveId, id: effectiveId })
+        body: JSON.stringify({
+          url: paperUrl || '',
+          pmcid: pmcId || null,
+          doi: paper?.doi || null,
+          paper_id: effectiveId,
+          id: effectiveId
+        })
       });
 
       if (LocalNotifications) {
@@ -4689,7 +4708,7 @@ function toggleStoryBookmark() {
   toggleBookmark(paperObj);
   updateStorySaveBtnState(story);
 
-  // Si no tenía abstract original embebido, obtenerlo en segundo plano desde OpenAlex
+  // Si no tenía abstract original embebido, obtenerlo en segundo plano desde el buscador
   if (!originalAbstract && story.doi) {
     fetchWorkById(`https://doi.org/${story.doi}`).then(full => {
       if (full && full.abstract) {
@@ -5283,7 +5302,7 @@ function buildChatExportMarkdown(msg) {
     });
     parts.push(`## Fuentes consultadas\n\n${lines.join('\n')}`);
   }
-  parts.push('_Generado con PsiHub — basado en abstracts de OpenAlex. Puede contener errores._');
+  parts.push('_Generado con PsiHub — basado en abstracts y texto completo de Europe PMC. Puede contener errores._');
   return parts.join('\n\n') + '\n';
 }
 
