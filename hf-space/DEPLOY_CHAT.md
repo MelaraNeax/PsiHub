@@ -240,21 +240,40 @@ El backend ya valida tokens (`hf-space/auth_supabase.py`) y el esquema
 
 Para activarlo:
 
-1. Creá un proyecto gratuito en <https://supabase.com> y habilitá el proveedor
-   **Google** en Authentication → Providers.
-2. Ejecutá `supabase_schema.sql` en el SQL Editor.
-3. En Cloud Run configurá `SUPABASE_URL` y una de estas dos:
-   `SUPABASE_JWT_SECRET` (legado, HS256) o `SUPABASE_JWKS_URL`
-   (`https://<proyecto>.supabase.co/auth/v1/.well-known/jwks.json`, recomendado).
-4. En `index.html`, completá las metas `psyhub-supabase-url` y
-   `psyhub-supabase-anon`. El botón "Iniciar sesión con Google" pasa a usar
-   OAuth real; sin esos datos sigue el formulario local.
-5. En Supabase → Authentication → URL Configuration agregá la URL del
-   frontend como *Redirect URL*.
+1. Creá un proyecto gratuito en <https://supabase.com>. Anotá el **Project
+   URL** (`https://<ref>.supabase.co`) y la **anon public key** (Settings → API
+   Keys). La anon key es pública por diseño; nunca pongas la `service_role`
+   en el frontend.
+2. En <https://console.cloud.google.com> → APIs & Services → Credentials creá
+   un **OAuth client ID** de tipo *Web application* con:
+   - *Authorized JavaScript origins*: la URL del frontend (por ejemplo
+     `https://melaraneax.github.io`).
+   - *Authorized redirect URIs*: `https://<ref>.supabase.co/auth/v1/callback`.
+   Copiá Client ID y Client Secret en Supabase → Authentication → Providers →
+   **Google** y activalo.
+3. Ejecutá `supabase_schema.sql` en el SQL Editor (crea `profiles`, `folders`,
+   `saved_papers`, `chats`, `summaries`, `translations`, `usage_events` con RLS).
+4. En Supabase → Authentication → URL Configuration poné el **Site URL** del
+   frontend y agregá en *Redirect URLs* cada origen desde el que se abre la app:
+   `https://melaraneax.github.io/PsiHub/`, `http://localhost:8080/` y
+   `https://localhost` (Capacitor). Si falta un origen, Supabase redirige al
+   Site URL y la sesión no vuelve a la app.
+5. En Cloud Run configurá `SUPABASE_URL` y una de estas dos:
+   `SUPABASE_JWKS_URL` (recomendado;
+   `https://<ref>.supabase.co/auth/v1/.well-known/jwks.json`, funciona con las
+   claves asimétricas nuevas y requiere `PyJWT[crypto]`, ya incluido en
+   `requirements.txt`) o `SUPABASE_JWT_SECRET` (proyectos con secreto HS256).
+6. En `index.html`, completá las metas `psyhub-supabase-url` y
+   `psyhub-supabase-anon` (o definí `window.PSYHUB_SUPABASE = {url, anonKey}`
+   antes de `app.js`). Después corré `npm run build` para que `www/` las tenga.
+   El botón "Iniciar sesión con Google" pasa a usar OAuth real; sin esos datos
+   sigue el formulario local.
+7. Verificá con `/health`: `supabase_auth` debe pasar a `true`.
 
 Los tokens vuelven en el hash, `src/services/auth.js` los guarda y limpia la
-URL. Las tablas todavía no se sincronizan desde el frontend: el backend y el
-esquema quedan listos para hacerlo sin migrar datos locales.
+URL, y `GET /api/auth/me` los valida. Las tablas todavía no se sincronizan
+desde el frontend: el login queda operativo y el backend y el esquema están
+listos para hacerlo sin migrar datos locales.
 
 ---
 
