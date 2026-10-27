@@ -1083,7 +1083,15 @@ function initInfiniteScroll() {
 // CARDS DE RESULTADOS & VERIFICACIÓN PDF
 // ═══════════════════════════════════════════════════
 
-const HF_SPACE_URL = 'https://mi-servidor-api-42204102300.southamerica-east1.run.app';
+// Permite apuntar la app a un backend local durante pruebas:
+//   localStorage.setItem('psyhub_api_base', 'http://127.0.0.1:8080')
+// En producción no hay valor y se usa el servicio de Cloud Run.
+const HF_SPACE_URL = (() => {
+  const fallback = 'https://mi-servidor-api-42204102300.southamerica-east1.run.app';
+  try {
+    return (localStorage.getItem('psyhub_api_base') || fallback).replace(/\/$/, '');
+  } catch { return fallback; }
+})();
 const checkedPdfUrls = new Map(); // url -> { isAutomatic: boolean, status: string, pending: boolean }
 const paperTranslations = new Map(); // id/url -> markdown
 const activeTranslations = new Map(); // id -> Promise
@@ -5095,15 +5103,16 @@ function closeChatHistory() {
 }
 
 function getChatAccess() {
-  const active = el.chatAccessSeg?.querySelector('.chat-access-option.is-active');
+  const active = el.chatAccessSeg?.querySelector('.chat-access-option[data-access].is-active');
   const value = active?.dataset.access || 'all';
-  return value === 'free' || value === 'oneclick' ? value : 'all';
+  return ['free', 'oneclick', 'paid'].includes(value) ? value : 'all';
 }
 
 const CHAT_ACCESS_META = {
-  all: { label: 'Todas', icon: 'ph-books' },
+  all: { label: 'Todos', icon: 'ph-books' },
   free: { label: 'Gratis', icon: 'ph-lock-open' },
-  oneclick: { label: '1 clic', icon: 'ph-hand-pointing' }
+  oneclick: { label: '1 clic', icon: 'ph-hand-pointing' },
+  paid: { label: 'Pago', icon: 'ph-lock' }
 };
 
 function getChatDepth() {
@@ -5121,7 +5130,7 @@ function updateChatFilterLabel() {
 }
 
 function setChatAccess(access, { persist = true } = {}) {
-  const value = access === 'free' || access === 'oneclick' ? access : 'all';
+  const value = ['free', 'oneclick', 'paid'].includes(access) ? access : 'all';
   if (el.chatAccessSeg) {
     el.chatAccessSeg.querySelectorAll('.chat-access-option[data-access]').forEach(btn => {
       const on = btn.dataset.access === value;
@@ -5464,7 +5473,8 @@ function updateChatBubble(wrap, msg) {
   }
 
   if (sourcesEl) {
-    sourcesEl.innerHTML = renderChatSourcesHtml(msg.sources || [], msg.id, !!msg.sourcesOpen);
+    sourcesEl.innerHTML = renderChatSourcesHtml(msg.sources || [], msg.id, !!msg.sourcesOpen)
+      + (msg.streaming ? '' : renderChatUpsellHtml(msg));
   }
 
   if (actionsEl) actionsEl.hidden = !!msg.streaming || !fullContent;
@@ -5565,6 +5575,22 @@ function renderChatSourcesHtml(sources, msgId, open = false) {
     <div class="chat-sources-list" ${open ? '' : 'hidden'}>
       <div class="chat-sources">${items}</div>
     </div>`;
+}
+
+// Aviso de conversión: muestra cuántas fuentes relevantes quedaron afuera del
+// modo rápido. Cuando exista la compra del plan, este botón pasa a ser el link.
+function renderChatUpsellHtml(msg) {
+  if (!msg || msg.depth === 'deep') return '';
+  const used = Array.isArray(msg.sources) ? msg.sources.length : 0;
+  const relevant = Number(msg.relevant || 0);
+  if (!used || relevant <= used) return '';
+  return `
+    <button type="button" class="chat-upsell" data-upsell="pro"
+      title="Desbloquear la extensión profunda">
+      <i class="ph-bold ph-sparkle"></i>
+      <span>Usaste <strong>${used}</strong> de <strong>${relevant}</strong> fuentes relevantes</span>
+      <span class="chat-upsell-cta">Plan Pro</span>
+    </button>`;
 }
 
 function sanitizeChatHtml(root) {
@@ -5744,6 +5770,8 @@ function handleChatEvent(payload, msg, wrap) {
   } else if (payload.type === 'sources') {
     // Llegan al final del stream, cuando la respuesta ya está redactada.
     msg.sources = Array.isArray(payload.sources) ? payload.sources : [];
+    msg.relevant = Number(payload.relevant || 0);
+    msg.depth = payload.depth || msg.depth || 'quick';
     msg._dirty = true;
     scheduleChatBubbleUpdate(wrap, msg);
   } else if (payload.type === 'delta') {
@@ -6020,6 +6048,12 @@ function setupChatEventListeners() {
         const chat = getActiveChat();
         if (chat) persistChats();
       }
+      return;
+    }
+
+    const upsell = e.target.closest('[data-upsell="pro"]');
+    if (upsell) {
+      showToast('El plan Pro con respuestas profundas (20+ fuentes) llega pronto.');
       return;
     }
 

@@ -597,6 +597,8 @@ def _params(
     filters = [WORK_TYPES] if scope == 'broad' else [PSY_FIELDS, WORK_TYPES]
     if access in ('free', 'oneclick'):
         filters.append('is_oa:true')
+    elif access == 'paid':
+        filters.append('is_oa:false')
     params = {
         'filter': ','.join(filters),
         'per-page': str(per_page),
@@ -1186,6 +1188,8 @@ async def search_sources(
             'cached': True,
             'coverage': extra.get('coverage', []),
             'bridge_direct': extra.get('bridge_direct'),
+            # Sin esto, una pregunta repetida perdia el conteo del aviso Pro.
+            'relevant': extra.get('relevant', len(cached[1])),
         }
 
     # Una sola conexion HTTP para todas las consultas: menos handshakes, menos
@@ -1305,6 +1309,12 @@ async def search_sources(
                 items.sort(key=lambda it: it['score'], reverse=True)
                 log_fn(f'[chat-enrich] {filled} campos completados')
 
+    # Cuantas fuentes entrarian en la extension profunda: alimenta el aviso
+    # "12 de 22 fuentes relevantes" del plan Pro. Contar todo lo que supera el
+    # umbral minimo inflaba la cifra (cientos de papers apenas relacionados).
+    relevant_total = len(
+        _select_sources(items, len(concepts), DEEP_MAX_SOURCES, DEEP_MIN_RELEVANCE)
+    )
     related = [
         it['source']
         for it in _select_sources(items, len(concepts), limit or MAX_SOURCES, min_rel)
@@ -1321,6 +1331,9 @@ async def search_sources(
             s for s in related
             if s.get('accessCategory') in ('free', 'oneclick')
         ]
+    elif access == 'paid':
+        # is_oa:false ya filtra en OpenAlex; esto descarta falsos negativos.
+        related = [s for s in related if s.get('accessCategory') == 'paid']
 
     coverage, bridge_direct = _coverage(related, concepts)
     if coverage:
@@ -1331,7 +1344,10 @@ async def search_sources(
     await asyncio.gather(*(_remember_abstract(source) for source in related))
     _search_cache[cache_key] = (
         time.time() + SEARCH_CACHE_TTL, related,
-        {'candidates': candidates, 'coverage': coverage, 'bridge_direct': bridge_direct},
+        {
+            'candidates': candidates, 'coverage': coverage, 'bridge_direct': bridge_direct,
+            'relevant': relevant_total,
+        },
     )
     if len(_search_cache) > 300:
         _search_cache.clear()
@@ -1343,6 +1359,7 @@ async def search_sources(
         'cached': False,
         'coverage': coverage,
         'bridge_direct': bridge_direct,
+        'relevant': relevant_total,
     }
 
 
@@ -1937,6 +1954,7 @@ async def stream_chat(
             'query': meta.get('query') or query,
             'cached': bool(meta.get('cached')),
             'depth': profile['depth'],
+            'relevant': int(meta.get('relevant') or 0),
         })
 
     def finish(usage: dict, mode: str, sources_count: int, candidates: int) -> tuple[dict, float]:

@@ -796,7 +796,7 @@ async def api_summarize_pdf(
 @app.post('/api/chat')
 async def api_chat(request: ChatRequest):
     """Chat de investigacion con streaming SSE (OpenAlex + DeepSeek)."""
-    access = request.access if request.access in ('all', 'free', 'oneclick') else 'all'
+    access = request.access if request.access in ('all', 'free', 'oneclick', 'paid') else 'all'
     depth = 'deep' if str(request.depth).lower() == 'deep' else 'quick'
     question = (request.question or '').strip()
     if not question:

@@ -680,6 +680,55 @@
   display: none;
 }
 
+/* Aviso de conversión al plan Pro */
+.chat-upsell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(138, 171, 144, 0.12), rgba(138, 171, 144, 0.04));
+  border: 1px solid rgba(138, 171, 144, 0.28);
+  color: var(--txt-2);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.chat-upsell:hover,
+.chat-upsell:active {
+  border-color: rgba(138, 171, 144, 0.5);
+  background: linear-gradient(120deg, rgba(138, 171, 144, 0.18), rgba(138, 171, 144, 0.06));
+}
+
+.chat-upsell i {
+  font-size: 14px;
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.chat-upsell strong {
+  color: var(--txt);
+  font-weight: 600;
+}
+
+.chat-upsell-cta {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(138, 171, 144, 0.16);
+  border: 1px solid rgba(138, 171, 144, 0.3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
 .chat-sources-head {
   display: flex;
   align-items: center;

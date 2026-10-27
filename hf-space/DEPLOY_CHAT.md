@@ -171,6 +171,27 @@ brechas en vez de rellenarlas, y registra en el log `[chat-citas]` si quedaron
 citas fuera de rango o fuentes sin usar. Si el modelo agota `CHAT_MAX_OUTPUT_TOKENS`,
 se pide una única continuación acotada en lugar de entregar el texto cortado.
 
+### Opciones del chat (menú de la barra de escritura)
+
+| Grupo | Opciones | Efecto |
+|---|---|---|
+| Extensión | **Rápida** (gratis) | Hasta `CHAT_MAX_SOURCES` fuentes (12), 280-380 palabras, ~$0.001 |
+| Extensión | **Profunda** (plan pago, `data-locked`) | Hasta `CHAT_DEEP_MAX_SOURCES` (22) fuentes con relevancia ≥ 0.18, 750-1000 palabras, secciones de mecanismos y tabla comparativa, ~$0.002 |
+| Tipo de paper | Todos / Gratis / 1 clic / Pago | Filtra por `is_oa` y verifica el PDF real; "Gratis" incluye los de 1 clic |
+
+El cuerpo del `POST /api/chat` acepta `{"depth": "quick" | "deep"}` además de
+`access`. Mientras el plan pago no exista, el frontend mantiene "Profunda"
+bloqueada (solo muestra un aviso) y, cuando la respuesta rápida se queda corta
+de fuentes, agrega debajo del bloque un botón de conversión:
+**"Usaste 12 de 22 fuentes relevantes · Plan Pro"**. Ese número
+(`relevant`) lo calcula el servidor contando lo que entraría en una corrida
+profunda sobre la misma búsqueda; cuando se habilite la compra, el botón solo
+tiene que apuntar al checkout.
+
+El evento `sources` incluye `relevant` y `depth`, y el endpoint acepta también
+la caché de búsqueda (misma pregunta dentro de `CHAT_SEARCH_CACHE_TTL`), que
+conserva el conteo para que el aviso no desaparezca al repetir la pregunta.
+
 ## Endpoints auxiliares (costo cero o mínimo)
 
 | Endpoint | Qué hace |
