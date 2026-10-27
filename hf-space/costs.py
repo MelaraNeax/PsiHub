@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import quote
@@ -91,7 +92,11 @@ def _access_token() -> str:
 def _object_name(record: dict) -> str:
     stamp = record.get('timestamp') or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     safe_stamp = stamp.replace(':', '').replace('-', '')
-    return f"{COST_PREFIX}/{safe_stamp}-{record.get('doc_id', '')[:16]}.json"
+    kind = str(record.get('kind') or 'event').replace('/', '-')[:20]
+    # Antes el nombre podia chocar cuando dos eventos caian en el mismo segundo
+    # (por ejemplo el router y la respuesta del chat): GCS sobrescribia uno.
+    unique = uuid.uuid4().hex[:10]
+    return f"{COST_PREFIX}/{safe_stamp}-{kind}-{unique}.json"
 
 
 def _gcs_write(record: dict) -> None:
@@ -126,6 +131,67 @@ def record_cost(record: dict) -> None:
         _local_write(record)
     except Exception:
         pass
+
+
+def log_usage(
+    kind: str,
+    usage: dict,
+    *,
+    model: str = '',
+    elapsed_sec: Optional[float] = None,
+    title: str = '',
+    doc_id: str = '',
+    source: str = '',
+    **extra,
+) -> dict:
+    """Registra el uso de un modelo y emite una linea JSON a Cloud Logging.
+
+    Cloud Run recoge stdout; una linea JSON con `event: llm_usage` queda como
+    entrada estructurada en los registros y se puede filtrar por `kind`
+    (translation, summary, chat, planner) sin parsear texto libre.
+
+    Devuelve el registro completo (incluye `cost_usd` y los tres tramos de
+    tokens: entrada, cache y salida).
+    """
+    cost = estimate_cost(usage)
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    record: dict = {
+        'doc_id': doc_id or f'{kind}-{int(time.time() * 1000)}',
+        'kind': kind,
+        'timestamp': stamp,
+        'title': str(title or '')[:160],
+        'pages': 0,
+        'model': model,
+        'source': source or kind,
+        'elapsed_sec': round(float(elapsed_sec), 2) if elapsed_sec is not None else None,
+        **cost,
+    }
+    for key, value in extra.items():
+        if value is not None:
+            record[key] = value
+    record_cost(record)
+
+    payload = {
+        'severity': 'INFO',
+        'event': 'llm_usage',
+        'kind': kind,
+        'model': model,
+        'title': record['title'][:90],
+        'elapsed_sec': record['elapsed_sec'],
+        'prompt_tokens': record['prompt_tokens'],
+        'cache_hit_tokens': record['cache_hit_tokens'],
+        'completion_tokens': record['completion_tokens'],
+        'total_tokens': record['total_tokens'],
+        'cost_usd': record['cost_usd'],
+    }
+    for key, value in extra.items():
+        if isinstance(value, (str, int, float, bool)):
+            payload[key] = value[:120] if isinstance(value, str) else value
+    try:
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+    except Exception:
+        pass
+    return record
 
 
 def _gcs_list(limit: int) -> list[dict]:

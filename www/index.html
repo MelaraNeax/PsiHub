@@ -15,13 +15,18 @@
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
 
+  <!-- Login opcional con Supabase/Google: completar para activar el OAuth real.
+       Sin estos datos, la app usa la cuenta local de siempre. -->
+  <meta name="psyhub-supabase-url" content="">
+  <meta name="psyhub-supabase-anon" content="">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
     rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web" defer></script>
-  <link rel="stylesheet" href="style.css?v=40">
-  <link rel="stylesheet" href="style-chat.css?v=3">
+  <link rel="stylesheet" href="style.css?v=43">
+  <link rel="stylesheet" href="style-chat.css?v=5">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
 </head>
 
@@ -46,8 +51,13 @@
 
     <header class="home-header">
       <div class="home-header-top">
-        <div class="brand-block">
-          <h1 class="app-title app-logo" id="home-app-title">PsiHub</h1>
+        <div class="home-header-left">
+          <button class="app-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
+            <i class="ph-bold ph-list"></i>
+          </button>
+          <div class="brand-block">
+            <h1 class="app-title app-logo" id="home-app-title">PsiHub</h1>
+          </div>
         </div>
 
         <div class="search-inline-wrapper home-search-bar" id="search-inline-wrapper" role="search">
@@ -101,6 +111,10 @@
   <div class="page hidden" id="page-explore">
     <!-- Nebula / Ambient Glow dinámico con el color de la historia -->
     <div class="results-bg-glow explore-bg-glow" id="explore-bg-glow"></div>
+
+    <button class="app-menu-btn explore-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
+      <i class="ph-bold ph-list"></i>
+    </button>
 
     <div class="explore-story-container" id="explore-story-container">
 
@@ -180,7 +194,12 @@
 
     <header class="home-header">
       <div class="home-header-top">
-        <h1 class="app-title">Perfil</h1>
+        <div class="home-header-left">
+          <button class="app-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
+            <i class="ph-bold ph-list"></i>
+          </button>
+          <h1 class="app-title">Perfil</h1>
+        </div>
       </div>
     </header>
 
@@ -290,8 +309,8 @@
       <!-- Métricas rápidas (Stats) -->
       <!-- Se quitó el contador de guardados: la lista ya comunica el contenido -->
 
-      <!-- Artículos guardados (movidos desde Biblioteca) -->
-      <div class="profile-card library-action-card" id="library-saved-card">
+      <!-- Los guardados viven en Biblioteca, organizados en carpetas -->
+      <div class="profile-card library-action-card" id="library-saved-card" hidden>
         <div class="library-card-header" style="display: flex; align-items: center; gap: 14px; cursor: pointer;"
           id="library-saved-header">
           <div class="google-badge-icon"
@@ -331,6 +350,54 @@
   </div>
 
   <!-- ══════════════════════════════════════
+       PRECIOS (vacío por ahora)
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-pricing">
+    <div class="results-bg-glow profile-bg-glow"></div>
+    <header class="home-header">
+      <div class="home-header-top">
+        <div class="home-header-left">
+          <button class="app-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
+            <i class="ph-bold ph-list"></i>
+          </button>
+          <h1 class="app-title">Precios</h1>
+        </div>
+      </div>
+    </header>
+    <div class="page-scroll profile-scroll">
+      <div class="placeholder-card">
+        <div class="empty-icon-wrap"><i class="ph-bold ph-tag"></i></div>
+        <p class="empty-title">Planes en preparación</p>
+        <p class="empty-subtitle">Muy pronto vas a poder ver acá los planes Básico y Pro de PsiHub.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       CONFIGURACIÓN (vacío por ahora)
+  ══════════════════════════════════════ -->
+  <div class="page hidden" id="page-settings">
+    <div class="results-bg-glow profile-bg-glow"></div>
+    <header class="home-header">
+      <div class="home-header-top">
+        <div class="home-header-left">
+          <button class="app-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
+            <i class="ph-bold ph-list"></i>
+          </button>
+          <h1 class="app-title">Configuración</h1>
+        </div>
+      </div>
+    </header>
+    <div class="page-scroll profile-scroll">
+      <div class="placeholder-card">
+        <div class="empty-icon-wrap"><i class="ph-bold ph-gear-six"></i></div>
+        <p class="empty-title">Configuración</p>
+        <p class="empty-subtitle">Idioma, apariencia y preferencias de lectura van a vivir acá.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
        BIBLIOTECA
   ══════════════════════════════════════ -->
   <div class="page hidden" id="page-library">
@@ -338,13 +405,86 @@
 
     <header class="home-header">
       <div class="home-header-top">
-        <div class="brand-block">
-          <h1 class="app-title">Biblioteca</h1>
+        <div class="home-header-left">
+          <button class="app-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
+            <i class="ph-bold ph-list"></i>
+          </button>
+          <div class="brand-block">
+            <h1 class="app-title">Biblioteca</h1>
+          </div>
         </div>
       </div>
     </header>
 
     <div class="page-scroll profile-scroll library-scroll">
+
+      <!-- Guardados por carpeta -->
+      <section class="library-folders-card" id="library-folders-card">
+        <div class="folder-bar-head">
+          <h2 class="section-eyebrow">Guardados</h2>
+          <button class="folder-new-btn" id="btn-new-folder" type="button">
+            <i class="ph-bold ph-plus"></i> Nueva carpeta
+          </button>
+        </div>
+
+        <!-- Vista 1: rectángulos de carpetas (estilo Instagram) -->
+        <div class="folder-grid-view" id="folder-grid-view">
+          <div class="folder-grid" id="folder-grid"></div>
+
+          <form class="folder-new-form" id="folder-new-form" hidden>
+            <input class="folder-name-input" id="folder-name-input" type="text" maxlength="60"
+              placeholder="Nombre de la carpeta (ej. Tesis)" autocomplete="off" aria-label="Nombre de la carpeta">
+            <button class="folder-form-btn is-primary" type="submit" aria-label="Crear carpeta">
+              <i class="ph-bold ph-check"></i>
+            </button>
+            <button class="folder-form-btn" type="button" id="btn-cancel-folder" aria-label="Cancelar">
+              <i class="ph-bold ph-x"></i>
+            </button>
+          </form>
+        </div>
+
+        <!-- Vista 2: papers dentro de la carpeta elegida -->
+        <div class="folder-detail-view" id="folder-detail-view" hidden>
+          <div class="folder-detail-bar">
+            <button class="folder-back-btn" id="btn-folder-back" type="button">
+              <i class="ph-bold ph-caret-left"></i><span>Todas las carpetas</span>
+            </button>
+            <div class="folder-toolbar-actions">
+              <button class="folder-tool-btn" id="btn-rename-folder" type="button" title="Renombrar carpeta"
+                aria-label="Renombrar carpeta">
+                <i class="ph-bold ph-pencil-simple"></i>
+              </button>
+              <button class="folder-tool-btn is-danger" id="btn-delete-folder" type="button"
+                title="Eliminar carpeta" aria-label="Eliminar carpeta">
+                <i class="ph-bold ph-trash"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="folder-detail-title-row">
+            <h3 class="folder-current-name" id="folder-current-name">Guardados</h3>
+            <span class="folder-current-count" id="folder-current-count">0 papers</span>
+          </div>
+
+          <form class="folder-rename-form" id="folder-rename-form" hidden>
+            <input class="folder-name-input" id="folder-rename-input" type="text" maxlength="60"
+              aria-label="Nuevo nombre de la carpeta">
+            <button class="folder-form-btn is-primary" type="submit" aria-label="Guardar nombre">
+              <i class="ph-bold ph-check"></i>
+            </button>
+            <button class="folder-form-btn" type="button" id="btn-cancel-rename" aria-label="Cancelar">
+              <i class="ph-bold ph-x"></i>
+            </button>
+          </form>
+
+          <ul class="saved-list paper-list folder-saved-list" id="folder-saved-list"></ul>
+          <div class="profile-empty-saved folder-empty" id="folder-empty" hidden>
+            <div class="empty-icon-wrap"><i class="ph-bold ph-bookmark-simple"></i></div>
+            <p class="empty-title" style="font-size: 14px;">Carpeta vacía</p>
+            <p class="empty-subtitle">Guardá papers desde cualquier sección y elegí esta carpeta con “Cambiar”.</p>
+          </div>
+        </div>
+      </section>
 
       <!-- Módulo principal: Traducir y convertir -->
       <div class="library-hero-card" id="library-reader-card">
@@ -400,13 +540,18 @@
     <div class="results-bg-glow chat-bg-glow"></div>
 
     <header class="chat-topbar">
-      <button class="chat-icon-btn" id="btn-chat-history" aria-label="Historial" title="Historial de chats">
-        <i class="ph-bold ph-clock-counter-clockwise"></i>
+      <button class="chat-icon-btn app-menu-trigger" type="button" aria-label="Abrir menú" title="Menú">
+        <i class="ph-bold ph-list"></i>
       </button>
-      <button class="chat-icon-btn chat-icon-btn-accent" id="btn-chat-new" aria-label="Nuevo chat"
-        title="Nuevo chat">
-        <i class="ph-bold ph-plus"></i>
-      </button>
+      <div class="chat-topbar-actions">
+        <button class="chat-icon-btn" id="btn-chat-history" aria-label="Historial" title="Historial de chats">
+          <i class="ph-bold ph-clock-counter-clockwise"></i>
+        </button>
+        <button class="chat-icon-btn chat-icon-btn-accent" id="btn-chat-new" aria-label="Nuevo chat"
+          title="Nuevo chat">
+          <i class="ph-bold ph-plus"></i>
+        </button>
+      </div>
     </header>
 
     <!-- Historial de conversaciones -->
@@ -435,52 +580,218 @@
     </div>
 
     <div class="chat-composer-wrap">
+      <div class="chat-attachments" id="chat-attachments" hidden></div>
+      <input type="file" id="chat-attach-file" accept=".pdf,image/png,image/jpeg,image/webp" multiple hidden>
       <form class="chat-composer" id="chat-form">
-        <textarea id="chat-input" rows="1" placeholder="Preguntá algo…"
-          autocomplete="off" enterkeyhint="send"></textarea>
-        <div class="chat-filter" id="chat-filter">
-          <button type="button" class="chat-filter-btn" id="btn-chat-filter" aria-haspopup="true"
-            aria-expanded="false" aria-controls="chat-access-seg" aria-label="Opciones de búsqueda"
-            title="Opciones de búsqueda">
-            <i class="ph-bold ph-sliders-horizontal" id="chat-filter-icon"></i>
+        <div class="chat-composer-main">
+          <textarea id="chat-input" rows="1" placeholder="Preguntá algo…"
+            autocomplete="off" enterkeyhint="send"></textarea>
+          <button type="submit" class="chat-send-btn" id="btn-chat-send" aria-label="Enviar">
+            <i class="ph-bold ph-arrow-up"></i>
           </button>
-          <div class="chat-filter-menu" id="chat-access-seg" role="group" aria-label="Opciones de búsqueda" hidden>
-            <div class="chat-menu-group">
-              <span class="chat-menu-label">Extensión</span>
-              <button type="button" class="chat-access-option" data-depth="quick" aria-pressed="true">
-                <i class="ph-bold ph-lightning"></i><span>Rápida</span>
-                <i class="ph-bold ph-check chat-check"></i>
+        </div>
+        <div class="chat-composer-tools">
+          <div class="chat-attach-wrap">
+            <button type="button" class="chat-tool-icon" id="btn-chat-attach" aria-pressed="false"
+              aria-haspopup="true" aria-expanded="false" aria-controls="chat-attach-menu"
+              aria-label="Adjuntar material" title="Adjuntar PDF, imagen o paper guardado">
+              <i class="ph-bold ph-paperclip"></i>
+            </button>
+            <div class="chat-attach-menu" id="chat-attach-menu" hidden>
+              <button type="button" class="chat-attach-option" data-attach="file">
+                <i class="ph-bold ph-file-pdf"></i><span>PDF o imagen</span>
               </button>
-              <button type="button" class="chat-access-option" data-depth="deep" aria-pressed="false">
-                <i class="ph-bold ph-stack"></i><span>Profunda</span>
-                <span class="chat-lock-tag is-pro">PRO</span>
-              </button>
-            </div>
-            <div class="chat-menu-group">
-              <span class="chat-menu-label">Tipo de paper</span>
-              <button type="button" class="chat-access-option" data-access="all" aria-pressed="true">
-                <i class="ph-bold ph-books"></i><span>Todos</span><i class="ph-bold ph-check chat-check"></i>
-              </button>
-              <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
-                <i class="ph-bold ph-lock-open"></i><span>Gratis</span>
-                <i class="ph-bold ph-check chat-check"></i>
-              </button>
-              <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
-                <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span>
-                <i class="ph-bold ph-check chat-check"></i>
-              </button>
-              <button type="button" class="chat-access-option" data-access="paid" aria-pressed="false">
-                <i class="ph-bold ph-lock"></i><span>Pago</span>
-                <i class="ph-bold ph-check chat-check"></i>
+              <button type="button" class="chat-attach-option" data-attach="saved">
+                <i class="ph-bold ph-bookmark-simple"></i><span>Paper guardado</span>
               </button>
             </div>
           </div>
+          <div class="chat-size-wrap">
+            <button type="button" class="chat-tool-btn chat-size-btn" id="btn-chat-size"
+              aria-haspopup="true" aria-expanded="false" aria-controls="chat-size-menu"
+              aria-label="Extensión de la respuesta" title="Extensión de la respuesta">
+              <i class="ph-bold ph-text-align-left"></i><span>Extensión</span>
+            </button>
+            <div class="chat-size-menu" id="chat-size-menu" hidden>
+              <div class="chat-size-menu-head">
+                <span>Extensión</span>
+                <span class="chat-size-value" id="chat-size-value">Mediano</span>
+              </div>
+              <input type="range" class="chat-size-range" id="chat-size-range" min="0" max="2" step="1"
+                value="1" aria-label="Extensión de la respuesta">
+              <div class="chat-size-ticks">
+                <button type="button" data-size-step="0">Poco</button>
+                <button type="button" data-size-step="1" class="is-active">Mediano</button>
+                <button type="button" data-size-step="2">Largo</button>
+              </div>
+              <p class="chat-size-hint" id="chat-size-hint">Respuesta media · hasta 6 fuentes</p>
+            </div>
+          </div>
+
+          <button type="button" class="chat-tool-icon" id="btn-chat-paper-type" data-paper="all"
+            aria-pressed="false" aria-label="Tipo de paper" title="Tipo de paper: todos">
+            <i class="ph-bold ph-article" id="chat-paper-icon"></i>
+          </button>
+
+          <button type="button" class="chat-tool-icon" id="btn-chat-think" aria-pressed="false"
+            aria-label="Pensar más" title="Pensar más: respuesta más profunda (más lenta)">
+            <i class="ph-bold ph-brain"></i>
+          </button>
+
+          <div class="chat-filter" id="chat-filter">
+            <button type="button" class="chat-filter-btn" id="btn-chat-filter" aria-haspopup="true"
+              aria-expanded="false" aria-controls="chat-access-seg" aria-label="Filtros de búsqueda"
+              title="Filtros de búsqueda">
+              <i class="ph-bold ph-sliders-horizontal" id="chat-filter-icon"></i>
+            </button>
+            <div class="chat-filter-menu" id="chat-access-seg" role="group" aria-label="Filtros de búsqueda"
+              hidden>
+              <!-- Nivel 1: categorías -->
+              <div class="chat-filter-root" data-filter-root>
+                <div class="chat-filter-root-head">
+                  <span>Filtros</span>
+                  <span class="chat-filter-count" id="chat-filter-count" hidden>0</span>
+                </div>
+
+                <button type="button" class="chat-filter-category" data-filter-open="access">
+                  <i class="ph-bold ph-books"></i>
+                  <span class="chat-filter-category-copy">
+                    <span class="chat-filter-category-name">Acceso</span>
+                    <span class="chat-filter-category-value" data-filter-value="access">Todos</span>
+                  </span>
+                  <i class="ph-bold ph-caret-right chat-filter-chevron"></i>
+                </button>
+
+                <button type="button" class="chat-filter-category" data-filter-open="period">
+                  <i class="ph-bold ph-calendar-blank"></i>
+                  <span class="chat-filter-category-copy">
+                    <span class="chat-filter-category-name">Periodo</span>
+                    <span class="chat-filter-category-value" data-filter-value="period">Cualquier año</span>
+                  </span>
+                  <i class="ph-bold ph-caret-right chat-filter-chevron"></i>
+                </button>
+
+                <button type="button" class="chat-filter-category" data-filter-open="quartile">
+                  <i class="ph-bold ph-trophy"></i>
+                  <span class="chat-filter-category-copy">
+                    <span class="chat-filter-category-name">Cuartil de la revista</span>
+                    <span class="chat-filter-category-value" data-filter-value="quartile">Todos</span>
+                  </span>
+                  <i class="ph-bold ph-caret-right chat-filter-chevron"></i>
+                </button>
+
+                <button type="button" class="chat-filter-category" data-filter-open="study">
+                  <i class="ph-bold ph-flask"></i>
+                  <span class="chat-filter-category-copy">
+                    <span class="chat-filter-category-name">Tipo de estudio</span>
+                    <span class="chat-filter-category-value" data-filter-value="study">Todos</span>
+                  </span>
+                  <i class="ph-bold ph-caret-right chat-filter-chevron"></i>
+                </button>
+
+                <button type="button" class="chat-filters-clear" id="btn-chat-filters-clear">
+                  <i class="ph-bold ph-arrow-counter-clockwise"></i> Limpiar filtros
+                </button>
+              </div>
+
+              <!-- Nivel 2: opciones de cada categoría -->
+              <div class="chat-filter-sub" data-filter-panel="access" hidden>
+                <button type="button" class="chat-filter-back" data-filter-back>
+                  <i class="ph-bold ph-caret-left"></i><span>Acceso</span>
+                </button>
+                <button type="button" class="chat-access-option" data-access="all" aria-pressed="true">
+                  <i class="ph-bold ph-books"></i><span>Todos</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-access="free" aria-pressed="false">
+                  <i class="ph-bold ph-lock-open"></i><span>Gratis</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-access="oneclick" aria-pressed="false">
+                  <i class="ph-bold ph-hand-pointing"></i><span>1 clic</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-access="paid" aria-pressed="false">
+                  <i class="ph-bold ph-lock"></i><span>Pago</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+              </div>
+
+              <div class="chat-filter-sub" data-filter-panel="period" hidden>
+                <button type="button" class="chat-filter-back" data-filter-back>
+                  <i class="ph-bold ph-caret-left"></i><span>Periodo</span>
+                </button>
+                <div class="chat-year-row">
+                  <input type="number" class="chat-year-input" id="chat-year-from" inputmode="numeric"
+                    min="1900" max="2100" placeholder="Desde" aria-label="Año desde">
+                  <span class="chat-year-dash">–</span>
+                  <input type="number" class="chat-year-input" id="chat-year-to" inputmode="numeric"
+                    min="1900" max="2100" placeholder="Hasta" aria-label="Año hasta">
+                </div>
+                <p class="chat-menu-note">Dejá un campo vacío para no limitar ese extremo.</p>
+              </div>
+
+              <div class="chat-filter-sub" data-filter-panel="quartile" hidden>
+                <button type="button" class="chat-filter-back" data-filter-back>
+                  <i class="ph-bold ph-caret-left"></i><span>Cuartil de la revista</span>
+                </button>
+                <button type="button" class="chat-access-option" data-quartile="all" aria-pressed="true">
+                  <i class="ph-bold ph-asterisk"></i><span>Todos</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-quartile="q1" aria-pressed="false">
+                  <i class="ph-bold ph-trophy"></i><span>Q1 (mayor impacto)</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-quartile="q2" aria-pressed="false">
+                  <i class="ph-bold ph-medal"></i><span>Q2</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-quartile="q3" aria-pressed="false">
+                  <i class="ph-bold ph-medal"></i><span>Q3</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-quartile="q4" aria-pressed="false">
+                  <i class="ph-bold ph-medal"></i><span>Q4</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <p class="chat-menu-note">Estimado por la posición de la revista en PsiHub; no es el SJR oficial.</p>
+              </div>
+
+              <div class="chat-filter-sub" data-filter-panel="study" hidden>
+                <button type="button" class="chat-filter-back" data-filter-back>
+                  <i class="ph-bold ph-caret-left"></i><span>Tipo de estudio</span>
+                </button>
+                <button type="button" class="chat-access-option" data-study="all" aria-pressed="true">
+                  <i class="ph-bold ph-asterisk"></i><span>Todos</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-study="meta" aria-pressed="false">
+                  <i class="ph-bold ph-chart-bar"></i><span>Meta-análisis</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-study="review" aria-pressed="false">
+                  <i class="ph-bold ph-stack"></i><span>Revisión</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-study="rct" aria-pressed="false">
+                  <i class="ph-bold ph-flask"></i><span>Ensayo (ECA)</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-study="observational" aria-pressed="false">
+                  <i class="ph-bold ph-binoculars"></i><span>Observacional</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+                <button type="button" class="chat-access-option" data-study="qualitative" aria-pressed="false">
+                  <i class="ph-bold ph-chat-teardrop-text"></i><span>Cualitativo</span>
+                  <i class="ph-bold ph-check chat-check"></i>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        <button type="submit" class="chat-send-btn" id="btn-chat-send" aria-label="Enviar">
-          <i class="ph-bold ph-arrow-up"></i>
-        </button>
       </form>
-      <p class="chat-disclaimer">Basado en abstracts de OpenAlex. Puede contener errores.</p>
+      <p class="chat-disclaimer">Basado en abstracts de Europe PMC. Puede contener errores.</p>
     </div>
   </div>
 
@@ -598,30 +909,50 @@
   </div>
 
   <!-- ══════════════════════════════════════
-       NAV INFERIOR
+       MENÚ LATERAL (drawer)
   ══════════════════════════════════════ -->
-  <nav class="bottom-nav" id="bottom-nav">
-    <button class="nav-btn active" data-page="home" id="nav-home">
-      <i class="ph-bold ph-house-simple"></i>
-      <span class="nav-label">Inicio</span>
-    </button>
-    <button class="nav-btn" data-page="explore" id="nav-explore">
-      <i class="ph-bold ph-compass"></i>
-      <span class="nav-label">Explorar</span>
-    </button>
-    <button class="nav-btn" data-page="library" id="nav-library">
-      <i class="ph-bold ph-books"></i>
-      <span class="nav-label">Biblioteca</span>
-    </button>
-    <button class="nav-btn" data-page="chat" id="nav-chat">
-      <i class="ph-bold ph-chat-circle-dots"></i>
-      <span class="nav-label">Chat</span>
-    </button>
-    <button class="nav-btn" data-page="profile" id="nav-profile">
-      <i class="ph-bold ph-user-circle"></i>
-      <span class="nav-label">Perfil</span>
-    </button>
-  </nav>
+  <div class="drawer-scrim hidden" id="drawer-scrim"></div>
+  <aside class="app-drawer" id="app-drawer" aria-label="Menú principal" aria-hidden="true">
+    <div class="drawer-head">
+      <div class="drawer-brand">PsiHub</div>
+      <button class="drawer-close" id="btn-drawer-close" type="button" aria-label="Cerrar menú">
+        <i class="ph-bold ph-x"></i>
+      </button>
+    </div>
+    <div class="drawer-scroll">
+      <nav class="drawer-nav" aria-label="Navegación principal">
+        <button class="drawer-item" type="button" data-page="home">
+          <i class="ph-bold ph-magnifying-glass"></i><span>Búsqueda</span>
+        </button>
+        <button class="drawer-item" type="button" data-page="explore">
+          <i class="ph-bold ph-compass"></i><span>Explorar</span>
+        </button>
+        <button class="drawer-item" type="button" data-page="library">
+          <i class="ph-bold ph-books"></i><span>Mis archivos</span>
+        </button>
+        <button class="drawer-item" type="button" data-page="chat">
+          <i class="ph-bold ph-chat-circle-dots"></i><span>Investigación (IA)</span>
+        </button>
+        <button class="drawer-item" type="button" data-page="pricing">
+          <i class="ph-bold ph-tag"></i><span>Precios</span>
+          <span class="drawer-badge">Pronto</span>
+        </button>
+      </nav>
+      <div class="drawer-divider"></div>
+      <nav class="drawer-nav" aria-label="Cuenta y ajustes">
+        <button class="drawer-item" type="button" data-page="settings">
+          <i class="ph-bold ph-gear-six"></i><span>Configuración</span>
+        </button>
+        <button class="drawer-item" type="button" data-page="profile">
+          <i class="ph-bold ph-user-circle"></i><span>Cuenta</span>
+        </button>
+      </nav>
+    </div>
+    <div class="drawer-foot">
+      <span class="drawer-foot-dot"></span>
+      <span id="drawer-account-label">Modo local</span>
+    </div>
+  </aside>
 
   <!-- Modal Google Sign-In -->
   <div class="modal-overlay hidden" id="google-modal-overlay">
@@ -663,6 +994,44 @@
           Vincular cuenta
         </button>
       </form>
+    </div>
+  </div>
+
+  <!-- Selector de carpeta al guardar -->
+  <div class="modal-overlay hidden" id="folder-picker-overlay" style="z-index: 1700;">
+    <div class="modal-sheet folder-picker-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header" style="justify-content: space-between; align-items: center;">
+        <span class="saved-picker-title">Guardar en</span>
+        <button class="btn-modal-close" id="btn-close-folder-picker" aria-label="Cerrar">
+          <i class="ph-bold ph-x"></i>
+        </button>
+      </div>
+      <div class="folder-picker-list" id="folder-picker-list"></div>
+      <form class="folder-picker-new" id="folder-picker-new-form">
+        <input class="folder-name-input" id="folder-picker-new-input" type="text" maxlength="60"
+          placeholder="Nueva carpeta…" autocomplete="off" aria-label="Nueva carpeta">
+        <button class="folder-form-btn is-primary" type="submit" aria-label="Crear carpeta">
+          <i class="ph-bold ph-plus"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Selector de papers guardados para el chat -->
+  <div class="modal-overlay hidden" id="saved-picker-overlay" style="z-index: 1600;">
+    <div class="modal-sheet saved-picker-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header" style="justify-content: space-between; align-items: center;">
+        <span class="saved-picker-title">Papers guardados</span>
+        <button class="btn-modal-close" id="btn-close-saved-picker" aria-label="Cerrar">
+          <i class="ph-bold ph-x"></i>
+        </button>
+      </div>
+      <div class="saved-picker-list" id="saved-picker-list"></div>
+      <p class="saved-picker-empty" id="saved-picker-empty" hidden>
+        Todavía no guardaste papers. Guardá uno desde los resultados y va a aparecer acá.
+      </p>
     </div>
   </div>
 
@@ -800,7 +1169,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=20261028"></script>
+  <script type="module" src="app.js?v=20261030"></script>
 </body>
 
 </html>

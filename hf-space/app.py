@@ -7,6 +7,7 @@ traducido al espanol -> Markdown y PDF generados por Python.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import html as html_lib
 import io
@@ -21,21 +22,23 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+import pymupdf
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
-import gradio as gr
 
 import storage
 import enrich
 import europepmc
+import exports as export_service
 import pmc_translate
+import auth_supabase
 import summarize as summarize_service
 from costs import (PRICE_INPUT, PRICE_OUTPUT, admin_token_matches, estimate_cost,
-                   list_costs, record_cost, summarize)
+                   list_costs, log_usage, summarize)
 from exporters import document_to_markdown, document_to_pdf, markdown_to_pdf
 from vision_extract import extract_document, PAGE_PROMPT, VISION_DPI
 import chat as chat_service
@@ -314,19 +317,16 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None,
 
     usage = stats.get('usage', {}) or {}
     cost = estimate_cost(usage)
-    record_cost({
-        'doc_id': doc_id,
-        'kind': 'translation',
-        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'title': meta.get('title_es') or meta.get('title') or '',
-        'pages': pages,
-        'model': selected_model,
-        'source': source,
-        'elapsed_sec': stats.get('elapsed_sec'),
-        **cost,
-    })
-    # Deja el costo tambien en Cloud Logging (ademas del ledger en GCS).
-    log(f"[Cost] {doc_id[:12]}… {pages} pag · {cost['total_tokens']} tokens · ${cost['cost_usd']:.4f} USD")
+    log_usage(
+        'translation', usage,
+        model=selected_model,
+        elapsed_sec=stats.get('elapsed_sec'),
+        title=meta.get('title_es') or meta.get('title') or '',
+        doc_id=doc_id,
+        source=source,
+        pages=pages,
+        pipeline='vision',
+    )
     has_body = any(block.get('type') == 'paragraph' for block in document.get('blocks', []))
     quality = 95 if meta.get('title') and has_body else 80
 
@@ -482,19 +482,9 @@ async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pm
 
     meta = document.get('document', {})
     usage = (stats or {}).get('usage') or {}
+    # pmc_translate ya registra el uso (incluye cache y tiempo); aca solo se
+    # reutiliza el costo para la respuesta del lector.
     cost = estimate_cost(usage)
-    record_cost({
-        'doc_id': doc_id,
-        'kind': 'translation',
-        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'title': meta.get('title_es') or meta.get('title') or '',
-        'pages': 0,
-        'model': selected_model,
-        'source': source,
-        'elapsed_sec': (stats or {}).get('elapsed_sec'),
-        **cost,
-    })
-    log(f"[Cost] {doc_id[:12]}… PMC · {cost['total_tokens']} tokens · ${cost['cost_usd']:.4f} USD")
 
     blocks = document.get('blocks') or []
     document_metadata = {
@@ -700,10 +690,24 @@ class ChatRequest(BaseModel):
     question: str
     query: Optional[str] = None
     access: str = 'all'
-    # 'quick' (hasta 12 fuentes) o 'deep' (20+, plan de pago).
+    # 'quick' | 'deep' (compatibilidad); el tamaño real viaja en `size`.
     depth: str = 'quick'
+    # Extension relativa al plan: small | medium | large.
+    size: str = 'medium'
+    # 'pensar mas': activa el razonamiento del modelo, no la extension.
+    think: bool = False
+    # Plan del usuario (basic | pro): cambia los topes de la extension.
+    plan: str = 'basic'
+    filters: dict = {}
     history: list[dict] = []
     client_id: str = ''
+    # PDFs, imagenes o papers guardados que el usuario adjunta a la consulta.
+    attachments: list[dict] = []
+
+
+class ExportRequest(BaseModel):
+    format: str = 'ris'
+    papers: list[dict] = []
 
 
 class ChatPdfRequest(BaseModel):
@@ -928,10 +932,14 @@ async def api_search(
     europepmc.STATE.ok()
 
     # Los registros que solo viven en PMC no traen resumen en la busqueda; sin
-    # el, la tarjeta queda vacia. Se completa con el XML (que ademas queda
-    # cacheado para el lector y el chat).
+    # el, la tarjeta queda vacia. Se completa con el XML, pero con un techo de
+    # tiempo: antes el endpoint esperaba hasta 10 descargas y la primera pagina
+    # tardaba varios segundos. Lo que no llegue se resuelve al abrir la ficha.
     try:
-        await europepmc.fill_abstracts(works, limit=min(len(works), 10))
+        await asyncio.wait_for(
+            europepmc.fill_abstracts(works, limit=min(len(works), 8), concurrency=8),
+            timeout=2.5,
+        )
     except Exception as exc:  # noqa: BLE001 - el resumen es opcional
         log(f'[EPMC] abstracts: {type(exc).__name__}: {exc}')
 
@@ -970,6 +978,78 @@ async def api_work(key: str = Query(''), doi: str = Query('')):
         europepmc.STATE.fail(exc)
         raise HTTPException(status_code=502, detail='No se pudo contactar a Europe PMC.') from exc
     raise HTTPException(status_code=400, detail='Falta la clave o el DOI.')
+
+
+@app.get('/api/work-meta')
+async def api_work_meta(key: str = Query(''), doi: str = Query('')):
+    """Afiliaciones, financiamiento, licencia y datos editoriales del XML.
+
+    La busqueda de Europe PMC no trae estos campos: viven solo en el JATS del
+    texto completo. Si el paper no tiene XML abierto se responde 200 con
+    `available: false` para que la ficha muestre "no informado" sin romperse.
+    """
+    clean_key = (key or '').strip().lower()
+    clean_doi = (doi or '').strip()
+    pmcid = ''
+    try:
+        if clean_key.startswith('pmc:'):
+            pmcid = clean_key.split(':', 1)[1]
+        elif clean_key and ':' in clean_key:
+            works = await europepmc.fetch_by_ids([clean_key])
+            if works:
+                pmcid = str((works[0].get('epmc') or {}).get('pmcid') or '')
+        elif clean_doi:
+            work = await europepmc.lookup_doi(clean_doi)
+            if work:
+                pmcid = str((work.get('epmc') or {}).get('pmcid') or '')
+    except Exception as exc:  # noqa: BLE001 - la ficha cae a lo que ya tenia
+        log(f'[work-meta] resolucion fallida: {type(exc).__name__}: {exc}')
+
+    if not pmcid:
+        return JSONResponse(content={
+            'available': False,
+            'reason': 'Sin texto completo abierto en PMC: la fuente no publica afiliaciones ni financiamiento.',
+        })
+    try:
+        xml_text = await asyncio.wait_for(
+            europepmc.full_text_xml_cached(pmcid), timeout=9.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f'[work-meta] XML fallido {pmcid}: {type(exc).__name__}: {exc}')
+        xml_text = None
+    if not xml_text:
+        return JSONResponse(content={
+            'available': False,
+            'pmcid': pmcid,
+            'reason': 'No se pudo leer el XML del texto completo.',
+        })
+    extras = europepmc.xml_extras(xml_text)
+    extras['pmcid'] = pmcid
+    return JSONResponse(content=extras)
+
+
+@app.post('/api/export')
+async def api_export(request: ExportRequest):
+    """Exporta papers a RIS (Zotero/Mendeley/EndNote) o BibTeX."""
+    papers = [p for p in (request.papers or []) if isinstance(p, dict)][:500]
+    if not papers:
+        raise HTTPException(status_code=400, detail='No hay papers para exportar.')
+    fmt = str(request.format or 'ris').strip().lower()
+    if fmt in ('bib', 'bibtex'):
+        content = export_service.to_bibtex(papers)
+        media = 'application/x-bibtex'
+        filename = 'psihub.bib'
+    elif fmt == 'ris':
+        content = export_service.to_ris(papers)
+        media = 'application/x-research-info-systems'
+        filename = 'psihub.ris'
+    else:
+        raise HTTPException(status_code=400, detail='Formato no soportado.')
+    return Response(
+        content=content.encode('utf-8'),
+        media_type=f'{media}; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post('/api/check-pdfs')
@@ -1094,6 +1174,11 @@ async def api_chat(request: ChatRequest):
     """Chat de investigacion con streaming SSE (Europe PMC + DeepSeek)."""
     access = request.access if request.access in ('all', 'free', 'oneclick', 'paid') else 'all'
     depth = 'deep' if str(request.depth).lower() == 'deep' else 'quick'
+    size = str(request.size or 'medium').lower()
+    if size not in ('small', 'medium', 'large'):
+        size = 'medium'
+    plan = 'pro' if str(request.plan or '').lower() == 'pro' else 'basic'
+    filters = request.filters if isinstance(request.filters, dict) else {}
     question = (request.question or '').strip()
     if not question:
         raise HTTPException(status_code=400, detail='Falta la pregunta.')
@@ -1110,6 +1195,11 @@ async def api_chat(request: ChatRequest):
         log_fn=log,
         client_id=request.client_id,
         depth=depth,
+        size=size,
+        think=bool(request.think),
+        plan=plan,
+        filters=filters,
+        attachments=request.attachments,
     )
     return StreamingResponse(
         generator,
@@ -1120,6 +1210,133 @@ async def api_chat(request: ChatRequest):
             'Connection': 'keep-alive',
         },
     )
+
+
+ATTACH_MAX_BYTES = 25 * 1024 * 1024
+ATTACH_PDF_MAX_CHARS = 80000
+ATTACH_PDF_MAX_PAGES = 80
+
+
+def _pdf_text(data: bytes) -> tuple[str, int, bool]:
+    """Texto plano del PDF, sin OCR. Devuelve (texto, paginas, recortado)."""
+    with pymupdf.open(stream=data, filetype='pdf') as doc:
+        total = len(doc)
+        parts: list[str] = []
+        used = 0
+        for index in range(min(total, ATTACH_PDF_MAX_PAGES)):
+            text = doc[index].get_text('text').strip()
+            if not text:
+                continue
+            parts.append(text)
+            used += len(text)
+            if used >= ATTACH_PDF_MAX_CHARS:
+                break
+    joined = '\n\n'.join(parts).strip()
+    truncated = len(joined) > ATTACH_PDF_MAX_CHARS or total > ATTACH_PDF_MAX_PAGES
+    return joined[:ATTACH_PDF_MAX_CHARS], total, truncated
+
+
+async def _image_text(data: bytes, mime: str) -> str:
+    """Transcribe una imagen con el modelo de vision de DeepSeek."""
+    keys = CHAT_API_KEYS or DEEPSEEK_API_KEYS
+    if not keys:
+        raise HTTPException(status_code=503, detail='No hay API key para leer imagenes.')
+    prompt = (
+        'Transcribi literalmente todo el texto visible de esta imagen (en su idioma '
+        'original) y describi en espanol tablas, figuras y graficos relevantes. '
+        'No resumas el contenido textual ni inventes lo que no se lee. Si es una '
+        'pagina de un paper, conserva titulos, autores y secciones.'
+    )
+    payload = {
+        'model': chat_service.CHAT_MODEL,
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {'type': 'text', 'text': prompt},
+                {'type': 'image_url', 'image_url': {
+                    'url': f'data:{mime};base64,' + base64.b64encode(data).decode('ascii'),
+                }},
+            ],
+        }],
+        'temperature': 0.1,
+        'stream': False,
+        'thinking': {'type': 'disabled'},
+        'max_tokens': 2400,
+    }
+    started = time.time()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+        response = await client.post(
+            os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions'),
+            headers={'Authorization': f'Bearer {keys[0]}', 'Content-Type': 'application/json'},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail='El modelo no pudo leer la imagen.')
+    body = response.json()
+    text = ''
+    try:
+        text = str(body['choices'][0]['message']['content'] or '').strip()
+    except (KeyError, IndexError, TypeError):
+        text = ''
+    if not text:
+        raise HTTPException(status_code=422, detail='La imagen no devolvio texto legible.')
+    usage = body.get('usage') or {}
+    log_usage(
+        'attachment',
+        usage,
+        model=chat_service.CHAT_MODEL,
+        elapsed_sec=round(time.time() - started, 2),
+        title='Imagen adjunta al chat',
+        source='chat',
+        detail='image',
+    )
+    return text[:ATTACH_PDF_MAX_CHARS]
+
+
+@app.post('/api/chat/attach')
+async def api_chat_attach(file: UploadFile = File(...)):
+    """Extrae texto de un PDF o transcribe una imagen para usarla en el chat.
+
+    El archivo se procesa en memoria y no se guarda. El cliente recibe el texto
+    y lo reenvia dentro de `attachments` al pedir la respuesta.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail='El archivo esta vacio.')
+    if len(data) > ATTACH_MAX_BYTES:
+        raise HTTPException(status_code=413, detail='El archivo supera los 25 MB.')
+    name = (file.filename or 'adjunto').split('/')[-1][:120]
+    if data.startswith(b'%PDF'):
+        try:
+            text, pages, truncated = _pdf_text(data)
+        except Exception as exc:  # noqa: BLE001
+            log(f'[attach] PDF invalido: {type(exc).__name__}: {exc}')
+            raise HTTPException(status_code=422, detail='No se pudo leer el PDF.')
+        if len(text) < 120:
+            raise HTTPException(
+                status_code=422,
+                detail='El PDF no tiene texto seleccionable (parece escaneado). '
+                       'Subí capturas de las páginas como imágenes.',
+            )
+        return JSONResponse({
+            'ok': True,
+            'kind': 'pdf',
+            'name': name,
+            'text': text,
+            'pages': pages,
+            'truncated': truncated,
+        })
+    mime = str(file.content_type or '').lower()
+    if mime not in ('image/png', 'image/jpeg', 'image/webp'):
+        raise HTTPException(status_code=415, detail='Formato no soportado. Usá PDF, PNG, JPG o WebP.')
+    text = await _image_text(data, mime)
+    return JSONResponse({
+        'ok': True,
+        'kind': 'image',
+        'name': name,
+        'text': text,
+        'truncated': len(text) >= ATTACH_PDF_MAX_CHARS,
+    })
 
 
 @app.post('/api/chat/pdf')
@@ -1172,6 +1389,15 @@ async def api_translate_file(file: UploadFile = File(...), model: Optional[str] 
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get('/api/auth/me')
+async def api_auth_me(authorization: str = Header('')):
+    """Valida una sesion de Supabase. La app sigue funcionando sin cuenta."""
+    user = auth_supabase.user_from_authorization(authorization)
+    if not user:
+        raise HTTPException(status_code=401, detail='Sesion no valida.')
+    return JSONResponse(content={'user': user, 'supabase': True})
+
+
 @app.get('/health')
 async def health():
     return {
@@ -1192,6 +1418,8 @@ async def health():
         'europepmc_key': bool(europepmc.EPMC_API_KEY),
         'enrich': True,
         'summarize': bool(CHAT_API_KEYS),
+        'supabase_auth': auth_supabase.configured(),
+        'exports': ['ris', 'bibtex'],
     }
 
 
@@ -1316,137 +1544,6 @@ async def api_logs_stream():
 # ---------------------------------------------------------------------------
 # Interfaz Gradio (diagnostico)
 # ---------------------------------------------------------------------------
-
-def _info_markdown(result: dict) -> str:
-    meta = result.get('document_metadata', {}) or {}
-    stats = result.get('translation_stats', {}) or {}
-    layout = result.get('layout', {}) or {}
-    authors = ', '.join(meta.get('authors') or []) or '—'
-    return (
-        '### Documento\n\n'
-        f'**Titulo:** {meta.get("title") or "—"}\n\n'
-        f'**Autores:** {authors}\n\n'
-        f'**Revista:** {meta.get("journal") or "—"}\n\n'
-        f'**Anio:** {meta.get("year") or "—"}\n\n'
-        f'**DOI:** {meta.get("doi") or "—"}\n\n'
-        '### Pipeline\n\n'
-        f'**Motor:** DeepSeek Vision (`{result.get("model_used")}`)\n\n'
-        f'**Paginas:** {stats.get("pages", "—")}\n\n'
-        f'**Columnas:** {layout.get("columns", "—")}\n\n'
-        f'**Figuras:** {result.get("images_extracted", 0)}\n\n'
-        f'**Tiempo:** {stats.get("elapsed_sec", "—")} s\n\n'
-        f'**Uso:** {stats.get("usage", {})}'
-    )
-
-
-async def _gradio_process_url(url: str, progress=gr.Progress()):
-    if not url or not url.strip():
-        return ('Introduce una URL.', '', '', None)
-    try:
-        progress(0.05, desc='Descargando PDF...')
-        pdf_bytes = await download_pdf(url.strip())
-        def on_progress(done, total):
-            progress(0.1 + 0.85 * done / max(total, 1), desc=f'Procesando pagina {done}/{total}...')
-        result = await process_pdf(pdf_bytes, progress=on_progress, source='gradio-url')
-        progress(1.0, desc='Completado')
-        return (result['markdown'], _info_markdown(result), result['document_id'], result)
-    except Exception as exc:  # noqa: BLE001
-        return (f'Error: {exc}', '', None, None)
-
-
-async def _gradio_process_file(file, progress=gr.Progress()):
-    if file is None:
-        return ('Sube un PDF.', '', None, None)
-    try:
-        file_path = file.name if hasattr(file, 'name') else str(file)
-        pdf_bytes = Path(file_path).read_bytes()
-        def on_progress(done, total):
-            progress(0.1 + 0.85 * done / max(total, 1), desc=f'Procesando pagina {done}/{total}...')
-        result = await process_pdf(pdf_bytes, progress=on_progress, source='gradio-file')
-        progress(1.0, desc='Completado')
-        return (result['markdown'], _info_markdown(result), result['document_id'], result)
-    except Exception as exc:  # noqa: BLE001
-        return (f'Error: {exc}', '', None, None)
-
-
-def _download_updates(result: Optional[dict]):
-    if not result or not result.get('document_id'):
-        return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-    doc_id = str(result['document_id'])
-    paths = _artifact_paths(doc_id)
-    md_ok = paths['md'].exists()
-    pdf_ok = paths['pdf'].exists()
-    json_ok = paths['json'].exists()
-    return (
-        gr.update(value=str(paths['md']) if md_ok else None, visible=md_ok),
-        gr.update(value=str(paths['pdf']) if pdf_ok else None, visible=pdf_ok),
-        gr.update(value=str(paths['json']) if json_ok else None, visible=json_ok),
-    )
-
-
-with gr.Blocks(title='PsiHub Reader') as demo:
-    gr.Markdown('# PsiHub Reader v10\n\nPDF → vision (DeepSeek) → JSON estructurado → Markdown y PDF traducidos.')
-    with gr.Tab('URL'):
-        url_in = gr.Textbox(label='URL del PDF', placeholder='https://...')
-        btn_url = gr.Button('Traducir PDF', variant='primary')
-        with gr.Tabs():
-            with gr.Tab('Modo lectura'):
-                out_url = gr.Markdown(label='Traduccion')
-            with gr.Tab('Markdown'):
-                out_url_raw = gr.Code(label='Markdown', language='markdown')
-            with gr.Tab('JSON'):
-                out_url_json = gr.Code(label='JSON estructurado', language='json')
-            with gr.Tab('Detalles'):
-                out_url_details = gr.Markdown(label='Detalles')
-        info_url = gr.Markdown(label='Informacion')
-        with gr.Row():
-            dl_url_md = gr.DownloadButton('Markdown (.md)', variant='secondary', visible=False)
-            dl_url_pdf = gr.DownloadButton('PDF traducido (.pdf)', variant='secondary', visible=False)
-            dl_url_json = gr.DownloadButton('JSON (.json)', variant='secondary', visible=False)
-
-        async def _wrap_url(url):
-            md, info, doc_id, result = await _gradio_process_url(url)
-            raw_json = json.dumps(result.get('document_json', {}), ensure_ascii=False, indent=2) if result else ''
-            return (md, md, raw_json, info) + _download_updates(result)
-
-        btn_url.click(_wrap_url, inputs=[url_in],
-                      outputs=[out_url, out_url_raw, out_url_json, info_url,
-                               dl_url_md, dl_url_pdf, dl_url_json])
-
-    with gr.Tab('Archivo'):
-        f_in = gr.File(label='PDF', file_types=['.pdf'])
-        btn_f = gr.Button('Traducir PDF', variant='primary')
-        with gr.Tabs():
-            with gr.Tab('Modo lectura'):
-                out_f = gr.Markdown(label='Traduccion')
-            with gr.Tab('Markdown'):
-                out_f_raw = gr.Code(label='Markdown', language='markdown')
-            with gr.Tab('JSON'):
-                out_f_json = gr.Code(label='JSON estructurado', language='json')
-            with gr.Tab('Detalles'):
-                out_f_details = gr.Markdown(label='Detalles')
-        info_f = gr.Markdown(label='Informacion')
-        with gr.Row():
-            dl_f_md = gr.DownloadButton('Markdown (.md)', variant='secondary', visible=False)
-            dl_f_pdf = gr.DownloadButton('PDF traducido (.pdf)', variant='secondary', visible=False)
-            dl_f_json = gr.DownloadButton('JSON (.json)', variant='secondary', visible=False)
-
-        async def _wrap_file(file):
-            md, info, doc_id, result = await _gradio_process_file(file)
-            raw_json = json.dumps(result.get('document_json', {}), ensure_ascii=False, indent=2) if result else ''
-            return (md, md, raw_json, info) + _download_updates(result)
-
-        btn_f.click(_wrap_file, inputs=[f_in],
-                    outputs=[out_f, out_f_raw, out_f_json, info_f,
-                             dl_f_md, dl_f_pdf, dl_f_json])
-
-demo.queue(max_size=20)
-
-app = gr.mount_gradio_app(
-    app, demo, path='/', show_error=True,
-    allowed_paths=[str(MD_STORE_DIR), str(PDF_STORE_DIR), str(JSON_STORE_DIR),
-                   str(SOURCE_PDF_DIR), str(CACHE_DIR), str(IMAGES_STORE_DIR)],
-)
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '8000'))

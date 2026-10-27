@@ -5,6 +5,7 @@
 
 import { fetchPapers, fetchWorkById } from './src/services/search.js?v=40';
 import { translateToSpanish, translateBatch, translateToEnglish } from './src/services/translate.js?v=2';
+import { auth } from './src/services/auth.js?v=1';
 
 // ═══════════════════════════════════════════════════
 // EXPANSIÓN DE QUERIES — Diccionario ES → EN + sinónimos clave
@@ -338,6 +339,9 @@ const S = {
   loading: false,
   searchTimeout: null,
   bookmarks: loadData('psyhub_bk', []),
+  folders: loadData('psyhub_folders', []),
+  activeFolder: loadData('psyhub_active_folder', 'saved'),
+  summaries: loadData('psyhub_summaries', {}),
   profile: loadData('psyhub_profile', { name: '', role: '' }),
   searches: loadData('psyhub_searches_count', 0),
   currentPaper: null,
@@ -362,6 +366,27 @@ const S = {
   processed: loadData('psyhub_processed', []),
 };
 
+let folderPickerPaper = null;
+// 'grid' = rectángulos de carpetas; 'detail' = papers de la carpeta elegida.
+let folderView = 'grid';
+
+// ─── Guardados: carpetas ───────────────────────────────────────────────
+// Migra los guardados viejos (sin carpeta) a "Guardados" sin perder nada.
+(function normalizeSavedState() {
+  const folders = Array.isArray(S.folders) ? S.folders : [];
+  S.folders = folders.filter(f => f && f.id && f.name);
+  if (!S.folders.some(f => f.id === 'saved')) {
+    S.folders.unshift({ id: 'saved', name: 'Guardados' });
+  }
+  S.bookmarks.forEach(paper => {
+    if (!paper.folderId || !S.folders.some(f => f.id === paper.folderId)) {
+      paper.folderId = 'saved';
+    }
+  });
+  if (!S.folders.some(f => f.id === S.activeFolder)) S.activeFolder = 'saved';
+  if (!S.summaries || typeof S.summaries !== 'object') S.summaries = {};
+})();
+
 // ═══════════════════════════════════════════════════
 // DOM — se inicializa cuando el DOM está listo
 // ═══════════════════════════════════════════════════
@@ -378,6 +403,15 @@ function initDOMRefs() {
     pageChat: $('page-chat'),
     pageSearch: $('page-search'),
     pageProfile: $('page-profile'),
+    pagePricing: $('page-pricing'),
+    pageSettings: $('page-settings'),
+
+    // Menú lateral
+    appDrawer: $('app-drawer'),
+    drawerScrim: $('drawer-scrim'),
+    btnDrawerClose: $('btn-drawer-close'),
+    drawerAccountLabel: $('drawer-account-label'),
+    drawerItems: document.querySelectorAll('.drawer-item'),
 
     // Home
     searchInlineWrapper: $('search-inline-wrapper'),
@@ -409,7 +443,7 @@ function initDOMRefs() {
     btnStoryShare: $('btn-story-share'),
 
     // Nav
-    navBtns: document.querySelectorAll('.nav-btn'),
+    navBtns: document.querySelectorAll('.drawer-item'),
 
     // Search Page & Resultados
     resultsHeader: $('results-header'),
@@ -447,6 +481,25 @@ function initDOMRefs() {
     btnChatFilter: $('btn-chat-filter'),
     chatFilterLabel: $('chat-filter-label'),
     chatFilterIcon: $('chat-filter-icon'),
+    btnChatSize: $('btn-chat-size'),
+    chatSizeMenu: $('chat-size-menu'),
+    chatSizeRange: $('chat-size-range'),
+    chatSizeValue: $('chat-size-value'),
+    chatSizeHint: $('chat-size-hint'),
+    btnChatThink: $('btn-chat-think'),
+    btnChatPaperType: $('btn-chat-paper-type'),
+    chatPaperIcon: $('chat-paper-icon'),
+    chatYearFrom: $('chat-year-from'),
+    chatYearTo: $('chat-year-to'),
+    btnChatFiltersClear: $('btn-chat-filters-clear'),
+    chatAttachments: $('chat-attachments'),
+    chatAttachFile: $('chat-attach-file'),
+    btnChatAttach: $('btn-chat-attach'),
+    chatAttachMenu: $('chat-attach-menu'),
+    savedPickerOverlay: $('saved-picker-overlay'),
+    savedPickerList: $('saved-picker-list'),
+    savedPickerEmpty: $('saved-picker-empty'),
+    btnCloseSavedPicker: $('btn-close-saved-picker'),
     chatSuggestions: $('chat-suggestions'),
     btnChatNew: $('btn-chat-new'),
     btnChatHistory: $('btn-chat-history'),
@@ -468,6 +521,28 @@ function initDOMRefs() {
     librarySavedContainer: $('library-saved-container'),
     iconToggleSaved: $('icon-toggle-saved'),
     libraryFileUpload: $('library-file-upload'),
+    folderGrid: $('folder-grid'),
+    folderGridView: $('folder-grid-view'),
+    folderDetailView: $('folder-detail-view'),
+    btnFolderBack: $('btn-folder-back'),
+    folderSavedList: $('folder-saved-list'),
+    folderEmpty: $('folder-empty'),
+    folderCurrentName: $('folder-current-name'),
+    folderCurrentCount: $('folder-current-count'),
+    btnNewFolder: $('btn-new-folder'),
+    folderNewForm: $('folder-new-form'),
+    folderNameInput: $('folder-name-input'),
+    btnCancelFolder: $('btn-cancel-folder'),
+    btnRenameFolder: $('btn-rename-folder'),
+    btnDeleteFolder: $('btn-delete-folder'),
+    folderRenameForm: $('folder-rename-form'),
+    folderRenameInput: $('folder-rename-input'),
+    btnCancelRename: $('btn-cancel-rename'),
+    folderPickerOverlay: $('folder-picker-overlay'),
+    folderPickerList: $('folder-picker-list'),
+    btnCloseFolderPicker: $('btn-close-folder-picker'),
+    folderPickerNewForm: $('folder-picker-new-form'),
+    folderPickerNewInput: $('folder-picker-new-input'),
 
     // Perfil
     profileAvatar: $('profile-avatar'),
@@ -557,6 +632,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadProfile();
   loadRecommendations();
   loadStories();
+  bootAuth();
 });
 
 // La barra de carga no debe quedarse pegada si algún recurso externo tarda
@@ -613,9 +689,13 @@ function navigateTo(page) {
   }
 
   S.activePage = page;
-  const pages = { home: el.pageHome, explore: el.pageExplore, library: el.pageLibrary, chat: el.pageChat, search: el.pageSearch, profile: el.pageProfile };
-  Object.values(pages).forEach(p => p.classList.add('hidden'));
-  pages[page].classList.remove('hidden');
+  const pages = {
+    home: el.pageHome, explore: el.pageExplore, library: el.pageLibrary,
+    chat: el.pageChat, search: el.pageSearch, profile: el.pageProfile,
+    pricing: el.pagePricing, settings: el.pageSettings,
+  };
+  Object.values(pages).forEach(p => p && p.classList.add('hidden'));
+  if (pages[page]) pages[page].classList.remove('hidden');
   el.navBtns.forEach(b => b.classList.toggle('active', b.dataset.page === page));
   if (page !== 'chat') document.body.classList.remove('chat-input-focused');
   if (page === 'profile' || page === 'library') refreshProfile();
@@ -1722,7 +1802,11 @@ function refreshPaperCard(paper) {
   if (S.currentPaper?.id === paper.id && el.modalOverlay && !el.modalOverlay.classList.contains('hidden')) {
     const tags = classifyPaper(paper);
     const title = paper.titleEs || paper.title || 'Sin título';
+    const activePanel = el.modalBody.querySelector('.detail-tab.is-active')?.dataset.panel || 'abstract';
     el.modalBody.innerHTML = buildModalHTML(paper, null, tags, title, paper.abstractEs, false);
+    el.modalBody.classList.add('has-detail');
+    showDetailPanel(activePanel);
+    loadWorkMeta(paper);
   }
 }
 
@@ -1819,6 +1903,7 @@ function buildCard(paper, onBookmarkChange) {
       </div>
       <p class="paper-card-authors">${esc(firstAuthor + moreAuthors)}</p>
       ${snippet ? `<p class="paper-card-snippet">${esc(snippet)}</p>` : ''}
+      ${paperStatusHtml(paper)}
       <div class="paper-card-meta">
         ${paper.year ? `<span><i class="ph-bold ph-calendar-blank"></i>${paper.year}</span><span class="meta-dot">·</span>` : ''}
         <span><i class="ph-bold ph-quotes"></i>${cites} citas</span>
@@ -2015,7 +2100,10 @@ async function openModal(paper, corriente) {
 
     // Mostrar modal con abstract existente o aviso
     el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, tags, displayTitle, paper.abstractEs, false);
+    el.modalBody.classList.add('has-detail');
     el.modalBody.scrollTop = 0;
+    showDetailPanel('abstract');
+    loadWorkMeta(paper);
     el.modalOverlay.classList.remove('hidden');
     el.modalSheet.classList.remove('closing');
     document.body.style.overflow = 'hidden';
@@ -2086,6 +2174,9 @@ async function openModal(paper, corriente) {
             const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
             const currentTitle = paper.titleEs || paper.title || 'Sin título';
             el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, updatedTags, currentTitle, paper.abstractEs, false);
+            el.modalBody.classList.add('has-detail');
+            showDetailPanel('abstract');
+            loadWorkMeta(paper);
           }
         } else if (!full && S.currentPaper?.id === paper.id) {
           const absEl = document.getElementById('modal-abstract-text');
@@ -2114,6 +2205,9 @@ async function openModal(paper, corriente) {
         const updatedTags = isFilterActiveInResults ? [S.activeSubtype] : classifyPaper(paper);
         const currentTitle = paper.titleEs || paper.title || 'Sin título';
         el.modalBody.innerHTML = buildModalHTML(paper, modalCorriente, updatedTags, currentTitle, paper.abstractEs, false);
+        el.modalBody.classList.add('has-detail');
+        showDetailPanel('abstract');
+        loadWorkMeta(paper);
         if (paper.abstract && !paper.abstractEs) {
           translateToSpanish(paper.abstract).then(translated => {
             if (S.currentPaper?.id !== paper.id || !translated) return;
@@ -2215,6 +2309,75 @@ function formatAPAReference(paper) {
   return [authorsStr, yearStr, titleStr, journalStr, doiStr].filter(Boolean).join(' ');
 }
 
+function journalQuartile(paper) {
+  const raw = paper?.journalImpact ?? paper?.journal_impact;
+  const impact = Number(raw);
+  if (!Number.isFinite(impact)) return '';
+  if (impact >= 0.75) return 'Q1';
+  if (impact >= 0.5) return 'Q2';
+  if (impact >= 0.25) return 'Q3';
+  return 'Q4';
+}
+
+function metaRow(label, value, raw = false) {
+  if (!value) return '';
+  return `<div class="detail-meta-row"><dt>${esc(label)}</dt><dd>${raw ? value : esc(value)}</dd></div>`;
+}
+
+function buildMetaPanelHTML(paper) {
+  const authors = Array.isArray(paper.authors) ? paper.authors : [];
+  const doi = paper.doi ? (String(paper.doi).startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`) : '';
+  const quartile = journalQuartile(paper);
+  const cites = paper.citations ?? paper.cited_by_count ?? 0;
+  const rows = [
+    metaRow('Revista', paper.journal),
+    metaRow('Año', paper.year),
+    metaRow('Tipo', (paper.design || []).join(', ') || paper.type),
+    metaRow('Autores', authors.join('; ')),
+    metaRow('Citado por', `${Number(cites).toLocaleString('es')} ${Number(cites) === 1 ? 'vez' : 'veces'}`),
+    metaRow('DOI', doi ? `<a href="${esc(doi)}" target="_blank" rel="noopener">${esc(paper.doi)}</a>` : '', true),
+    metaRow('PMID', paper.pmid),
+    metaRow('PMCID', paper.pmcid),
+    metaRow('Cuartil (estimado)', quartile ? `${quartile} · según posición de la revista en PsiHub` : ''),
+  ].filter(Boolean).join('');
+
+  return `
+    <div class="detail-panel-top">
+      <span>Ficha del artículo</span>
+      <span class="detail-panel-hint">Datos para citar y evaluar</span>
+    </div>
+    <div class="detail-scroll" id="detail-meta-scroll">
+      <dl class="detail-meta-list" id="detail-meta-list">${rows}</dl>
+
+      <div class="meta-export" id="detail-export">
+        <div class="meta-export-head">
+          <span class="detail-panel-hint">Exportar referencia</span>
+          <span class="meta-export-sub">Compatible con Zotero, Mendeley y EndNote</span>
+        </div>
+        <div class="meta-export-actions">
+          <button class="meta-export-btn" type="button" data-export="ris">
+            <i class="ph-bold ph-arrow-down"></i><span>RIS</span>
+          </button>
+          <button class="meta-export-btn" type="button" data-export="bibtex">
+            <i class="ph-bold ph-brackets-curly"></i><span>BibTeX</span>
+          </button>
+          <button class="meta-export-btn" type="button" id="btn-modal-copy-apa">
+            <i class="ph-bold ph-copy"></i><span>APA 7</span>
+          </button>
+          <button class="meta-export-btn" type="button" id="btn-modal-copy-doi" ${!paper.doi ? 'disabled' : ''}>
+            <i class="ph-bold ph-link"></i><span>DOI</span>
+          </button>
+        </div>
+      </div>
+
+      <p class="detail-meta-note" id="detail-meta-note">
+        Buscando afiliaciones, financiamiento y datos editoriales…
+      </p>
+      <div class="detail-meta-extended" id="detail-meta-extended"></div>
+    </div>
+  `;
+}
+
 function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, translating) {
   const isCorriente = Boolean(corriente && corriente.label);
   let tagsHtml = '';
@@ -2241,7 +2404,6 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
   const rawCites = paper.citations ?? paper.cited_by_count ?? paper.citedByCount ?? paper.cites ?? 0;
   const citations = typeof rawCites === 'number' ? rawCites : parseInt(rawCites, 10) || 0;
 
-  // Limitar a máximo 3 palabras clave y acortar strings largos
   const rawTopics = Array.isArray(paper.topics) ? paper.topics : [];
   const shortTopics = rawTopics.slice(0, 3).map(t => {
     const s = String(t).trim();
@@ -2256,7 +2418,6 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
     : (isFreePdf ? '1-click · traducción automática' : 'Requiere descarga manual');
 
   const accessHtml = accessBadgeHtml(paper);
-
   const facts = [];
   if (sourceStr) facts.push(`<span class="modal-fact">${esc(sourceStr)}</span>`);
   if (paper.year) facts.push(`<span class="modal-fact">${paper.year}</span>`);
@@ -2264,63 +2425,294 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
   const factsHtml = facts.join('<span class="modal-fact-dot" aria-hidden="true">·</span>');
   const pdfHref = paper.oaUrl || paper.pdfUrl;
 
+  const summary = S.summaries[paper.id];
+  const summaryHtml = summary?.markdown
+    ? (window.marked?.parse ? window.marked.parse(summary.markdown) : esc(summary.markdown))
+    : '';
+  const summaryMode = summary?.mode === 'advanced' ? 'Resumen avanzado · PDF' : 'Resumen básico';
+
   return `
-    ${tagsHtml ? `<div class="modal-tags">${tagsHtml}</div>` : ''}
+    <div class="paper-detail">
+      <div class="detail-fixed-head">
+        ${tagsHtml ? `<div class="modal-tags">${tagsHtml}</div>` : ''}
+        <h2 class="modal-title">${esc(displayTitle || 'Sin título')}</h2>
+        ${authorsStr ? `<p class="modal-byline">${esc(authorsStr)}</p>` : ''}
+        <div class="modal-facts">${factsHtml}${accessHtml ? `<span class="modal-fact-dot" aria-hidden="true">·</span><span class="modal-access">${accessHtml}</span>` : ''}</div>
+        <div class="detail-tabs" role="tablist" aria-label="Información del paper">
+          <button class="detail-tab is-active" type="button" data-panel="abstract" role="tab" aria-selected="true">
+            <i class="ph-bold ph-text-align-left"></i><span>Abstract</span>
+          </button>
+          <button class="detail-tab" type="button" data-panel="summary" role="tab" aria-selected="false">
+            <i class="ph-bold ph-magic-wand"></i><span>Resumen IA</span>
+            <span class="detail-tab-dot" ${summary ? '' : 'hidden'}></span>
+          </button>
+          <button class="detail-tab" type="button" data-panel="meta" role="tab" aria-selected="false">
+            <i class="ph-bold ph-identification-card"></i><span>Ficha</span>
+          </button>
+        </div>
+      </div>
 
-    <h2 class="modal-title">${esc(displayTitle || 'Sin título')}</h2>
-    ${authorsStr ? `<p class="modal-byline">${esc(authorsStr)}</p>` : ''}
-    <div class="modal-facts">${factsHtml}${accessHtml ? `<span class="modal-fact-dot" aria-hidden="true">·</span><span class="modal-access">${accessHtml}</span>` : ''}</div>
-
-    <div class="modal-abstract-section">
-      <div class="modal-abstract-header">
-        <span class="modal-abstract-label">Resumen</span>
-        <div id="modal-abstract-lang" class="modal-abstract-lang">
-          ${(paper.abstract || abstractEs) ? (
+      <div class="detail-track-wrap">
+        <div class="detail-track" id="detail-track">
+          <section class="detail-panel is-active" data-panel="abstract" role="tabpanel">
+            <div class="detail-panel-top">
+              <span>Abstract original</span>
+              <div id="modal-abstract-lang" class="modal-abstract-lang">
+                ${(paper.abstract || abstractEs) ? (
       translating && paper.abstract
         ? '<span class="modal-lang-badge translating"><div class="spinner modal-spinner-mini"></div> Traduciendo…</span>'
         : '<span class="modal-lang-badge">Traducido</span>'
     ) : ''}
+              </div>
+            </div>
+            <div class="detail-scroll">
+              <p id="modal-abstract-text" class="modal-abstract">${esc(abstractEs || abstractContent)}</p>
+              ${shortTopics.length > 0 ? `<div class="modal-topics">${shortTopics.map(t => `<span class="modal-topic-chip">${esc(t)}</span>`).join('')}</div>` : ''}
+            </div>
+          </section>
+
+          <section class="detail-panel" data-panel="summary" role="tabpanel">
+            <div class="detail-panel-top">
+              <span>Resumen con IA</span>
+              <span class="detail-panel-hint" id="detail-summary-mode">${summary ? summaryMode : ''}</span>
+            </div>
+            <div class="detail-scroll" id="detail-summary-scroll">
+              <div class="detail-empty" id="detail-summary-empty" ${summary ? 'hidden' : ''}>
+                <div class="empty-icon-wrap"><i class="ph-bold ph-magic-wand"></i></div>
+                <p class="empty-title">Todavía no hay resumen</p>
+                <p class="empty-subtitle">Generá un resumen claro del abstract, con hallazgos y límites.</p>
+                <button class="btn-cta-primary detail-empty-btn" type="button" id="btn-detail-summarize-empty">
+                  <i class="ph-bold ph-magic-wand"></i> Resumir con IA
+                </button>
+              </div>
+              <div class="detail-markdown" id="detail-summary-body" ${summary ? '' : 'hidden'}>${summaryHtml}</div>
+            </div>
+          </section>
+
+          <section class="detail-panel" data-panel="meta" role="tabpanel">
+            ${buildMetaPanelHTML(paper)}
+          </section>
         </div>
       </div>
-      <p id="modal-abstract-text" class="modal-abstract">${esc(abstractEs || abstractContent)}</p>
-    </div>
 
-    ${shortTopics.length > 0 ? `
-      <div class="modal-topics-section">
-        <div class="modal-topics">
-          ${shortTopics.map(t => `<span class="modal-topic-chip">${esc(t)}</span>`).join('')}
-        </div>
-      </div>
-    ` : ''}
+      <div class="modal-actions detail-actions">
+        <button class="modal-primary-action" id="btn-modal-psihub-options" data-mode="${isFreePdf ? 'auto' : 'manual'}">
+          <span class="modal-primary-icon"><i class="ph-bold ph-book-open"></i></span>
+          <span class="modal-primary-copy">
+            <span class="modal-primary-label" id="modal-psihub-btn-label">${primaryLabel}</span>
+            <span class="modal-primary-sub" id="modal-psihub-btn-sub">${primarySub}</span>
+          </span>
+          <i class="ph-bold ph-arrow-right modal-primary-arrow"></i>
+        </button>
 
-    <div class="modal-actions">
-      <button class="modal-primary-action" id="btn-modal-psihub-options" data-mode="${isFreePdf ? 'auto' : 'manual'}">
-        <span class="modal-primary-icon"><i class="ph-bold ph-book-open"></i></span>
-        <span class="modal-primary-copy">
-          <span class="modal-primary-label" id="modal-psihub-btn-label">${primaryLabel}</span>
-          <span class="modal-primary-sub" id="modal-psihub-btn-sub">${primarySub}</span>
-        </span>
-        <i class="ph-bold ph-arrow-right modal-primary-arrow"></i>
-      </button>
-
-      <div class="modal-action-row">
-        ${pdfHref
+        <div class="modal-action-row detail-action-row">
+          <button class="modal-action-btn" id="btn-detail-summarize" type="button">
+            <i class="ph-bold ph-magic-wand"></i><span>Resumir</span>
+          </button>
+          <button class="modal-action-btn" id="btn-detail-export" type="button">
+            <i class="ph-bold ph-export"></i><span>Exportar</span>
+          </button>
+          <button class="modal-action-btn" id="btn-modal-share" type="button">
+            <i class="ph-bold ph-share-network"></i><span>Compartir</span>
+          </button>
+          ${pdfHref
       ? `<a class="modal-action-btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">
              <i class="ph-bold ph-file-pdf"></i><span>PDF</span>
            </a>`
       : ''}
-        <button class="modal-action-btn" id="btn-modal-copy-apa" title="Copiar referencia en formato APA 7">
-          <i class="ph-bold ph-copy"></i><span>APA</span>
-        </button>
-        <button class="modal-action-btn" id="btn-modal-copy-doi" title="Copiar DOI" ${!paper.doi ? 'disabled' : ''}>
-          <i class="ph-bold ph-link"></i><span>DOI</span>
-        </button>
-        <button class="modal-action-btn" id="btn-modal-share" title="Compartir (próximamente)" disabled>
-          <i class="ph-bold ph-share-network"></i><span>Compartir</span>
-        </button>
+        </div>
       </div>
     </div>
   `;
+}
+
+function showDetailPanel(name) {
+  const track = document.getElementById('detail-track');
+  if (!track) return;
+  const panels = Array.from(track.querySelectorAll('.detail-panel'));
+  const index = Math.max(0, panels.findIndex(p => p.dataset.panel === name));
+  panels.forEach((panel, i) => {
+    panel.classList.toggle('is-active', i === index);
+    panel.setAttribute('aria-hidden', i === index ? 'false' : 'true');
+  });
+  track.style.transform = `translateX(-${index * 100}%)`;
+  el.modalBody.querySelectorAll('.detail-tab').forEach(tab => {
+    const active = tab.dataset.panel === name;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+}
+
+async function summarizePaperInModal(paper) {
+  if (!paper) return;
+  if (!paper.abstract || paper.abstract.trim().length < 200) {
+    showToast('Este abstract es muy corto. Probá con el resumen avanzado desde “Leer en PsiHub”.');
+    return;
+  }
+  const buttons = [document.getElementById('btn-detail-summarize'), document.getElementById('btn-detail-summarize-empty')].filter(Boolean);
+  buttons.forEach(btn => { btn.disabled = true; });
+  const empty = document.getElementById('detail-summary-empty');
+  if (empty) {
+    empty.hidden = false;
+    empty.querySelector('.empty-title').textContent = 'Generando resumen…';
+    empty.querySelector('.empty-subtitle').textContent = 'Leyendo el abstract y ordenando los hallazgos.';
+  }
+  try {
+    const result = await requestBasicSummary(paper);
+    persistSummary(paper, result, 'basic');
+    showDetailPanel('summary');
+    showToast('Resumen listo');
+  } catch (err) {
+    showToast(err?.message || 'No se pudo generar el resumen.');
+    if (empty) {
+      empty.querySelector('.empty-title').textContent = 'Todavía no hay resumen';
+      empty.querySelector('.empty-subtitle').textContent = 'Generá un resumen claro del abstract, con hallazgos y límites.';
+    }
+  } finally {
+    buttons.forEach(btn => { btn.disabled = false; });
+  }
+}
+
+function persistSummary(paper, result, mode = 'basic') {
+  if (!paper || !result?.summary) return;
+  S.summaries[paper.id] = {
+    mode: result.mode || mode,
+    markdown: String(result.summary).trim(),
+    at: Date.now(),
+    costUsd: Number(result.cost_usd || result.cost?.cost_usd || 0),
+  };
+  saveData('psyhub_summaries', S.summaries);
+  const body = document.getElementById('detail-summary-body');
+  const empty = document.getElementById('detail-summary-empty');
+  const modeEl = document.getElementById('detail-summary-mode');
+  const dot = el.modalBody?.querySelector('.detail-tab[data-panel="summary"] .detail-tab-dot');
+  if (body && S.currentPaper?.id === paper.id) {
+    body.innerHTML = window.marked?.parse ? window.marked.parse(S.summaries[paper.id].markdown) : esc(S.summaries[paper.id].markdown);
+    body.hidden = false;
+    if (empty) empty.hidden = true;
+    if (modeEl) modeEl.textContent = S.summaries[paper.id].mode === 'advanced' ? 'Resumen avanzado · PDF' : 'Resumen básico';
+    if (dot) dot.hidden = false;
+  }
+  if (S.activePage === 'library') refreshFolders();
+}
+
+async function loadWorkMeta(paper) {
+  const note = document.getElementById('detail-meta-note');
+  const target = document.getElementById('detail-meta-extended');
+  if (!paper || !note || !target) return;
+  const params = new URLSearchParams();
+  if (paper.pmcid) params.set('key', `pmc:${paper.pmcid}`);
+  else if (paper.europepmcKey) params.set('key', paper.europepmcKey);
+  else if (paper.doi) params.set('doi', paper.doi);
+  else if (paper.id) params.set('key', paper.id);
+  if (!params.toString()) {
+    note.textContent = 'Sin identificador para ampliar la ficha.';
+    return;
+  }
+  try {
+    const res = await fetch(`${HF_SPACE_URL}/api/work-meta?${params.toString()}`);
+    const data = await res.json();
+    if (!S.currentPaper || S.currentPaper.id !== paper.id) return;
+    if (!data || data.available === false) {
+      note.textContent = data?.reason || 'La fuente no publica afiliaciones ni financiamiento para este artículo.';
+      return;
+    }
+    const extras = [];
+    if (Array.isArray(data.affiliations) && data.affiliations.length) {
+      extras.push(metaRow('Instituciones', data.affiliations.join(' · ')));
+    }
+    if (Array.isArray(data.funders) && data.funders.length) {
+      extras.push(metaRow('Financiamiento', data.funders.join(' · ')));
+    } else if (data.funding_statement) {
+      extras.push(metaRow('Financiamiento', data.funding_statement));
+    }
+    if (Array.isArray(data.awards) && data.awards.length) {
+      extras.push(metaRow('Subsidios', data.awards.join(' · ')));
+    }
+    if (data.volume) extras.push(metaRow('Volumen', data.volume));
+    if (data.issue) extras.push(metaRow('Número', data.issue));
+    if (data.pages) extras.push(metaRow('Páginas', data.pages));
+    if (Array.isArray(data.issns) && data.issns.length) extras.push(metaRow('ISSN', data.issns.join(', ')));
+    if (data.publisher) extras.push(metaRow('Editorial', data.publisher));
+    if (Array.isArray(data.licenses) && data.licenses.length) extras.push(metaRow('Licencia', data.licenses.join(' · ')));
+    if (data.corresponding) extras.push(metaRow('Autor de correspondencia', data.corresponding));
+    if (data.history && typeof data.history === 'object') {
+      const history = Object.entries(data.history).map(([k, v]) => `${k}: ${v}`).join(' · ');
+      if (history) extras.push(metaRow('Historial editorial', history));
+    }
+    if (extras.length) {
+      target.innerHTML = `<dl class="detail-meta-list">${extras.join('')}</dl>`;
+      note.textContent = '';
+    } else {
+      note.textContent = 'El texto completo no agrega más metadatos editoriales.';
+    }
+  } catch (err) {
+    console.warn('[work-meta]', err);
+    if (note) note.textContent = 'No se pudieron cargar los metadatos ampliados.';
+  }
+}
+
+async function exportPaper(format) {
+  const paper = S.currentPaper;
+  if (!paper) return;
+  try {
+    const res = await fetch(`${HF_SPACE_URL}/api/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        format,
+        papers: [{
+          title: paper.title,
+          titleEs: paper.titleEs,
+          authors: paper.authors,
+          year: paper.year,
+          journal: paper.journal,
+          volume: paper.volume,
+          issue: paper.issue,
+          pages: paper.pages,
+          doi: paper.doi,
+          abstract: paper.abstract,
+          pmid: paper.pmid,
+          publisher: paper.publisher,
+          type: paper.type,
+          pubTypes: paper.pubTypes,
+        }],
+      }),
+    });
+    if (!res.ok) throw new Error('No se pudo exportar');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = format === 'ris' ? 'psihub.ris' : 'psihub.bib';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(format === 'ris' ? 'RIS descargado · importalo en Zotero' : 'BibTeX descargado');
+  } catch (err) {
+    console.error('[export]', err);
+    showToast('No se pudo exportar la referencia');
+  }
+}
+
+async function sharePaper(paper) {
+  if (!paper) return;
+  const doi = paper.doi ? (String(paper.doi).startsWith('http') ? paper.doi : `https://doi.org/${paper.doi}`) : '';
+  const url = doi || paper.oaUrl || paper.pdfUrl || window.location.href;
+  const text = `${paper.title || 'Artículo'}${paper.year ? ` (${paper.year})` : ''}${paper.journal ? ` · ${paper.journal}` : ''}`;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'PsiHub', text, url });
+      return;
+    } catch { }
+  }
+  try {
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    showToast('Enlace copiado al portapapeles');
+  } catch {
+    showToast('No se pudo compartir');
+  }
 }
 
 function closeModal() {
@@ -2329,6 +2721,7 @@ function closeModal() {
     el.modalOverlay.classList.add('hidden');
     el.modalSheet.classList.remove('closing');
     document.body.style.overflow = '';
+    el.modalBody.classList.remove('has-detail');
     S.currentPaper = null;
   }, 200);
 }
@@ -2743,6 +3136,7 @@ function showSummaryResult(paper, result) {
     showSummaryError('El servidor no devolvió ningún resumen.');
     return;
   }
+  persistSummary(paper, result, result?.mode || 'basic');
   updateReaderProgressBar(100, 'Resumen listo');
   el.readerLoading.style.display = 'none';
   el.readerError.style.display = 'none';
@@ -3456,11 +3850,18 @@ function toggleBookmark(paper) {
       topics: Array.isArray(paper.topics) ? paper.topics : [],
       journal: paper.journal || null,
       firstInstitution: paper.firstInstitution || null,
-      corrienteId: S.activeCorriente?.id || null
+      corrienteId: S.activeCorriente?.id || null,
+      folderId: 'saved',
     });
-    showToast('Guardado ✓');
+    const savedPaper = S.bookmarks[S.bookmarks.length - 1];
+    showToast('Guardado en Guardados.', {
+      actionLabel: 'Cambiar',
+      duration: 4200,
+      onAction: () => openFolderPicker(savedPaper),
+    });
   }
   saveData('psyhub_bk', S.bookmarks);
+  if (S.activePage === 'library') refreshFolders();
   updateStatBadges();
 
   const nowSaved = isBookmarked(paper);
@@ -3529,7 +3930,9 @@ function loadProfile() {
 }
 
 function updateProfileUI(googleUser, userEmail) {
-  const name = S.profile.name || (googleUser ? googleUser.name : '') || 'Mi Perfil';
+  const authUser = auth.currentUser();
+  const account = authUser || googleUser;
+  const name = S.profile.name || (account ? account.name : '') || 'Mi Perfil';
   if (el.displayProfileName) el.displayProfileName.textContent = name;
 
   const roleLabels = {
@@ -3545,14 +3948,33 @@ function updateProfileUI(googleUser, userEmail) {
 
   updateAvatarInitials(name);
 
-  // Estado de conexión Google
-  const isConnected = Boolean(googleUser || userEmail);
+  // Estado de conexión Google / Supabase
+  const isConnected = Boolean(account || userEmail);
   if (el.authNotConnected && el.authConnected) {
     el.authNotConnected.style.display = isConnected ? 'none' : 'block';
     el.authConnected.style.display = isConnected ? 'block' : 'none';
   }
+  const email = (account ? account.email : '') || userEmail || '';
   if (el.connectedUserEmail) {
-    el.connectedUserEmail.textContent = (googleUser ? googleUser.email : userEmail) || 'usuario@gmail.com';
+    el.connectedUserEmail.textContent = email || 'usuario@gmail.com';
+  }
+  if (el.drawerAccountLabel) {
+    el.drawerAccountLabel.textContent = email || 'Modo local';
+  }
+}
+
+// Sesión real con Supabase (si el proyecto está configurado). Es opcional:
+// sin configuración, la cuenta local de siempre sigue funcionando igual.
+async function bootAuth() {
+  const hadRedirect = auth.handleRedirect();
+  if (auth.currentUser()) loadProfile();
+  if (auth.isConfigured() && auth.session()?.access_token) {
+    const verified = await auth.verifyWithServer(HF_SPACE_URL);
+    if (verified) updateProfileUI(null, verified.email || '');
+  }
+  if (hadRedirect) {
+    const user = auth.currentUser();
+    showToast(user?.email ? `Sesión iniciada: ${user.email}` : 'Sesión iniciada');
   }
 }
 
@@ -3610,24 +4032,238 @@ function refreshProfile() {
     if (touched) saveData('psyhub_bk', S.bookmarks);
   }
 
-  if (S.bookmarks.length === 0) {
-    if (el.sectionSaved) el.sectionSaved.style.display = 'none';
-    if (el.profileEmptySaved) el.profileEmptySaved.style.display = 'flex';
-    return;
-  }
-  if (el.sectionSaved) el.sectionSaved.style.display = 'block';
-  if (el.profileEmptySaved) el.profileEmptySaved.style.display = 'none';
+  refreshFolders();
+}
 
-  if (el.savedList) {
-    el.savedList.innerHTML = '';
-    const frag = document.createDocumentFragment();
-    S.bookmarks.forEach(b => {
-      frag.appendChild(buildCard(b, (saved) => {
-        if (!saved) refreshProfile();
-      }));
-    });
-    el.savedList.appendChild(frag);
+// ═══════════════════════════════════════════════════
+// GUARDADOS — CARPETAS
+// ═══════════════════════════════════════════════════
+
+function currentFolder() {
+  return S.folders.find(f => f.id === S.activeFolder) || S.folders[0];
+}
+
+function folderPapers(folderId = S.activeFolder) {
+  return S.bookmarks.filter(b => b.folderId === folderId);
+}
+
+function saveFoldersState() {
+  saveData('psyhub_folders', S.folders);
+  saveData('psyhub_active_folder', S.activeFolder);
+}
+
+function normalizeText(value) {
+  return String(value || '').toLowerCase().normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function isPaperTranslated(paper) {
+  if (!paper) return false;
+  const doi = paper.doi ? String(paper.doi).toLowerCase() : '';
+  const title = normalizeText(paper.title);
+  return (S.processed || []).some(item => {
+    const data = item.paperData || {};
+    if (doi && data.doi && String(data.doi).toLowerCase() === doi) return true;
+    if (paper.id && (item.id === paper.id || data.id === paper.id)) return true;
+    const other = normalizeText(item.title || data.title);
+    if (!title || !other || title.length < 18) return false;
+    return other.startsWith(title.slice(0, 42)) || title.startsWith(other.slice(0, 42));
+  });
+}
+
+function paperStatusHtml(paper) {
+  if (!paper) return '';
+  const badges = [];
+  const summary = S.summaries[paper.id];
+  if (summary) {
+    const label = summary.mode === 'advanced' ? 'Resumen avanzado' : 'Resumido';
+    badges.push(`<span class="status-chip is-summary"><i class="ph-bold ph-magic-wand"></i>${label}</span>`);
   }
+  if (isPaperTranslated(paper)) {
+    badges.push('<span class="status-chip is-translated"><i class="ph-bold ph-translate"></i>Traducido</span>');
+  }
+  return badges.length ? `<div class="paper-status-row">${badges.join('')}</div>` : '';
+}
+
+function ensureFolder(name) {
+  const clean = String(name || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  if (!clean) return null;
+  const existing = S.folders.find(f => normalizeText(f.name) === normalizeText(clean));
+  if (existing) return existing;
+  const folder = { id: `f_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, name: clean };
+  S.folders.push(folder);
+  saveFoldersState();
+  return folder;
+}
+
+function refreshFolders() {
+  if (!el.folderGrid) return;
+  const total = S.bookmarks.length;
+  const showDetail = folderView === 'detail';
+
+  // Vista de rectángulos: una tarjeta por carpeta + tarjeta para crear.
+  el.folderGrid.innerHTML = S.folders.map((folder, index) => {
+    const count = folderPapers(folder.id).length;
+    const isSaved = folder.id === 'saved';
+    const icon = isSaved ? 'ph-bookmark-simple' : 'ph-folder';
+    return `<button class="folder-tile" type="button" data-folder="${esc(folder.id)}"
+      data-tone="${index % 4}" aria-label="Abrir carpeta ${esc(folder.name)}, ${count} papers">
+      <span class="folder-tile-cover">
+        <i class="ph-bold ${icon}"></i>
+        <span class="folder-tile-badge">${count}</span>
+      </span>
+      <span class="folder-tile-name">${esc(folder.name)}</span>
+      <span class="folder-tile-meta">${count === 1 ? '1 paper' : `${count} papers`}</span>
+    </button>`;
+  }).join('') + `
+    <button class="folder-tile folder-tile-new" type="button" data-folder-create>
+      <span class="folder-tile-cover"><i class="ph-bold ph-plus"></i></span>
+      <span class="folder-tile-name">Nueva carpeta</span>
+      <span class="folder-tile-meta">Organizá tus papers</span>
+    </button>`;
+
+  if (el.folderGridView) el.folderGridView.hidden = showDetail;
+  if (el.folderDetailView) el.folderDetailView.hidden = !showDetail;
+
+  const folder = currentFolder();
+  const papers = folder ? folderPapers(folder.id) : [];
+  if (el.folderCurrentName) {
+    el.folderCurrentName.textContent = folder ? folder.name : 'Guardados';
+  }
+  if (el.folderCurrentCount) {
+    el.folderCurrentCount.textContent = papers.length === 1 ? '1 paper' : `${papers.length} papers`;
+  }
+  if (el.btnDeleteFolder) {
+    el.btnDeleteFolder.disabled = !folder || folder.id === 'saved';
+    el.btnDeleteFolder.title = !folder || folder.id === 'saved'
+      ? 'La carpeta Guardados no se puede eliminar'
+      : 'Eliminar carpeta';
+  }
+
+  if (el.folderSavedList) {
+    el.folderSavedList.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    papers.forEach(paper => {
+      frag.appendChild(buildCard(paper, () => refreshFolders()));
+    });
+    el.folderSavedList.appendChild(frag);
+  }
+  if (el.folderEmpty) el.folderEmpty.hidden = papers.length > 0;
+  if (el.folderSavedList) el.folderSavedList.hidden = papers.length === 0;
+  if (total === 0 && el.folderEmpty) {
+    const title = el.folderEmpty.querySelector('.empty-title');
+    const sub = el.folderEmpty.querySelector('.empty-subtitle');
+    if (title) title.textContent = 'Sin artículos guardados';
+    if (sub) sub.textContent = 'Guardá artículos desde el inicio o los resultados para consultarlos acá sin conexión.';
+  }
+}
+
+function openFolder(folderId) {
+  if (!S.folders.some(f => f.id === folderId)) return;
+  S.activeFolder = folderId;
+  folderView = 'detail';
+  if (el.folderRenameForm) el.folderRenameForm.hidden = true;
+  saveFoldersState();
+  refreshFolders();
+  el.folderDetailView?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function closeFolderDetail() {
+  folderView = 'grid';
+  if (el.folderRenameForm) el.folderRenameForm.hidden = true;
+  refreshFolders();
+  el.folderGridView?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function openFolderCreateForm() {
+  if (!el.folderNewForm) return;
+  if (el.folderRenameForm) el.folderRenameForm.hidden = true;
+  el.folderNewForm.hidden = false;
+  if (el.folderNameInput) {
+    el.folderNameInput.value = '';
+    el.folderNameInput.focus();
+  }
+}
+
+function openFolderPicker(paper) {
+  folderPickerPaper = paper;
+  if (!el.folderPickerOverlay) return;
+  renderFolderPicker();
+  el.folderPickerOverlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeFolderPicker() {
+  if (!el.folderPickerOverlay) return;
+  el.folderPickerOverlay.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function renderFolderPicker() {
+  if (!el.folderPickerList) return;
+  const current = folderPickerPaper?.folderId || 'saved';
+  el.folderPickerList.innerHTML = S.folders.map(folder => `
+    <button class="folder-picker-item${folder.id === current ? ' is-current' : ''}" type="button"
+      data-folder="${esc(folder.id)}">
+      <i class="ph-bold ${folder.id === 'saved' ? 'ph-bookmark-simple' : 'ph-folder'}"></i>
+      <span class="folder-picker-name">${esc(folder.name)}</span>
+      <span class="folder-count">${folderPapers(folder.id).length}</span>
+      ${folder.id === current ? '<i class="ph-bold ph-check folder-picker-check"></i>' : ''}
+    </button>
+  `).join('');
+}
+
+function movePaperToFolder(paper, folderId) {
+  if (!paper) return;
+  const target = S.folders.find(f => f.id === folderId);
+  if (!target) return;
+  const saved = S.bookmarks.find(b => b.id === paper.id);
+  if (!saved) return;
+  saved.folderId = target.id;
+  saveData('psyhub_bk', S.bookmarks);
+  refreshFolders();
+  showToast(`Guardado en ${target.name}`);
+}
+
+function createFolderFromUi(name, movePaper = null) {
+  const folder = ensureFolder(name);
+  if (!folder) {
+    showToast('Escribí un nombre para la carpeta');
+    return null;
+  }
+  ensureFolderInState(folder);
+  if (movePaper) {
+    movePaperToFolder(movePaper, folder.id);
+  }
+  refreshFolders();
+  if (el.folderPickerList && !el.folderPickerOverlay.classList.contains('hidden')) renderFolderPicker();
+  showToast(`Carpeta “${folder.name}” creada`);
+  return folder;
+}
+
+function ensureFolderInState(folder) {
+  if (!S.folders.some(f => f.id === folder.id)) S.folders.push(folder);
+  saveFoldersState();
+}
+
+function deleteActiveFolder() {
+  const folder = currentFolder();
+  if (!folder || folder.id === 'saved') return;
+  const count = folderPapers(folder.id).length;
+  const ok = window.confirm(
+    count
+      ? `¿Eliminar “${folder.name}”? Sus ${count} papers vuelven a Guardados.`
+      : `¿Eliminar la carpeta “${folder.name}”?`
+  );
+  if (!ok) return;
+  S.bookmarks.forEach(b => { if (b.folderId === folder.id) b.folderId = 'saved'; });
+  S.folders = S.folders.filter(f => f.id !== folder.id);
+  S.activeFolder = 'saved';
+  folderView = 'grid';
+  saveData('psyhub_bk', S.bookmarks);
+  saveFoldersState();
+  refreshFolders();
+  showToast('Carpeta eliminada');
 }
 
 function openSavedPaperByIndex(idx) {
@@ -3663,13 +4299,195 @@ window.removeSavedPaperByIndex = removeSavedPaperByIndex;
 // EVENT LISTENERS
 // ═══════════════════════════════════════════════════
 
-function setupEventListeners() {
+function openDrawer() {
+  if (!el.appDrawer || !el.drawerScrim) return;
+  el.drawerScrim.classList.remove('hidden');
+  el.appDrawer.classList.add('open');
+  el.appDrawer.setAttribute('aria-hidden', 'false');
+  requestAnimationFrame(() => el.drawerScrim.classList.add('visible'));
+}
+
+function closeDrawer() {
+  if (!el.appDrawer || !el.drawerScrim) return;
+  el.appDrawer.classList.remove('open');
+  el.appDrawer.setAttribute('aria-hidden', 'true');
+  el.drawerScrim.classList.remove('visible');
+  setTimeout(() => el.drawerScrim.classList.add('hidden'), 220);
+}
+
+function setupDrawer() {
+  document.querySelectorAll('.app-menu-btn, .app-menu-trigger').forEach(btn => {
+    btn.addEventListener('click', openDrawer);
+  });
+  if (el.btnDrawerClose) el.btnDrawerClose.addEventListener('click', closeDrawer);
+  if (el.drawerScrim) el.drawerScrim.addEventListener('click', closeDrawer);
+
   el.navBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const targetPage = btn.dataset.page;
+      closeDrawer();
       navigateTo(targetPage);
+      if (targetPage === 'home') {
+        setTimeout(() => el.searchInput?.focus(), 220);
+      }
     });
   });
+
+  // Deslizar desde el borde izquierdo: gesto natural de apps móviles.
+  let startX = null;
+  let startY = null;
+  document.addEventListener('touchstart', e => {
+    const touch = e.touches[0];
+    if (!touch || touch.clientX > 24 || e.target.closest('input, textarea, .reader-overlay, .modal-overlay')) {
+      startX = null;
+      return;
+    }
+    startX = touch.clientX;
+    startY = touch.clientY;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (startX === null) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const dx = touch.clientX - startX;
+    const dy = Math.abs(touch.clientY - startY);
+    if (dx > 64 && dy < 50) {
+      openDrawer();
+      startX = null;
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', () => { startX = null; }, { passive: true });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeDrawer();
+  });
+}
+
+function setupFolderEvents() {
+  if (el.folderGrid) {
+    el.folderGrid.addEventListener('click', e => {
+      const create = e.target.closest('[data-folder-create]');
+      if (create) {
+        openFolderCreateForm();
+        return;
+      }
+      const tile = e.target.closest('.folder-tile[data-folder]');
+      if (!tile) return;
+      openFolder(tile.dataset.folder);
+    });
+  }
+  if (el.btnFolderBack) el.btnFolderBack.addEventListener('click', closeFolderDetail);
+
+  if (el.btnNewFolder) {
+    el.btnNewFolder.addEventListener('click', () => {
+      // Desde el detalle, «Nueva carpeta» vuelve a la grilla y abre el form.
+      if (folderView !== 'grid') {
+        folderView = 'grid';
+        refreshFolders();
+      }
+      openFolderCreateForm();
+    });
+  }
+  if (el.btnCancelFolder) {
+    el.btnCancelFolder.addEventListener('click', () => { el.folderNewForm.hidden = true; });
+  }
+  if (el.folderNewForm) {
+    el.folderNewForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const folder = createFolderFromUi(el.folderNameInput.value);
+      if (!folder) return;
+      S.activeFolder = folder.id;
+      folderView = 'grid';
+      saveFoldersState();
+      el.folderNewForm.hidden = true;
+      el.folderNameInput.value = '';
+      refreshFolders();
+    });
+  }
+  if (el.btnRenameFolder) {
+    el.btnRenameFolder.addEventListener('click', () => {
+      const folder = currentFolder();
+      if (!folder) return;
+      el.folderRenameForm.hidden = false;
+      el.folderNewForm.hidden = true;
+      el.folderRenameInput.value = folder.name;
+      el.folderRenameInput.focus();
+      el.folderRenameInput.select();
+    });
+  }
+  if (el.btnCancelRename) {
+    el.btnCancelRename.addEventListener('click', () => { el.folderRenameForm.hidden = true; });
+  }
+  if (el.folderRenameForm) {
+    el.folderRenameForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const folder = currentFolder();
+      const name = el.folderRenameInput.value.trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (!folder || !name) return;
+      if (S.folders.some(f => f.id !== folder.id && normalizeText(f.name) === normalizeText(name))) {
+        showToast('Ya tenés una carpeta con ese nombre');
+        return;
+      }
+      folder.name = name;
+      saveFoldersState();
+      el.folderRenameForm.hidden = true;
+      refreshFolders();
+      showToast('Carpeta renombrada');
+    });
+  }
+  if (el.btnDeleteFolder) el.btnDeleteFolder.addEventListener('click', deleteActiveFolder);
+
+  if (el.folderPickerList) {
+    el.folderPickerList.addEventListener('click', e => {
+      const item = e.target.closest('.folder-picker-item');
+      if (!item) return;
+      movePaperToFolder(folderPickerPaper, item.dataset.folder);
+      closeFolderPicker();
+    });
+  }
+  if (el.btnCloseFolderPicker) el.btnCloseFolderPicker.addEventListener('click', closeFolderPicker);
+  if (el.folderPickerOverlay) {
+    el.folderPickerOverlay.addEventListener('click', e => {
+      if (e.target === el.folderPickerOverlay) closeFolderPicker();
+    });
+  }
+  if (el.folderPickerNewForm) {
+    el.folderPickerNewForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const folder = createFolderFromUi(el.folderPickerNewInput.value, folderPickerPaper);
+      if (!folder) return;
+      el.folderPickerNewInput.value = '';
+      closeFolderPicker();
+    });
+  }
+}
+
+function setupEventListeners() {
+  setupDrawer();
+  setupFolderEvents();
+
+  // Deslizar entre Abstract / Resumen / Ficha dentro del modal.
+  let detailX = null;
+  let detailY = null;
+  el.modalBody.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    if (!t || !e.target.closest('.detail-track-wrap')) return;
+    detailX = t.clientX;
+    detailY = t.clientY;
+  }, { passive: true });
+  el.modalBody.addEventListener('touchend', e => {
+    if (detailX === null) return;
+    const t = e.changedTouches[0];
+    if (!t) { detailX = null; return; }
+    const dx = t.clientX - detailX;
+    const dy = Math.abs(t.clientY - detailY);
+    detailX = null;
+    if (Math.abs(dx) < 56 || dy > Math.abs(dx) * 0.8) return;
+    const panels = Array.from(el.modalBody.querySelectorAll('.detail-panel'));
+    const current = panels.findIndex(p => p.classList.contains('is-active'));
+    const next = Math.min(panels.length - 1, Math.max(0, current + (dx < 0 ? 1 : -1)));
+    if (next !== current && panels[next]) showDetailPanel(panels[next].dataset.panel);
+  }, { passive: true });
 
   // Biblioteca
   if (el.librarySavedHeader) {
@@ -3987,6 +4805,39 @@ function setupEventListeners() {
   }
   el.btnModalBk.addEventListener('click', () => { if (S.currentPaper) toggleBookmark(S.currentPaper); });
   el.modalBody.addEventListener('click', async (e) => {
+    const detailTab = e.target.closest('.detail-tab');
+    if (detailTab) {
+      e.stopPropagation();
+      showDetailPanel(detailTab.dataset.panel);
+      return;
+    }
+
+    const exportBtn = e.target.closest('[data-export]');
+    if (exportBtn) {
+      e.stopPropagation();
+      if (S.currentPaper) await exportPaper(exportBtn.dataset.export);
+      return;
+    }
+
+    if (e.target.closest('#btn-detail-export')) {
+      e.stopPropagation();
+      showDetailPanel('meta');
+      setTimeout(() => document.getElementById('detail-export')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
+      return;
+    }
+
+    if (e.target.closest('#btn-detail-summarize') || e.target.closest('#btn-detail-summarize-empty')) {
+      e.stopPropagation();
+      if (S.currentPaper) summarizePaperInModal(S.currentPaper);
+      return;
+    }
+
+    if (e.target.closest('#btn-modal-share')) {
+      e.stopPropagation();
+      if (S.currentPaper) sharePaper(S.currentPaper);
+      return;
+    }
+
     const btnCopy = e.target.closest('#btn-modal-copy-apa') || e.target.closest('.btn-copy-apa');
     if (btnCopy && S.currentPaper) {
       e.stopPropagation();
@@ -4360,6 +5211,12 @@ function setupEventListeners() {
   // Google Sign-In Modal
   if (el.btnGoogleLogin && el.googleModalOverlay) {
     el.btnGoogleLogin.addEventListener('click', () => {
+      // Con Supabase configurado se usa el OAuth real de Google. Si no, se
+      // mantiene el formulario local para no bloquear el uso sin backend.
+      if (auth.isConfigured()) {
+        auth.signInWithGoogle();
+        return;
+      }
       el.googleModalOverlay.classList.remove('hidden');
       if (el.googleInputEmail) {
         setTimeout(() => el.googleInputEmail.focus(), 200);
@@ -4414,7 +5271,8 @@ function setupEventListeners() {
   }
 
   if (el.btnGoogleLogout) {
-    el.btnGoogleLogout.addEventListener('click', () => {
+    el.btnGoogleLogout.addEventListener('click', async () => {
+      await auth.signOut();
       localStorage.removeItem('psyhub_user_email');
       localStorage.removeItem('psyhub_google_user');
       loadProfile();
@@ -4752,11 +5610,23 @@ async function shareCurrentStory() {
 // ═══════════════════════════════════════════════════
 
 let toastTimer;
-function showToast(msg) {
-  el.toast.textContent = msg;
+function showToast(msg, options = {}) {
+  if (!el.toast) return;
+  const action = options.actionLabel
+    ? `<button class="toast-action" type="button">${esc(options.actionLabel)}</button>`
+    : '';
+  el.toast.innerHTML = `<span class="toast-msg">${esc(msg)}</span>${action}`;
+  el.toast.classList.toggle('has-action', Boolean(action));
   el.toast.classList.add('show');
+  const actionBtn = el.toast.querySelector('.toast-action');
+  if (actionBtn) {
+    actionBtn.addEventListener('click', () => {
+      el.toast.classList.remove('show');
+      try { options.onAction?.(); } catch (err) { console.warn('[toast]', err); }
+    });
+  }
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2500);
+  toastTimer = setTimeout(() => el.toast.classList.remove('show'), options.duration || 2500);
 }
 
 // ═══════════════════════════════════════════════════
@@ -4962,14 +5832,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const CHAT_STORE_KEY = 'psyhub_chats_v2';
 const CHAT_ACCESS_KEY = 'psyhub_chat_access';
-const CHAT_DEPTH_KEY = 'psyhub_chat_depth';
+const CHAT_SIZE_KEY = 'psyhub_chat_size';
+const CHAT_THINK_KEY = 'psyhub_chat_think';
+const CHAT_FILTERS_KEY = 'psyhub_chat_filters';
+const CHAT_PAPER_KEY = 'psyhub_chat_paper';
 
-// La extensión profunda queda detrás del plan de pago (próximamente): el
-// backend ya la soporta, la app solo la muestra bloqueada.
-const CHAT_DEPTH_META = {
-  quick: { label: 'Rápida', hint: 'hasta 12 fuentes' },
-  deep: { label: 'Profunda', hint: '20+ fuentes, plan pago' }
+// Extensión relativa al plan: el backend traduce small/medium/large a topes
+// de tokens y fuentes. En Pro esos topes son más altos para cada nivel.
+// La UI no muestra estos nombres técnicos: es un botón «Extensión» con una
+// barra deslizable de tres puntos.
+const CHAT_SIZE_ORDER = ['small', 'medium', 'large'];
+const CHAT_SIZE_META = {
+  small: { label: 'Poco', hint: 'Respuesta breve · hasta 4 fuentes' },
+  medium: { label: 'Mediano', hint: 'Respuesta media · hasta 6 fuentes' },
+  large: { label: 'Largo', hint: 'Respuesta amplia · hasta 9 fuentes' }
 };
+const CHAT_STUDY_META = {
+  all: 'Todos',
+  meta: 'Meta-análisis',
+  review: 'Revisión',
+  rct: 'Ensayo (ECA)',
+  observational: 'Observacional',
+  qualitative: 'Cualitativo'
+};
+const CHAT_PAPER_META = {
+  all: { label: 'Todos', icon: 'ph-article', hint: 'cualquier tipo de paper' },
+  review: { label: 'Revisiones', icon: 'ph-stack', hint: 'revisiones y meta-análisis' },
+  article: { label: 'Estudios', icon: 'ph-flask', hint: 'estudios primarios' }
+};
+const CHAT_ATTACH_MAX = 4;
 const CHAT_MAX_STORED = 40;
 
 // Migración de la caché local de conversaciones: descarta las respuestas del
@@ -5134,25 +6025,183 @@ const CHAT_ACCESS_META = {
   paid: { label: 'Pago', icon: 'ph-lock' }
 };
 
+// El estado del composer vive en el DOM (para que los botones se pinten solos)
+// y se persiste en localStorage. `chatFilters` guarda cuartil y tipo de estudio
+// porque esos grupos son exclusivos entre sí y no tienen inputs.
+const chatFilters = { quartile: 'all', study: 'all' };
+const chatAttachments = [];
+
 function getChatDepth() {
-  const active = el.chatAccessSeg?.querySelector('.chat-access-option[data-depth].is-active');
-  return active?.dataset.depth === 'deep' ? 'deep' : 'quick';
+  const chat = getActiveChat();
+  return chat?.depth === 'deep' ? 'deep' : 'quick';
+}
+
+function getChatSize() {
+  const index = parseInt(el.chatSizeRange?.value, 10);
+  const value = CHAT_SIZE_ORDER[Number.isFinite(index) ? index : 1] || 'medium';
+  return CHAT_SIZE_ORDER.includes(value) ? value : 'medium';
+}
+
+function setChatSize(size, { persist = true } = {}) {
+  const value = CHAT_SIZE_META[size] ? size : 'medium';
+  const meta = CHAT_SIZE_META[value];
+  const index = CHAT_SIZE_ORDER.indexOf(value);
+  if (el.chatSizeRange) {
+    el.chatSizeRange.value = String(index);
+    el.chatSizeRange.style.setProperty('--size-pct', `${(index / 2) * 100}%`);
+    el.chatSizeRange.setAttribute('aria-valuetext', meta.label);
+  }
+  if (el.chatSizeValue) el.chatSizeValue.textContent = meta.label;
+  if (el.chatSizeHint) el.chatSizeHint.textContent = meta.hint;
+  el.chatSizeMenu?.querySelectorAll('[data-size-step]').forEach(btn => {
+    const on = btn.dataset.sizeStep === String(index);
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  if (el.btnChatSize) {
+    el.btnChatSize.title = `Extensión: ${meta.label}`;
+    el.btnChatSize.setAttribute('aria-label', `Extensión de la respuesta: ${meta.label}`);
+    el.btnChatSize.classList.toggle('has-value', value !== 'medium');
+  }
+  if (persist) {
+    try { localStorage.setItem(CHAT_SIZE_KEY, value); } catch { }
+  }
+  updateChatFilterLabel();
+  return value;
+}
+
+function toggleChatSizeMenu(open) {
+  if (!el.chatSizeMenu || !el.btnChatSize) return;
+  const next = typeof open === 'boolean' ? open : el.chatSizeMenu.hasAttribute('hidden');
+  el.chatSizeMenu.toggleAttribute('hidden', !next);
+  el.btnChatSize.setAttribute('aria-expanded', next ? 'true' : 'false');
+  el.btnChatSize.classList.toggle('is-active', next);
+  if (next) {
+    toggleChatFilter(false);
+    toggleChatAttachMenu(false);
+  }
+}
+
+function getChatThink() {
+  return el.btnChatThink?.getAttribute('aria-pressed') === 'true';
+}
+
+function setChatThink(on, { persist = true } = {}) {
+  const value = !!on;
+  if (el.btnChatThink) {
+    el.btnChatThink.setAttribute('aria-pressed', value ? 'true' : 'false');
+    el.btnChatThink.classList.toggle('is-active', value);
+  }
+  if (persist) {
+    try { localStorage.setItem(CHAT_THINK_KEY, value ? '1' : '0'); } catch { }
+  }
+  updateChatFilterLabel();
+  return value;
+}
+
+function getChatPaperType() {
+  const value = el.btnChatPaperType?.dataset.paper || 'all';
+  return CHAT_PAPER_META[value] ? value : 'all';
+}
+
+function setChatPaperType(type, { persist = true } = {}) {
+  const value = CHAT_PAPER_META[type] ? type : 'all';
+  const meta = CHAT_PAPER_META[value];
+  if (el.btnChatPaperType) {
+    el.btnChatPaperType.dataset.paper = value;
+    el.btnChatPaperType.classList.toggle('is-active', value !== 'all');
+    el.btnChatPaperType.title = `Tipo de paper: ${meta.label}`;
+    el.btnChatPaperType.setAttribute('aria-label', `Tipo de paper: ${meta.label}`);
+  }
+  if (el.chatPaperIcon) el.chatPaperIcon.className = `ph-bold ${meta.icon}`;
+  if (persist) {
+    try { localStorage.setItem(CHAT_PAPER_KEY, value); } catch { }
+  }
+  updateChatFilterLabel();
+  return value;
+}
+
+function getChatFilters() {
+  const year = input => {
+    const n = parseInt(input?.value, 10);
+    return Number.isFinite(n) && n >= 1900 && n <= 2100 ? n : null;
+  };
+  return {
+    access: getChatAccess(),
+    year_from: year(el.chatYearFrom),
+    year_to: year(el.chatYearTo),
+    quartile: chatFilters.quartile,
+    study: chatFilters.study,
+    paper_type: getChatPaperType()
+  };
+}
+
+function activeChatFilterCount() {
+  const f = getChatFilters();
+  let n = 0;
+  if (f.access !== 'all') n += 1;
+  if (f.year_from || f.year_to) n += 1;
+  if (f.quartile !== 'all') n += 1;
+  if (f.study !== 'all') n += 1;
+  if (f.paper_type !== 'all') n += 1;
+  return n;
 }
 
 function updateChatFilterLabel() {
-  const depth = CHAT_DEPTH_META[getChatDepth()].label;
-  const access = CHAT_ACCESS_META[getChatAccess()].label;
-  if (el.chatFilterLabel) el.chatFilterLabel.textContent = `${depth} · ${access}`;
   if (el.btnChatFilter) {
-    // El botón es solo un ícono: el estado actual viaja en el tooltip y en el
-    // punto indicador, que se enciende cuando no está en la opción por defecto.
-    const text = `Extensión ${depth} · papers ${access}`;
+    const count = activeChatFilterCount();
+    const size = CHAT_SIZE_META[getChatSize()].label;
+    const think = getChatThink() ? ' · pensando más' : '';
+    const text = count
+      ? `Filtros activos (${count}) · extensión ${size}${think}`
+      : `Filtros de búsqueda · extensión ${size}${think}`;
     el.btnChatFilter.title = text;
     el.btnChatFilter.setAttribute('aria-label', text);
-    el.btnChatFilter.classList.toggle(
-      'has-filter',
-      getChatDepth() === 'deep' || getChatAccess() !== 'all',
-    );
+    el.btnChatFilter.classList.toggle('has-filter', count > 0);
+  }
+  if (el.btnChatThink) {
+    el.btnChatThink.title = getChatThink()
+      ? 'Pensar más: activado (más lento, más profundo)'
+      : 'Pensar más: respuesta más profunda (más lenta)';
+  }
+  updateFilterSummary();
+}
+
+// Resumen de cada categoría en el panel raíz de filtros, para que se vea el
+// valor elegido sin abrir cada subpanel.
+function updateFilterSummary() {
+  const menu = el.chatAccessSeg;
+  if (!menu) return;
+  const setText = (key, text) => {
+    const node = menu.querySelector(`[data-filter-value="${key}"]`);
+    if (node) node.textContent = text;
+  };
+  const f = getChatFilters();
+  setText('access', CHAT_ACCESS_META[f.access]?.label || 'Todos');
+
+  let period = 'Cualquier año';
+  if (f.year_from && f.year_to) period = `${f.year_from}–${f.year_to}`;
+  else if (f.year_from) period = `Desde ${f.year_from}`;
+  else if (f.year_to) period = `Hasta ${f.year_to}`;
+  setText('period', period);
+  menu.querySelector('[data-filter-open="period"]')?.classList.toggle('has-value', Boolean(f.year_from || f.year_to));
+
+  setText('quartile', f.quartile === 'all' ? 'Todos' : f.quartile.toUpperCase());
+  setText('study', CHAT_STUDY_META[f.study] || 'Todos');
+
+  ['access', 'quartile', 'study'].forEach(key => {
+    const value = key === 'access' ? f.access : f[key];
+    menu.querySelector(`[data-filter-open="${key}"]`)?.classList.toggle('has-value', value !== 'all');
+  });
+
+  const count = (f.access !== 'all' ? 1 : 0)
+    + (f.year_from || f.year_to ? 1 : 0)
+    + (f.quartile !== 'all' ? 1 : 0)
+    + (f.study !== 'all' ? 1 : 0);
+  const badge = menu.querySelector('#chat-filter-count');
+  if (badge) {
+    badge.textContent = String(count);
+    badge.toggleAttribute('hidden', count === 0);
   }
 }
 
@@ -5172,20 +6221,57 @@ function setChatAccess(access, { persist = true } = {}) {
   return value;
 }
 
-function setChatDepth(depth, { persist = true } = {}) {
-  const value = depth === 'deep' ? 'deep' : 'quick';
-  if (el.chatAccessSeg) {
-    el.chatAccessSeg.querySelectorAll('.chat-access-option[data-depth]').forEach(btn => {
-      const on = btn.dataset.depth === value;
-      btn.classList.toggle('is-active', on);
-      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-  }
-  if (persist) {
-    try { localStorage.setItem(CHAT_DEPTH_KEY, value); } catch { }
-  }
+function setChatChoice(group, value) {
+  el.chatAccessSeg?.querySelectorAll(`.chat-access-option[data-${group}]`).forEach(btn => {
+    const on = btn.dataset[group] === value;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function setChatQuartile(value, { persist = true } = {}) {
+  chatFilters.quartile = ['q1', 'q2', 'q3', 'q4'].includes(value) ? value : 'all';
+  setChatChoice('quartile', chatFilters.quartile);
+  if (persist) persistChatFilters();
   updateChatFilterLabel();
-  return value;
+}
+
+function setChatStudy(value, { persist = true } = {}) {
+  const allowed = ['meta', 'review', 'rct', 'observational', 'qualitative'];
+  chatFilters.study = allowed.includes(value) ? value : 'all';
+  setChatChoice('study', chatFilters.study);
+  if (persist) persistChatFilters();
+  updateChatFilterLabel();
+}
+
+function persistChatFilters() {
+  try {
+    localStorage.setItem(CHAT_FILTERS_KEY, JSON.stringify({
+      ...chatFilters,
+      year_from: el.chatYearFrom?.value || '',
+      year_to: el.chatYearTo?.value || ''
+    }));
+  } catch { }
+}
+
+function clearChatFilters() {
+  setChatAccess('all');
+  setChatQuartile('all');
+  setChatStudy('all');
+  if (el.chatYearFrom) el.chatYearFrom.value = '';
+  if (el.chatYearTo) el.chatYearTo.value = '';
+  persistChatFilters();
+  updateChatFilterLabel();
+}
+
+function applyChatFilters(saved) {
+  const f = saved && typeof saved === 'object' ? saved : {};
+  setChatAccess(f.access || 'all', { persist: false });
+  setChatQuartile(f.quartile || 'all', { persist: false });
+  setChatStudy(f.study || 'all', { persist: false });
+  if (el.chatYearFrom) el.chatYearFrom.value = f.year_from || '';
+  if (el.chatYearTo) el.chatYearTo.value = f.year_to || '';
+  updateChatFilterLabel();
 }
 
 function toggleChatFilter(open) {
@@ -5193,18 +6279,210 @@ function toggleChatFilter(open) {
   const next = typeof open === 'boolean' ? open : el.chatAccessSeg.hasAttribute('hidden');
   el.chatAccessSeg.toggleAttribute('hidden', !next);
   el.btnChatFilter.setAttribute('aria-expanded', next ? 'true' : 'false');
+  if (next) {
+    toggleChatSizeMenu(false);
+    toggleChatAttachMenu(false);
+    showChatFilterPanel(null);
+  }
+}
+
+// Paneles dentro de paneles: `null` muestra la raíz con las categorías; una
+// clave muestra solo las opciones de esa categoría, con su fila «volver».
+function showChatFilterPanel(name) {
+  const menu = el.chatAccessSeg;
+  if (!menu) return;
+  const root = menu.querySelector('[data-filter-root]');
+  if (root) root.toggleAttribute('hidden', Boolean(name));
+  menu.querySelectorAll('[data-filter-panel]').forEach(panel => {
+    panel.toggleAttribute('hidden', panel.dataset.filterPanel !== name);
+  });
+  menu.classList.toggle('is-sub', Boolean(name));
+  if (name) menu.scrollTop = 0;
+}
+
+function toggleChatAttachMenu(open) {
+  if (!el.chatAttachMenu || !el.btnChatAttach) return;
+  const next = typeof open === 'boolean' ? open : el.chatAttachMenu.hasAttribute('hidden');
+  el.chatAttachMenu.toggleAttribute('hidden', !next);
+  el.btnChatAttach.setAttribute('aria-expanded', next ? 'true' : 'false');
+  el.btnChatAttach.classList.toggle('is-active', next);
+  if (next) {
+    toggleChatFilter(false);
+    toggleChatSizeMenu(false);
+  }
+}
+
+// ── Adjuntos del chat ──────────────────────────────────────────────
+function attachmentLabel(item) {
+  const kind = item.kind === 'image' ? 'Imagen'
+    : item.kind === 'saved' ? 'Paper guardado'
+      : 'PDF';
+  return `${kind}: ${item.name}`;
+}
+
+function renderChatAttachments() {
+  if (!el.chatAttachments) return;
+  const any = chatAttachments.length > 0;
+  el.chatAttachments.toggleAttribute('hidden', !any);
+  el.chatAttachments.innerHTML = chatAttachments.map(item => `
+    <span class="chat-attachment-chip${item.loading ? ' is-loading' : ''}">
+      <i class="ph-bold ${item.kind === 'image' ? 'ph-image' : item.kind === 'saved' ? 'ph-bookmark-simple' : 'ph-file-pdf'}"></i>
+      <span class="chat-attachment-name" title="${esc(attachmentLabel(item))}">${esc(item.name)}</span>
+      ${item.loading ? '<span class="chat-attachment-spin"></span>' : ''}
+      <button type="button" class="chat-attachment-remove" data-attach-remove="${esc(item.id)}"
+        aria-label="Quitar adjunto"><i class="ph-bold ph-x"></i></button>
+    </span>
+  `).join('');
+  if (el.btnChatSend) {
+    el.btnChatSend.disabled = !S.chatStreaming
+      && !(el.chatInput?.value || '').trim()
+      && !chatAttachments.some(a => !a.loading);
+  }
+}
+
+function addChatAttachment(item) {
+  if (!item?.text) return null;
+  const ready = chatAttachments.filter(a => !a.loading).length;
+  if (ready >= CHAT_ATTACH_MAX) {
+    showToast(`Podés adjuntar hasta ${CHAT_ATTACH_MAX} archivos por consulta.`);
+    return null;
+  }
+  const entry = {
+    id: 'att' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    kind: item.kind || 'pdf',
+    name: item.name || 'Material adjunto',
+    text: item.text,
+    loading: false
+  };
+  chatAttachments.push(entry);
+  renderChatAttachments();
+  return entry;
+}
+
+function removeChatAttachment(id) {
+  const index = chatAttachments.findIndex(a => a.id === id);
+  if (index >= 0) chatAttachments.splice(index, 1);
+  renderChatAttachments();
+}
+
+function clearChatAttachments() {
+  chatAttachments.length = 0;
+  renderChatAttachments();
+}
+
+async function uploadChatAttachment(file) {
+  if (!file) return;
+  if (chatAttachments.filter(a => !a.loading).length >= CHAT_ATTACH_MAX) {
+    showToast(`Podés adjuntar hasta ${CHAT_ATTACH_MAX} archivos por consulta.`);
+    return;
+  }
+  const temp = {
+    id: 'att' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    kind: file.type === 'application/pdf' ? 'pdf' : 'image',
+    name: file.name || 'Material adjunto',
+    text: '',
+    loading: true
+  };
+  chatAttachments.push(temp);
+  renderChatAttachments();
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${HF_SPACE_URL}/api/chat/attach`, { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok || !data?.text) {
+      throw new Error(data?.detail || 'No se pudo leer el archivo.');
+    }
+    temp.loading = false;
+    temp.text = data.text;
+    temp.kind = data.kind || temp.kind;
+    temp.name = data.name || temp.name;
+    if (data.truncated) temp.name += ' (recortado)';
+  } catch (err) {
+    removeChatAttachment(temp.id);
+    const msg = String(err?.message || '');
+    showToast(/escaneado|texto/i.test(msg)
+      ? 'Ese PDF no tiene texto seleccionable (parece escaneado).'
+      : (msg || 'No se pudo adjuntar el archivo.'));
+    return;
+  }
+  renderChatAttachments();
+}
+
+function openSavedPicker() {
+  if (!el.savedPickerOverlay) return;
+  renderSavedPicker();
+  el.savedPickerOverlay.classList.remove('hidden');
+  toggleChatAttachMenu(false);
+}
+
+function closeSavedPicker() {
+  el.savedPickerOverlay?.classList.add('hidden');
+}
+
+function renderSavedPicker() {
+  if (!el.savedPickerList) return;
+  const papers = Array.isArray(S.bookmarks) ? S.bookmarks : [];
+  el.savedPickerEmpty?.toggleAttribute('hidden', papers.length > 0);
+  el.savedPickerList.innerHTML = papers.map(paper => {
+    const meta = [paper.year, paper.journal].filter(Boolean).join(' · ');
+    const access = paper.accessCategory === 'free' ? 'Acceso libre'
+      : paper.accessCategory === 'oneclick' ? '1 clic'
+        : paper.accessCategory === 'paid' ? 'Pago' : 'Acceso sin verificar';
+    return `
+      <button type="button" class="saved-picker-item" data-saved-id="${esc(paper.id || '')}">
+        <span class="saved-picker-main">
+          <span class="saved-picker-name">${esc(paper.title || 'Sin título')}</span>
+          <span class="saved-picker-meta">${esc(meta || 'Sin datos de revista')}</span>
+        </span>
+        <span class="saved-picker-access">${esc(access)}</span>
+      </button>
+    `;
+  }).join('');
+}
+
+function attachSavedPaper(paperId) {
+  const paper = S.bookmarks.find(p => String(p.id) === String(paperId));
+  if (!paper) return;
+  const abstract = String(paper.abstract || paper.abstractEs || '').trim();
+  if (!abstract) {
+    showToast('Ese paper no tiene abstract guardado; abrilo una vez para completarlo.');
+    return;
+  }
+  const parts = [`Título: ${paper.title || 'Sin título'}`];
+  if (paper.authors) parts.push(`Autores: ${paper.authors}`);
+  if (paper.journal) parts.push(`Revista: ${paper.journal}`);
+  if (paper.year) parts.push(`Año: ${paper.year}`);
+  if (paper.doi) parts.push(`DOI: ${paper.doi}`);
+  parts.push(`Abstract: ${abstract}`);
+  addChatAttachment({
+    kind: 'saved',
+    name: paper.title || 'Paper guardado',
+    text: parts.join('\n')
+  });
+  closeSavedPicker();
 }
 
 function initChat() {
   if (!el.chatMessages) return;
-  let saved = 'all';
-  let savedDepth = 'quick';
+  let savedAccess = 'all';
+  let savedSize = 'medium';
+  let savedThink = false;
+  let savedPaper = 'all';
+  let savedFilters = null;
   try {
-    saved = localStorage.getItem(CHAT_ACCESS_KEY) || 'all';
-    savedDepth = localStorage.getItem(CHAT_DEPTH_KEY) || 'quick';
+    savedAccess = localStorage.getItem(CHAT_ACCESS_KEY) || 'all';
+    savedSize = localStorage.getItem(CHAT_SIZE_KEY) || 'medium';
+    savedThink = localStorage.getItem(CHAT_THINK_KEY) === '1';
+    savedPaper = localStorage.getItem(CHAT_PAPER_KEY) || 'all';
+    savedFilters = JSON.parse(localStorage.getItem(CHAT_FILTERS_KEY) || 'null');
   } catch { }
-  setChatAccess(saved, { persist: false });
-  setChatDepth(savedDepth, { persist: false });
+  setChatSize(savedSize, { persist: false });
+  setChatThink(savedThink, { persist: false });
+  setChatPaperType(savedPaper, { persist: false });
+  applyChatFilters({ ...(savedFilters || {}), access: savedAccess });
+  renderChatAttachments();
 
   if (!S.activeChatId && S.chats.length) {
     S.activeChatId = [...S.chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0].id;
@@ -5240,6 +6518,17 @@ function buildChatMessage(msg) {
     bubble.className = 'chat-bubble chat-bubble-user';
     bubble.textContent = msg.content || '';
     wrap.appendChild(bubble);
+    if (Array.isArray(msg.attachments) && msg.attachments.length) {
+      const chips = document.createElement('div');
+      chips.className = 'chat-bubble-attachments';
+      chips.innerHTML = msg.attachments.map(a => `
+        <span class="chat-bubble-attachment">
+          <i class="ph-bold ${a.kind === 'image' ? 'ph-image' : a.kind === 'saved' ? 'ph-bookmark-simple' : 'ph-file-pdf'}"></i>
+          ${esc(a.name || 'Adjunto')}
+        </span>
+      `).join('');
+      wrap.appendChild(chips);
+    }
     return wrap;
   }
 
@@ -5893,31 +7182,52 @@ async function sendChatMessage() {
     return;
   }
 
-  const question = (el.chatInput.value || '').trim();
-  if (!question) return;
+  const typed = (el.chatInput.value || '').trim();
+  // Con material adjunto se puede enviar sin escribir: se usa una consigna
+  // neutra para que el backend sepa qué hacer con los archivos.
+  const attachments = chatAttachments
+    .filter(a => !a.loading && a.text)
+    .map(a => ({ kind: a.kind, name: a.name, text: a.text }));
+  if (!typed && !attachments.length) return;
+  if (chatAttachments.some(a => a.loading)) {
+    showToast('Esperá a que terminen de procesarse los adjuntos.');
+    return;
+  }
+  const question = typed || 'Analizá el material que adjunté y decime qué aporta para mi investigación.';
 
   let chat = getActiveChat();
   if (!chat) chat = createChat({ focus: false });
 
   const access = getChatAccess();
+  const filters = getChatFilters();
+  const size = getChatSize();
+  const think = getChatThink();
   chat.access = access;
-  chat.depth = getChatDepth();
+  chat.depth = think ? 'deep' : 'quick';
   try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
+  persistChatFilters();
 
   const userMsg = {
     id: newChatId(),
     role: 'user',
-    content: question,
+    content: typed || `Adjunté ${attachments.length} archivo${attachments.length === 1 ? '' : 's'} para analizar.`,
+    attachments: attachments.map(a => ({ kind: a.kind, name: a.name })),
     sources: [],
     createdAt: Date.now()
   };
   chat.messages.push(userMsg);
   const userCount = chat.messages.filter(m => m.role === 'user').length;
-  if (userCount === 1) chat.title = question.slice(0, 60);
+  if (userCount === 1) {
+    chat.title = typed
+      ? typed.slice(0, 60)
+      : (attachments[0]?.name || 'Consulta con adjuntos').slice(0, 60);
+  }
   chat.updatedAt = Date.now();
 
   el.chatInput.value = '';
   autosizeChatInput();
+  clearChatAttachments();
+  toggleChatAttachMenu(false);
 
   const history = chat.messages
     .slice(0, -1)
@@ -5958,7 +7268,18 @@ async function sendChatMessage() {
         question,
         query,
         access,
-        depth: getChatDepth(),
+        depth: think ? 'deep' : 'quick',
+        size,
+        think,
+        filters: {
+          access: filters.access,
+          year_from: filters.year_from,
+          year_to: filters.year_to,
+          quartile: filters.quartile,
+          study_type: filters.study,
+          paper_type: filters.paper_type
+        },
+        attachments,
         history,
         client_id: getChatClientId()
       })
@@ -6029,7 +7350,110 @@ function setupChatEventListeners() {
 
   el.chatInput?.addEventListener('input', () => {
     autosizeChatInput();
-    if (el.btnChatSend) el.btnChatSend.disabled = !el.chatInput.value.trim() && !S.chatStreaming;
+    if (el.btnChatSend) {
+      el.btnChatSend.disabled = !S.chatStreaming
+        && !el.chatInput.value.trim()
+        && !chatAttachments.some(a => !a.loading);
+    }
+  });
+
+  // Extensión: botón «Extensión» con barra deslizable de 3 puntos.
+  const syncChatSizeToChat = () => {
+    const chat = getActiveChat();
+    if (chat) {
+      chat.size = getChatSize();
+      chat.updatedAt = Date.now();
+      persistChats();
+    }
+  };
+
+  el.btnChatSize?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleChatSizeMenu();
+  });
+
+  el.chatSizeMenu?.querySelectorAll('[data-size-step]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setChatSize(CHAT_SIZE_ORDER[parseInt(btn.dataset.sizeStep, 10)] || 'medium');
+      syncChatSizeToChat();
+    });
+  });
+
+  el.chatSizeRange?.addEventListener('input', () => {
+    setChatSize(CHAT_SIZE_ORDER[parseInt(el.chatSizeRange.value, 10)] || 'medium', { persist: false });
+  });
+  el.chatSizeRange?.addEventListener('change', () => {
+    setChatSize(CHAT_SIZE_ORDER[parseInt(el.chatSizeRange.value, 10)] || 'medium');
+    syncChatSizeToChat();
+  });
+
+  el.btnChatThink?.addEventListener('click', () => {
+    setChatThink(!getChatThink());
+    const chat = getActiveChat();
+    if (chat) {
+      chat.depth = getChatThink() ? 'deep' : 'quick';
+      chat.updatedAt = Date.now();
+      persistChats();
+    }
+  });
+
+  el.btnChatPaperType?.addEventListener('click', () => {
+    const order = ['all', 'review', 'article'];
+    const next = order[(order.indexOf(getChatPaperType()) + 1) % order.length];
+    setChatPaperType(next);
+    showToast(`Tipo de paper: ${CHAT_PAPER_META[next].label}`, { duration: 1600 });
+  });
+
+  el.chatYearFrom?.addEventListener('change', () => {
+    persistChatFilters();
+    updateChatFilterLabel();
+  });
+  el.chatYearTo?.addEventListener('change', () => {
+    persistChatFilters();
+    updateChatFilterLabel();
+  });
+
+  el.btnChatFiltersClear?.addEventListener('click', () => {
+    clearChatFilters();
+    showToast('Filtros del chat restablecidos.', { duration: 1600 });
+  });
+
+  // Adjuntos: menú, archivos del dispositivo y papers guardados.
+  el.btnChatAttach?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleChatAttachMenu();
+  });
+
+  el.chatAttachMenu?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-attach]');
+    if (!btn) return;
+    if (btn.dataset.attach === 'file') {
+      toggleChatAttachMenu(false);
+      el.chatAttachFile?.click();
+    } else if (btn.dataset.attach === 'saved') {
+      openSavedPicker();
+    }
+  });
+
+  el.chatAttachFile?.addEventListener('change', () => {
+    const files = [...(el.chatAttachFile.files || [])];
+    el.chatAttachFile.value = '';
+    files.forEach(file => uploadChatAttachment(file));
+  });
+
+  el.chatAttachments?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-attach-remove]');
+    if (!btn) return;
+    removeChatAttachment(btn.dataset.attachRemove);
+  });
+
+  el.savedPickerList?.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-saved-id]');
+    if (item) attachSavedPaper(item.dataset.savedId);
+  });
+  el.btnCloseSavedPicker?.addEventListener('click', () => closeSavedPicker());
+  el.savedPickerOverlay?.addEventListener('click', (e) => {
+    if (e.target === el.savedPickerOverlay) closeSavedPicker();
   });
 
   el.chatInput?.addEventListener('keydown', (e) => {
@@ -6084,6 +7508,12 @@ function setupChatEventListeners() {
     if (el.chatAccessSeg && !el.chatAccessSeg.hasAttribute('hidden') && !e.target.closest('.chat-filter')) {
       toggleChatFilter(false);
     }
+    if (el.chatAttachMenu && !el.chatAttachMenu.hasAttribute('hidden') && !e.target.closest('.chat-attach-wrap')) {
+      toggleChatAttachMenu(false);
+    }
+    if (el.chatSizeMenu && !el.chatSizeMenu.hasAttribute('hidden') && !e.target.closest('.chat-size-wrap')) {
+      toggleChatSizeMenu(false);
+    }
     if (!e.target.closest('.chat-download')) {
       el.chatMessages?.querySelectorAll('.chat-download-menu:not([hidden])').forEach(menu => {
         menu.setAttribute('hidden', '');
@@ -6093,7 +7523,16 @@ function setupChatEventListeners() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    // Con un subpanel abierto, Escape primero vuelve a la raíz de filtros.
+    if (el.chatAccessSeg && !el.chatAccessSeg.hasAttribute('hidden')
+      && el.chatAccessSeg.classList.contains('is-sub')) {
+      showChatFilterPanel(null);
+      return;
+    }
     toggleChatFilter(false);
+    toggleChatSizeMenu(false);
+    toggleChatAttachMenu(false);
+    closeSavedPicker();
     el.chatMessages?.querySelectorAll('.chat-download-menu:not([hidden])').forEach(menu => {
       menu.setAttribute('hidden', '');
       menu.parentElement?.querySelector('[data-act="download"]')?.setAttribute('aria-expanded', 'false');
@@ -6101,29 +7540,41 @@ function setupChatEventListeners() {
   });
 
   el.chatAccessSeg?.addEventListener('click', (e) => {
-    const btn = e.target.closest('.chat-access-option');
-    if (!btn) return;
-
-    if (btn.dataset.depth) {
-      setChatDepth(btn.dataset.depth);
-      const chat = getActiveChat();
-      if (chat) {
-        chat.depth = getChatDepth();
-        chat.updatedAt = Date.now();
-        persistChats();
-      }
-      toggleChatFilter(false);
+    const back = e.target.closest('[data-filter-back]');
+    if (back) {
+      showChatFilterPanel(null);
+      return;
+    }
+    const open = e.target.closest('[data-filter-open]');
+    if (open) {
+      showChatFilterPanel(open.dataset.filterOpen);
       return;
     }
 
+    const btn = e.target.closest('.chat-access-option');
+    if (!btn) return;
+
+    if (btn.dataset.quartile) {
+      setChatQuartile(btn.dataset.quartile);
+      showChatFilterPanel(null);
+      return;
+    }
+    if (btn.dataset.study) {
+      setChatStudy(btn.dataset.study);
+      showChatFilterPanel(null);
+      return;
+    }
+    if (!btn.dataset.access) return;
+
     const access = setChatAccess(btn.dataset.access);
+    persistChatFilters();
     const chat = getActiveChat();
     if (chat) {
       chat.access = access;
       chat.updatedAt = Date.now();
       persistChats();
     }
-    toggleChatFilter(false);
+    showChatFilterPanel(null);
   });
 
   el.chatMessages?.addEventListener('click', (e) => {
@@ -6173,14 +7624,14 @@ function setupChatEventListeners() {
 
     const upsell = e.target.closest('[data-upsell="pro"]');
     if (upsell) {
-      setChatDepth('deep');
+      setChatThink(true);
       const chat = getActiveChat();
       if (chat) {
         chat.depth = 'deep';
         chat.updatedAt = Date.now();
         persistChats();
       }
-      showToast('Extensión Profunda activada: más fuentes, más matices y secciones desplegables.');
+      showToast('“Pensar más” activado: respuesta más profunda, con más fuentes y matices.');
       return;
     }
 

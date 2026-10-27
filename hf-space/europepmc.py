@@ -618,14 +618,18 @@ async def search(
     mode: str = 'broad',
     client_: Optional[httpx.AsyncClient] = None,
     balanced: bool = False,
+    extra: str = '',
 ) -> tuple[list[dict], dict]:
     """Una pagina de resultados. Devuelve (works, meta).
 
     `balanced` solo lo usa la busqueda de la interfaz cuando el orden pedido es
     relevancia: mezcla la corriente del motor con la de mas citados para que la
     primera pagina no sea unicamente lo publicado este anio.
+
+    `extra` agrega clausulas del propio dialecto de Europe PMC (por ejemplo
+    `PUB_YEAR:[2020 TO 2025]` o un tipo de publicacion) sin tocar el texto.
     """
-    query = build_query(text, access=access, scope=scope, mode=mode)
+    query = build_query(text, access=access, scope=scope, mode=mode, extra=extra)
     balanced = balanced and (sort or '') in ('', 'relevance')
     cache_key = f'{query}|{page_size}|{cursor}|{"balanced" if balanced else (sort or "")}'
     cached = _cache_get(cache_key)
@@ -1066,6 +1070,145 @@ def _front_meta(root: ET.Element) -> dict:
                 parts.append(f'{head.rstrip(":")}: {body}'.strip(': '))
         meta['abstract'] = ' '.join(p for p in parts if p)
     return meta
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        clean = re.sub(r'\s+', ' ', str(value or '')).strip()
+        key = clean.lower()
+        if clean and key not in seen:
+            seen.add(key)
+            out.append(clean)
+    return out
+
+
+def xml_extras(xml_text: str) -> dict:
+    """Metadatos de investigacion que no vienen en la busqueda de Europe PMC.
+
+    La API de busqueda (`resultType=core`) no expone afiliaciones ni
+    financiamiento: solo estan en el XML JATS del texto completo. Esta funcion
+    los extrae para la ficha del paper junto con licencia, volumen, fechas y
+    autor de correspondencia.
+    """
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return {'available': False}
+
+    front = _child(root, 'front')
+    article_meta = _child(front, 'article-meta') if front is not None else None
+    journal_meta = _child(front, 'journal-meta') if front is not None else None
+    extras: dict = {'available': True}
+
+    affiliations = [_itertext(aff) for aff in root.iter() if _local(aff.tag) == 'aff']
+    extras['affiliations'] = _unique(affiliations)[:12]
+
+    funders: list[str] = []
+    awards: list[str] = []
+    for node in root.iter():
+        tag = _local(node.tag)
+        if tag == 'funding-source':
+            text = _itertext(node)
+            if text:
+                funders.append(text)
+        elif tag == 'award-id':
+            text = _itertext(node)
+            if text:
+                awards.append(text)
+    statements: list[str] = []
+    for node in root.iter():
+        if _local(node.tag) in ('funding-statement', 'funding-group'):
+            text = _itertext(node)
+            if text and len(text) > 20:
+                statements.append(text)
+    extras['funders'] = _unique(funders)[:8]
+    extras['awards'] = _unique(awards)[:8]
+    extras['funding_statement'] = (_unique(statements)[:1] or [''])[0][:900]
+
+    licenses: list[str] = []
+    for node in root.iter():
+        if _local(node.tag) == 'license':
+            text = _itertext(node)
+            href = str(node.get('{http://www.w3.org/1999/xlink}href') or '')
+            label = text or href
+            if label:
+                licenses.append(label)
+    extras['licenses'] = _unique(licenses)[:3]
+
+    if article_meta is not None:
+        for key in ('volume', 'issue', 'fpage', 'lpage', 'elocation-id'):
+            value = _itertext(_child(article_meta, key))
+            if value:
+                extras[key] = value
+        if 'fpage' in extras and 'lpage' in extras and 'elocation-id' not in extras:
+            extras['pages'] = f"{extras['fpage']}–{extras['lpage']}"
+        elif 'elocation-id' in extras:
+            extras['pages'] = extras['elocation-id']
+        pub_types = [
+            _itertext(subject)
+            for subject in article_meta.iter()
+            if _local(subject.tag) == 'subject'
+        ]
+        extras['pub_types'] = _unique(pub_types)[:6]
+        copyright_text = _itertext(_child(article_meta, 'copyright-statement'))
+        if copyright_text:
+            extras['copyright'] = copyright_text[:300]
+
+        history: dict[str, str] = {}
+        history_node = _child(article_meta, 'history')
+        if history_node is not None:
+            for date in _children(history_node, 'date'):
+                kind = str(date.get('date-type') or '').strip().lower()
+                day = _itertext(_child(date, 'day'))
+                month = _itertext(_child(date, 'month'))
+                year = _itertext(_child(date, 'year'))
+                stamp = '-'.join(part for part in (year, month, day) if part)
+                if kind and stamp:
+                    history[kind] = stamp
+        extras['history'] = history
+
+        corresponding: list[str] = []
+        emails: list[str] = []
+        for contrib in article_meta.iter():
+            if _local(contrib.tag) != 'contrib':
+                continue
+            if str(contrib.get('corresp') or '').lower() not in ('yes', 'true'):
+                continue
+            name = _child(contrib, 'name')
+            if name is not None:
+                full = ' '.join(
+                    part for part in (
+                        _itertext(_child(name, 'given-names')),
+                        _itertext(_child(name, 'surname')),
+                    ) if part
+                )
+                if full:
+                    corresponding.append(full)
+            for email in contrib.iter():
+                if _local(email.tag) == 'email':
+                    value = _itertext(email)
+                    if value:
+                        emails.append(value)
+        extras['corresponding'] = _unique(corresponding)[:3]
+        extras['emails'] = _unique(emails)[:3]
+
+    if journal_meta is not None:
+        journal_ids = [
+            _itertext(node) for node in journal_meta.iter()
+            if _local(node.tag) == 'journal-id'
+        ]
+        extras['journal_ids'] = _unique(journal_ids)[:4]
+        issns = [
+            _itertext(node) for node in journal_meta.iter()
+            if _local(node.tag) == 'issn'
+        ]
+        extras['issns'] = _unique(issns)[:3]
+        publisher = _itertext(_child(journal_meta, 'publisher'))
+        if publisher:
+            extras['publisher'] = publisher
+    return extras
 
 
 def _table_block(table_wrap: ET.Element) -> Optional[dict]:

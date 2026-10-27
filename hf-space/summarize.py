@@ -19,7 +19,7 @@ from typing import Optional
 import httpx
 import pymupdf
 
-from costs import estimate_cost, record_cost
+from costs import log_usage
 
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
 SUMMARY_MODEL = os.getenv('SUMMARY_MODEL', os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
@@ -135,33 +135,26 @@ async def _request(messages: list[dict], api_keys: list[str],
     raise RuntimeError(f'No se pudo generar el resumen: {last_error}')
 
 
-def _record(usage: dict, title: str, mode: str, input_chars: int) -> dict:
-    cost = estimate_cost(usage)
-    try:
-        record_cost({
-            'doc_id': f'summary-{int(time.time() * 1000)}',
-            'kind': 'summary',
-            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'title': title[:120],
-            'pages': 0,
-            'model': SUMMARY_MODEL,
-            'source': 'summary',
-            'mode': mode,
-            'input_chars': input_chars,
-            'cache_hit_tokens': int(usage.get('prompt_cache_hit_tokens') or 0),
-            **cost,
-        })
-    except Exception:
-        pass
-    print(
-        f"[cost-summary] modo {mode} | {cost['total_tokens']} tokens | "
-        f"${cost['cost_usd']:.6f} USD",
-        flush=True,
+def _record(usage: dict, title: str, mode: str, input_chars: int,
+            elapsed_sec: float = 0.0) -> dict:
+    record = log_usage(
+        'summary', usage,
+        model=SUMMARY_MODEL,
+        elapsed_sec=elapsed_sec,
+        title=title,
+        doc_id=f'summary-{int(time.time() * 1000)}',
+        source='summary',
+        mode=mode,
+        input_chars=input_chars,
     )
-    return cost
+    return {key: record[key] for key in (
+        'prompt_tokens', 'completion_tokens', 'total_tokens',
+        'cache_hit_tokens', 'cost_usd',
+    ) if key in record}
 
 
 async def summarize_basic(data: dict, api_keys: list[str]) -> dict:
+    started = time.time()
     abstract = str(data.get('abstract') or '').strip()
     if len(abstract) < 200:
         raise ValueError('Este artículo no tiene un resumen disponible. Usá "Resumen avanzado" para leer el PDF.')
@@ -174,11 +167,13 @@ async def summarize_basic(data: dict, api_keys: list[str]) -> dict:
         [{'role': 'system', 'content': BASIC_PROMPT}, {'role': 'user', 'content': user}],
         api_keys,
     )
-    cost = _record(usage, str(data.get('title') or ''), 'basic', len(user))
+    cost = _record(usage, str(data.get('title') or ''), 'basic', len(user),
+                   elapsed_sec=time.time() - started)
     return {'summary': content, 'mode': 'basic', 'usage': usage, 'cost': cost}
 
 
 async def summarize_full_text(data: dict, pdf_bytes: bytes, api_keys: list[str]) -> dict:
+    started = time.time()
     text, pages = extract_pdf_text(pdf_bytes)
     if len(text) < 1500:
         raise ValueError('El PDF no tiene texto seleccionable suficiente para resumir.')
@@ -192,6 +187,7 @@ async def summarize_full_text(data: dict, pdf_bytes: bytes, api_keys: list[str])
         [{'role': 'system', 'content': FULL_PROMPT}, {'role': 'user', 'content': user}],
         api_keys,
     )
-    cost = _record(usage, str(data.get('title') or ''), 'advanced', len(user))
+    cost = _record(usage, str(data.get('title') or ''), 'advanced', len(user),
+                   elapsed_sec=time.time() - started)
     return {'summary': content, 'mode': 'advanced', 'pages': pages,
             'usage': usage, 'cost': cost}

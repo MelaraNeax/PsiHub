@@ -11,3 +11,4 @@ cache/
 hf-space/cache/
 __pycache__/
 *.pyc
+scratch/

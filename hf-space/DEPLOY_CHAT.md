@@ -185,34 +185,76 @@ brechas en vez de rellenarlas, y registra en el log `[chat-citas]` si quedaron
 citas fuera de rango o fuentes sin usar. Si el modelo agota `CHAT_MAX_OUTPUT_TOKENS`,
 se pide una única continuación acotada en lugar de entregar el texto cortado.
 
-### Opciones del chat (menú de la barra de escritura)
+### Opciones del chat (barra de escritura)
 
 | Grupo | Opciones | Efecto |
 |---|---|---|
-| Extensión | **Rápida** (gratis) | Hasta `CHAT_MAX_SOURCES` fuentes (12), 280-380 palabras, ~$0.001 |
-| Extensión | **Profunda** (plan pago, `data-locked`) | Hasta `CHAT_DEEP_MAX_SOURCES` (22) fuentes con relevancia ≥ 0.18, 750-1000 palabras, secciones de mecanismos y tabla comparativa, ~$0.002 |
-| Tipo de paper | Todos / Gratis / 1 clic / Pago | Filtra por `is_oa` y verifica el PDF real; "Gratis" incluye los de 1 clic |
+| Extensión | Botón **Extensión** con barra de 3 puntos: **Poco / Mediano / Largo** (`size`) | Topes relativos al plan: en `basic` van de ~4 a 9 fuentes; en `pro` cada nivel pide más fuentes y palabras. El backend lo resuelve en `SIZE_PROFILES` |
+| Pensar más | Interruptor (`think`) | Activa el razonamiento del modelo y la profundidad de búsqueda (más lento, más matices). Antes era el botón "Profunda" |
+| Tipo de paper | Todos / Revisiones / Estudios | Agrega `PUB_TYPE` a la consulta de Europe PMC y refina la selección |
+| Acceso | Todos / Gratis / 1 clic / Pago | Filtra por `is_oa` y verifica el PDF real |
+| Periodo | Desde / Hasta | `PUB_YEAR:[a TO b]` |
+| Cuartil | Q1-Q4 | Filtro estimado por la posición de la revista en PsiHub. **No es el SJR oficial**: Europe PMC no publica cuartiles y Scimago bloquea el acceso automático. Se etiqueta como estimado en la interfaz |
+| Tipo de estudio | Meta-análisis / Revisión / ECA / Observacional / Cualitativo | Consulta por diseño + filtro de respaldo sobre las fuentes elegidas |
 
-El cuerpo del `POST /api/chat` acepta `{"depth": "quick" | "deep"}` además de
-`access`. Mientras el plan pago no exista, el frontend mantiene "Profunda"
-bloqueada (solo muestra un aviso) y, cuando la respuesta rápida se queda corta
-de fuentes, agrega debajo del bloque un botón de conversión:
-**"Usaste 12 de 22 fuentes relevantes · Plan Pro"**. Ese número
-(`relevant`) lo calcula el servidor contando lo que entraría en una corrida
-profunda sobre la misma búsqueda; cuando se habilite la compra, el botón solo
-tiene que apuntar al checkout.
+Los filtros viajan en `filters` y se combinan con `access`. En la interfaz el
+menú muestra primero las cuatro categorías (con el valor elegido) y cada una
+se abre en su propio subpanel, para no desplegar un panel larguísimo. Si un
+filtro deja menos de 4 fuentes, el backend devuelve las fuentes sin filtrar en
+vez de una respuesta vacía (mejor una base algo más amplia que una alucinación).
 
-El evento `sources` incluye `relevant` y `depth`, y el endpoint acepta también
-la caché de búsqueda (misma pregunta dentro de `CHAT_SEARCH_CACHE_TTL`), que
-conserva el conteo para que el aviso no desaparezca al repetir la pregunta.
+### Adjuntos (`POST /api/chat/attach`)
+
+El composer acepta hasta **4 adjuntos** por consulta:
+
+- **PDF** — se extrae el texto en memoria con PyMuPDF (máx. 25 MB, 80 páginas,
+  80 000 caracteres). Si el PDF es escaneado (menos de 120 caracteres) se pide
+  subir capturas como imágenes.
+- **Imagen** (PNG/JPG/WebP) — se transcribe con DeepSeek Vision y se registra
+  el costo como `kind=attachment`, `detail=image`.
+- **Paper guardado** — el frontend envía título, autores, revista, DOI y
+  abstract; no hay llamada extra al modelo.
+
+El texto se reenvía dentro de `attachments` al pedir la respuesta. El backend
+lo inyecta como contexto con topes (`CHAT_ATTACHMENT_MAX_CHARS` = 9 000 por
+archivo, `CHAT_ATTACHMENT_TOTAL_CHARS` = 26 000 en total) y lo marca como
+material del usuario, separado de las fuentes citables.
 
 ## Endpoints auxiliares (costo cero o mínimo)
 
 | Endpoint | Qué hace |
 |---|---|
+| `POST /api/chat/attach` | Extrae texto de un PDF o transcribe una imagen para el chat. Procesa en memoria y no guarda el archivo |
 | `POST /api/enrich` | Completa abstract, año, DOI, autores y revista faltantes usando Crossref, Europe PMC y Semantic Scholar. Sin costo de modelo (solo APIs gratuitas + caché de 7 días) |
 | `POST /api/summarize` | `mode: "basic"` resume abstract y metadatos; `mode: "advanced"` + `pdf_url` descarga el PDF y resume el texto completo (~$0.001-0.003) |
 | `POST /api/summarize-pdf` | Resumen avanzado con un PDF que sube el usuario (papers de pago). Campos `file` y `payload` (JSON) |
+| `GET /api/work-meta` | Afiliaciones, financiamiento, licencia, volumen, ISSN y autor de correspondencia desde el XML JATS del PMC (`pmc:PMC…`, `doi` o `id`) |
+| `POST /api/export` | Genera RIS o BibTeX de una referencia (`format: "ris" \| "bibtex"`); el frontend lo descarga y se importa en Zotero, Mendeley o EndNote |
+| `GET /api/auth/me` | Valida un JWT de Supabase (`Authorization: Bearer …`) y devuelve `{id, email, role}`. Sin Supabase configurado responde 401 y la app sigue en modo local |
+
+### Login con Google (Supabase, opcional)
+
+El backend ya valida tokens (`hf-space/auth_supabase.py`) y el esquema
+`hf-space/supabase_schema.sql` define `profiles`, `folders`, `saved_papers`,
+`chats`, `summaries`, `translations` y `usage_events` con RLS por usuario.
+
+Para activarlo:
+
+1. Creá un proyecto gratuito en <https://supabase.com> y habilitá el proveedor
+   **Google** en Authentication → Providers.
+2. Ejecutá `supabase_schema.sql` en el SQL Editor.
+3. En Cloud Run configurá `SUPABASE_URL` y una de estas dos:
+   `SUPABASE_JWT_SECRET` (legado, HS256) o `SUPABASE_JWKS_URL`
+   (`https://<proyecto>.supabase.co/auth/v1/.well-known/jwks.json`, recomendado).
+4. En `index.html`, completá las metas `psyhub-supabase-url` y
+   `psyhub-supabase-anon`. El botón "Iniciar sesión con Google" pasa a usar
+   OAuth real; sin esos datos sigue el formulario local.
+5. En Supabase → Authentication → URL Configuration agregá la URL del
+   frontend como *Redirect URL*.
+
+Los tokens vuelven en el hash, `src/services/auth.js` los guarda y limpia la
+URL. Las tablas todavía no se sincronizan desde el frontend: el backend y el
+esquema quedan listos para hacerlo sin migrar datos locales.
 
 ---
 

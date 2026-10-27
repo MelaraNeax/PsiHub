@@ -34,7 +34,7 @@ import httpx
 import europepmc
 import storage
 import enrich
-from costs import estimate_cost, record_cost
+from costs import log_usage
 
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
 CHAT_MODEL = os.getenv('CHAT_MODEL', os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
@@ -45,7 +45,7 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
 # Marca de la version del pipeline de chat. Se expone en /health para poder
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
-CHAT_PIPELINE_VERSION = '2026-10-27-europepmc-v6'
+CHAT_PIPELINE_VERSION = '2026-10-27-relative-size-v7'
 
 # Presupuesto de contexto: 12 fuentes con ~460 caracteres de resumen cubren
 # mejor cada constructo (y dejan entrar papers discrepantes) sin disparar el
@@ -59,12 +59,9 @@ CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '500'))
 # Modo profundo (marcado PRO): mas fuentes, abstracts mas largos y respuestas
 # extensas, con secciones plegables en la interfaz. La relevancia minima sube para que las 20+ fuentes no
 # incluyan papers apenas relacionados.
-DEEP_MAX_SOURCES = max(MAX_SOURCES, int(os.getenv('CHAT_DEEP_MAX_SOURCES', '22')))
-DEEP_ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_DEEP_ABSTRACT_CHARS', '560')))
-DEEP_MAX_OUTPUT = max(600, int(os.getenv('CHAT_DEEP_MAX_OUTPUT_TOKENS', '3200')))
+# Techo de fuentes relevantes para el aviso del plan Pro.
+DEEP_MAX_SOURCES = max(MAX_SOURCES, int(os.getenv('CHAT_DEEP_MAX_SOURCES', '28')))
 DEEP_MIN_RELEVANCE = float(os.getenv('CHAT_DEEP_MIN_RELEVANCE', '0.18'))
-DEEP_WORD_TARGET = os.getenv('CHAT_DEEP_WORDS', '1250 a 1450')
-QUICK_WORD_TARGET = os.getenv('CHAT_QUICK_WORDS', '280 a 380')
 DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '3')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '450')))
@@ -1140,6 +1137,7 @@ def _spec(
     sort: Optional[str] = None,
     mode: str = 'broad',
     scope: str = 'psy',
+    extra: str = '',
 ) -> dict:
     """Consulta independiente del motor (Europe PMC u OpenAlex)."""
     return {
@@ -1149,6 +1147,7 @@ def _spec(
         'sort': sort,
         'mode': mode,
         'scope': scope,
+        'extra': extra,
     }
 
 
@@ -1169,6 +1168,7 @@ async def _engine_search(spec: dict, client: Optional[httpx.AsyncClient]) -> lis
                 scope=spec.get('scope') or 'psy',
                 mode=spec.get('mode') or 'broad',
                 client_=client,
+                extra=spec.get('extra') or '',
             )
             europepmc.STATE.ok()
             return works
@@ -1346,6 +1346,7 @@ async def search_sources(
     limit: Optional[int] = None,
     min_rel: Optional[float] = None,
     depth: str = 'quick',
+    filters: Optional[dict] = None,
 ) -> tuple[list[dict], dict]:
     """Busca papers por concepto, puente y revision; devuelve los mas afines.
 
@@ -1358,9 +1359,14 @@ async def search_sources(
     if not query and not question:
         return [], {'count': 0, 'query': '', 'candidates': 0}
 
+    filters = normalize_filters(filters)
+    filter_extra = filters_clause(filters)
     specs = _plan_query_specs(plan, question, query)
     if not specs:
         return [], {'count': 0, 'query': query, 'candidates': 0}
+    if filter_extra:
+        for spec in specs:
+            spec['extra'] = filter_extra
     queries = [s['q'] for s in specs]
     concepts = _plan_concepts(plan)
 
@@ -1369,6 +1375,7 @@ async def search_sources(
         f'{access}|{scope}|{depth}|{limit or MAX_SOURCES}|'
         + '|'.join(sorted(q.lower() for q in queries))
         + '#' + '|'.join(c['name'].lower() for c in concepts)
+        + '@' + filters.get('quartile', 'all') + '|' + filter_extra
     )
     cached = _search_cache.get(cache_key)
     if cached and cached[0] > time.time():
@@ -1491,7 +1498,7 @@ async def search_sources(
             try:
                 extra_fields = await asyncio.wait_for(
                     enrich.enrich_items([it['source'] for it in pending]),
-                    timeout=12.0,
+                    timeout=7.5,
                 )
             except Exception as exc:  # noqa: BLE001 - nunca bloquea la respuesta
                 log_fn(f'[chat-enrich] omitido: {type(exc).__name__}: {_redact(exc)}')
@@ -1528,6 +1535,10 @@ async def search_sources(
         it['source']
         for it in _select_sources(items, len(concepts), limit or MAX_SOURCES, min_rel)
     ]
+    before_filter = len(related)
+    related = apply_filters(related, filters)
+    if len(related) != before_filter:
+        log_fn(f'[chat-filters] {before_filter} -> {len(related)} fuentes')
 
     if access == 'oneclick' and probe_fn is not None:
         related = await _probe_oneclick(related, probe_fn)
@@ -1834,47 +1845,200 @@ def _concept_notes(plan: Optional[dict], meta: Optional[dict]) -> str:
     return '\n\n'.join(out) + '\n\n' if out else ''
 
 
-def depth_profile(depth: str) -> dict:
-    """Parametros de contexto y salida segun la extension elegida en la app."""
+# La extension es relativa al plan: el mismo boton "mediano" rinde mas en Pro.
+# Cada combinacion fija fuentes, caracteres por abstract, tope de salida y
+# palabras objetivo. "Pensar mas" no cambia el largo: activa razonamiento.
+SIZE_PROFILES = {
+    ('basic', 'small'):  (8, 380, 650, '180 a 260', '2 a 3'),
+    ('basic', 'medium'): (12, 460, 900, '260 a 380', '3 a 5'),
+    ('basic', 'large'):  (16, 520, 1200, '380 a 520', '4 a 6'),
+    ('pro', 'small'):    (12, 480, 900, '260 a 380', '3 a 5'),
+    ('pro', 'medium'):   (20, 560, 1500, '450 a 650', '5 a 7'),
+    ('pro', 'large'):    (28, 640, 2400, '700 a 1000', '7 a 10'),
+}
+
+
+def depth_profile(depth: str = 'quick', size: str = 'medium', plan: str = 'basic',
+                  think: bool = False) -> dict:
+    """Parametros de contexto y salida segun extension, plan y razonamiento."""
+    plan = 'pro' if str(plan).lower() == 'pro' else 'basic'
+    size = str(size or 'medium').lower()
+    if size not in ('small', 'medium', 'large'):
+        size = 'medium'
+    # Compatibilidad con clientes viejos: "deep" equivalia a Pro/grande.
     if str(depth).lower() == 'deep':
-        return {
-            'depth': 'deep',
-            'sources': DEEP_MAX_SOURCES,
-            'abstract': DEEP_ABSTRACT_CHARS,
-            'max_tokens': DEEP_MAX_OUTPUT,
-            'min_rel': DEEP_MIN_RELEVANCE,
-            'words': DEEP_WORD_TARGET,
-            'instruction': (
-                'Redactá en español en MODO PROFUNDO, con esta estructura exacta y sin '
-                'numerar los títulos. (1) 2 a 4 frases de respuesta directa, sin encabezado. '
-                '(2) "## Hallazgos clave" con 6 a 8 viñetas, cita y nivel de respaldo; las '
-                'primeras viñetas van a lo que matiza, limita o invierte la respuesta '
-                '(condiciones, poblaciones, dosis), porque eso tiene que leerse sin abrir '
-                'nada. '
-                '(3) "## Mecanismos y modelos propuestos", 1 o 2 párrafos que separen '
-                'teoría de evidencia directa. '
-                '(4) "## Comparación de estudios" con una tabla si hay 3 o más estudios '
-                'comparables. '
-                '(5) "## Dónde la evidencia no coincide" con 2 a 4 contradicciones entre '
-                'resultados. '
-                '(6) "## Límites y qué buscar" con 4 viñetas. '
-                f'Extensión: {DEEP_WORD_TARGET} palabras; no cierres antes de 1150. '
-                'Cada afirmación relevante con su cita [n].'
-            ),
-        }
-    return {
-        'depth': 'quick',
-        'sources': MAX_SOURCES,
-        'abstract': ABSTRACT_CHARS,
-        'max_tokens': MAX_OUTPUT_TOKENS,
-        'min_rel': MIN_RELEVANCE,
-        'words': QUICK_WORD_TARGET,
-        'instruction': (
+        plan, size = 'pro', 'large'
+    sources, abstract, max_tokens, words, bullets = SIZE_PROFILES[(plan, size)]
+    if think:
+        # El razonamiento consume tokens de salida; se reserva margen para que
+        # la respuesta no quede truncada por el pensamiento.
+        max_tokens = int(max_tokens * 1.35)
+    deep = size == 'large' or (plan == 'pro' and size == 'medium')
+    if deep:
+        instruction = (
+            'Redactá en español en MODO PROFUNDO, con esta estructura exacta y sin '
+            'numerar los títulos. (1) 2 a 4 frases de respuesta directa, sin encabezado. '
+            f'(2) "## Hallazgos clave" con {bullets} viñetas, cita y nivel de respaldo; las '
+            'primeras viñetas van a lo que matiza, limita o invierte la respuesta '
+            '(condiciones, poblaciones, dosis), porque eso tiene que leerse sin abrir nada. '
+            '(3) "## Mecanismos y modelos propuestos", 1 o 2 párrafos que separen '
+            'teoría de evidencia directa. '
+            '(4) "## Comparación de estudios" con una tabla si hay 3 o más estudios comparables. '
+            '(5) "## Dónde la evidencia no coincide" con 2 a 4 contradicciones entre resultados. '
+            '(6) "## Límites y qué buscar" con 4 viñetas. '
+            f'Extensión: {words} palabras. Cada afirmación relevante con su cita [n]. '
+            'No afirmes el tipo de estudio si la fuente no lo declara. Nunca escribas que un '
+            'estudio "no existe": decí que no aparece en esta búsqueda.'
+        )
+    else:
+        instruction = (
             'Redactá en español con el formato en capas, en MODO RÁPIDO: '
-            '3 a 5 hallazgos, 1 a 3 discrepancias y 3 viñetas en Límites y qué buscar. '
-            f'Extensión: {QUICK_WORD_TARGET} palabras y las citas [n] indicadas.'
-        ),
+            f'{bullets} hallazgos, 1 a 3 discrepancias y 3 viñetas en Límites y qué buscar. '
+            f'Extensión: {words} palabras y las citas [n] indicadas. '
+            'No describas el diseño ni la muestra si la fuente no los declara. Nunca escribas '
+            'que un estudio "no existe": decí que no aparece en esta búsqueda.'
+        )
+    return {
+        'depth': 'deep' if deep else 'quick',
+        'size': size,
+        'plan': plan,
+        'think': bool(think),
+        'sources': sources,
+        'abstract': abstract,
+        'max_tokens': max_tokens,
+        'min_rel': DEEP_MIN_RELEVANCE if deep else MIN_RELEVANCE,
+        'words': words,
+        'instruction': instruction,
     }
+
+
+# Filtros de la barra del chat -> dialecto de Europe PMC. "observational" y
+# "qualitative" se resuelven despues, sobre el diseño detectado, porque EPMC no
+# tiene un PUB_TYPE fiable para ellos.
+STUDY_TYPE_QUERY = {
+    'meta': 'PUB_TYPE:"Meta-Analysis"',
+    'review': '(PUB_TYPE:"Systematic Review" OR PUB_TYPE:"Review")',
+    'rct': '(PUB_TYPE:"Randomized Controlled Trial" OR PUB_TYPE:"Clinical Trial")',
+}
+STUDY_TYPE_DESIGN = {
+    'observational': ('observacional', 'cohorte', 'transversal', 'caso-control',
+                      'longitudinal', 'encuesta', 'correlacional'),
+    'qualitative': ('cualitativ', 'fenomenolog', 'etnograf', 'entrevista',
+                    'grupo focal', 'grounded'),
+}
+
+
+def normalize_filters(filters: Optional[dict]) -> dict:
+    filters = filters if isinstance(filters, dict) else {}
+    def _year(value):
+        try:
+            year = int(value)
+        except (TypeError, ValueError):
+            return None
+        return year if 1900 <= year <= 2100 else None
+    year_from = _year(filters.get('year_from'))
+    year_to = _year(filters.get('year_to'))
+    if year_from and year_to and year_from > year_to:
+        year_from, year_to = year_to, year_from
+    study = str(filters.get('study_type') or 'all').lower()
+    if study not in ('all', 'meta', 'review', 'rct', 'observational', 'qualitative'):
+        study = 'all'
+    paper = str(filters.get('paper_type') or 'all').lower()
+    if paper not in ('all', 'article', 'review'):
+        paper = 'all'
+    quartile = str(filters.get('quartile') or 'all').lower()
+    if quartile not in ('all', 'q1', 'q2', 'q3', 'q4'):
+        quartile = 'all'
+    return {
+        'year_from': year_from,
+        'year_to': year_to,
+        'study_type': study,
+        'paper_type': paper,
+        'quartile': quartile,
+    }
+
+
+def filters_clause(filters: dict) -> str:
+    clauses: list[str] = []
+    year_from = filters.get('year_from')
+    year_to = filters.get('year_to')
+    if year_from or year_to:
+        start = year_from or 1900
+        end = year_to or 2100
+        clauses.append(f'PUB_YEAR:[{start} TO {end}]')
+    study = filters.get('study_type')
+    if study in STUDY_TYPE_QUERY:
+        clauses.append(STUDY_TYPE_QUERY[study])
+    if filters.get('paper_type') == 'review':
+        clauses.append('(PUB_TYPE:"Review" OR PUB_TYPE:"Systematic Review")')
+    elif filters.get('paper_type') == 'article':
+        clauses.append('NOT (PUB_TYPE:"Review" OR PUB_TYPE:"Systematic Review")')
+    return ' AND '.join(clauses)
+
+
+def apply_filters(sources: list[dict], filters: dict) -> list[dict]:
+    """Filtro de respaldo sobre las fuentes ya seleccionadas.
+
+    Solo se aplica si deja una base suficiente: con un filtro muy estricto es
+    preferible mostrar papers algo mas amplios que dejar la respuesta vacia.
+    """
+    year_from = filters.get('year_from')
+    year_to = filters.get('year_to')
+    study = filters.get('study_type')
+    quartile = filters.get('quartile') or 'all'
+    paper = filters.get('paper_type') or 'all'
+    if not (year_from or year_to or study in STUDY_TYPE_DESIGN or quartile != 'all' or paper != 'all'):
+        return sources
+
+    def _quartile(source: dict) -> str:
+        # Misma posicion 0-1 que usa el ranking de Europe PMC. Es una
+        # aproximacion de la revista, no el SJR oficial.
+        raw_impact = source.get('journalImpact')
+        try:
+            impact = float(raw_impact) if raw_impact is not None else 0.5
+        except (TypeError, ValueError):
+            impact = 0.5
+        if impact >= 0.75:
+            return 'q1'
+        if impact >= 0.5:
+            return 'q2'
+        if impact >= 0.25:
+            return 'q3'
+        return 'q4'
+
+    kept: list[dict] = []
+    for source in sources:
+        year = source.get('year')
+        if year:
+            if year_from and int(year) < year_from:
+                continue
+            if year_to and int(year) > year_to:
+                continue
+        elif year_from or year_to:
+            continue
+        if quartile != 'all' and _quartile(source) != quartile:
+            continue
+        if paper != 'all':
+            label = ' '.join(
+                str(part or '').lower() for part in (
+                    source.get('type') or '', source.get('design') or [],
+                )
+            )
+            is_review = 'review' in label or 'meta-analysis' in label
+            if paper == 'review' and not is_review:
+                continue
+            if paper == 'article' and is_review:
+                continue
+        if study in STUDY_TYPE_DESIGN:
+            design = ' '.join(
+                str(part or '').lower() for part in (
+                    source.get('design') or [], source.get('type') or '',
+                )
+            )
+            if not any(term in design for term in STUDY_TYPE_DESIGN[study]):
+                continue
+        kept.append(source)
+    return kept if len(kept) >= 4 else sources
 
 
 def _history_messages(history: Optional[list[dict]]) -> list[dict]:
@@ -1890,6 +2054,42 @@ def _history_messages(history: Optional[list[dict]]) -> list[dict]:
     return cleaned
 
 
+ATTACHMENT_MAX_CHARS = int(os.getenv('CHAT_ATTACHMENT_MAX_CHARS', '9000'))
+ATTACHMENT_TOTAL_CHARS = int(os.getenv('CHAT_ATTACHMENT_TOTAL_CHARS', '26000'))
+
+
+def _attachments_block(attachments: Optional[list[dict]]) -> str:
+    """Contexto de PDFs, imagenes o papers guardados que adjunto el usuario."""
+    if not attachments:
+        return ''
+    parts: list[str] = []
+    used = 0
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get('text') or '').strip()
+        if not text:
+            continue
+        remaining = ATTACHMENT_TOTAL_CHARS - used
+        if remaining <= 0:
+            break
+        chunk = text[:min(ATTACHMENT_MAX_CHARS, remaining)]
+        if len(text) > len(chunk):
+            chunk += '\n[…material recortado por longitud…]'
+        used += len(chunk)
+        kind = str(item.get('kind') or 'documento')
+        name = str(item.get('name') or 'Material adjunto')[:160]
+        parts.append(f'--- {name} ({kind}) ---\n{chunk}')
+    if not parts:
+        return ''
+    return (
+        'MATERIAL ADJUNTO DEL USUARIO (contexto directo, puede estar incompleto):\n'
+        + '\n\n'.join(parts)
+        + '\n\nUsalo cuando aporte a la pregunta. Si contradice a las fuentes, '
+          'señalá la discrepancia; no atribuyas al material nada que no diga.\n\n'
+    )
+
+
 def _build_messages(
     question: str,
     sources: list[dict],
@@ -1898,8 +2098,10 @@ def _build_messages(
     plan: Optional[dict] = None,
     meta: Optional[dict] = None,
     depth: str = 'quick',
+    profile: Optional[dict] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> list[dict]:
-    profile = depth_profile(depth)
+    profile = profile or depth_profile(depth)
     messages: list[dict] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
     messages.extend(_history_messages(history))
     axes = ''
@@ -1933,6 +2135,7 @@ def _build_messages(
             f'{axes}'
             f'{searched}'
             f'{_concept_notes(plan, meta)}'
+            f'{_attachments_block(attachments)}'
             f'FUENTES DISPONIBLES:\n{_digest(sources, profile["abstract"])}\n\n'
             f"{profile['instruction']}"
         ),
@@ -1960,11 +2163,14 @@ def _direct_messages(
     question: str,
     history: Optional[list[dict]],
     system_prompt: str,
+    attachments: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Conversacion sin busqueda: charla o acompanamiento."""
     messages: list[dict] = [{'role': 'system', 'content': system_prompt}]
     messages.extend(_history_messages(history))
-    messages.append({'role': 'user', 'content': question.strip()})
+    attached = _attachments_block(attachments)
+    content = f'{attached}PREGUNTA DEL USUARIO:\n{question.strip()}' if attached else question.strip()
+    messages.append({'role': 'user', 'content': content})
     return messages
 
 
@@ -2133,6 +2339,7 @@ async def _stream_completion(
     log_fn: Callable[[str], None],
     max_tokens: Optional[int] = None,
     temperature: float = 0.25,
+    think: bool = False,
 ):
     if not api_keys:
         raise ChatStartError('No hay API key de DeepSeek configurada.')
@@ -2143,7 +2350,7 @@ async def _stream_completion(
         'temperature': temperature,
         'stream': True,
         'stream_options': {'include_usage': True},
-        'thinking': {'type': 'disabled'},
+        'thinking': {'type': 'enabled' if think else 'disabled'},
         'max_tokens': max_tokens or MAX_OUTPUT_TOKENS,
     }
     last_error: Optional[BaseException] = None
@@ -2219,6 +2426,11 @@ async def stream_chat(
     log_fn: Callable[[str], None] = print,
     client_id: str = '',
     depth: str = 'quick',
+    size: str = 'medium',
+    think: bool = False,
+    plan: str = 'basic',
+    filters: Optional[dict] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> AsyncIterator[str]:
     """Genera eventos SSE: status, delta, sources, done o error.
 
@@ -2226,7 +2438,8 @@ async def stream_chat(
     lea como una redaccion y la lista de papers aparezca recien entonces.
     """
     started = time.time()
-    profile = depth_profile(depth)
+    profile = depth_profile(depth, size=size, plan=plan, think=think)
+    filters = normalize_filters(filters)
     question = (question or '').strip()[:2000]
     if not question:
         yield _sse({'type': 'error', 'message': 'La pregunta esta vacia.'})
@@ -2263,46 +2476,44 @@ async def stream_chat(
 
     def finish(usage: dict, mode: str, sources_count: int, candidates: int) -> tuple[dict, float]:
         """Registra el costo de la respuesta y deja la linea [cost-chat]."""
-        cost = estimate_cost(usage)
         elapsed = round(time.time() - started, 2)
-        record = {
-            'doc_id': f"chat-{int(time.time() * 1000)}",
-            'kind': 'chat',
-            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'title': question[:120],
-            'pages': 0,
-            'model': CHAT_MODEL,
-            'source': 'chat',
-            'mode': mode,
-            'depth': profile['depth'],
-            'access': access,
-            'sources': sources_count,
-            'candidates': candidates,
-            'cache_hit_tokens': int(usage.get('prompt_cache_hit_tokens') or 0),
-            'elapsed_sec': elapsed,
-            'client_id': client_id[:64],
-            **cost,
-        }
-        try:
-            record_cost(record)
-        except Exception:
-            pass
+        record = log_usage(
+            'chat', usage,
+            model=CHAT_MODEL,
+            elapsed_sec=elapsed,
+            title=question[:120],
+            doc_id=f"chat-{int(time.time() * 1000)}",
+            source='chat',
+            mode=mode,
+            depth=profile['depth'],
+            size=profile['size'],
+            plan=profile['plan'],
+            think=profile['think'],
+            access=access,
+            sources=sources_count,
+            candidates=candidates,
+            client_id=client_id[:64],
+        )
+        cost = {key: record.get(key, 0) for key in (
+            'prompt_tokens', 'completion_tokens', 'total_tokens',
+            'cache_hit_tokens', 'cost_usd',
+        )}
         log_fn(
             f"[cost-chat] {record['doc_id']} | modo {mode} | {sources_count} fuentes | "
-            f"{cost['total_tokens']} tokens (cache {record['cache_hit_tokens']}) | "
+            f"{cost['total_tokens']} tokens (cache {cost['cache_hit_tokens']}) | "
             f"${cost['cost_usd']:.6f} USD | {elapsed}s"
         )
         return cost, elapsed
 
     yield _sse({'type': 'status', 'text': 'Analizando el mensaje…'})
     try:
-        plan = await _route(question, query or question, history, api_keys, log_fn)
+        route_plan = await _route(question, query or question, history, api_keys, log_fn)
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat-route] error inesperado: {exc}')
-        plan = _fallback_plan(question, query or question)
+        route_plan = _fallback_plan(question, query or question)
 
-    mode = _plan_mode(plan)
-    route_usage = plan.get('route_usage') or {}
+    mode = _plan_mode(route_plan)
+    route_usage = route_plan.get('route_usage') or {}
 
     # Charla y acompanamiento: no se busca bibliografia, se responde directo.
     if mode in ('chat', 'support'):
@@ -2317,6 +2528,7 @@ async def stream_chat(
                 question,
                 history,
                 SUPPORT_PROMPT if is_support else DIRECT_PROMPT,
+                attachments,
             )
             async for kind, value in _stream_completion(
                 messages, api_keys, log_fn,
@@ -2348,7 +2560,7 @@ async def stream_chat(
         })
         return
 
-    query_count = len(_plan_queries(plan, question, query or question))
+    query_count = len(_plan_queries(route_plan, question, query or question))
     yield _sse({
         'type': 'status',
         'text': f'Buscando en {query_count} consultas de Europe PMC…',
@@ -2360,12 +2572,13 @@ async def stream_chat(
             access=access,
             probe_fn=probe_fn,
             log_fn=log_fn,
-            plan=plan,
+            plan=route_plan,
             question=question,
-            scope=_plan_scope(plan),
+            scope=_plan_scope(route_plan),
             limit=profile['sources'],
             min_rel=profile['min_rel'],
             depth=profile['depth'],
+            filters=filters,
         )
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] busqueda fallo: {type(exc).__name__}: {_redact(exc)}')
@@ -2401,8 +2614,8 @@ async def stream_chat(
     })
 
     messages = _build_messages(
-        question, sources, history, _plan_outline(plan), plan=plan, meta=search_meta,
-        depth=profile['depth'],
+        question, sources, history, _plan_outline(route_plan), plan=route_plan, meta=search_meta,
+        depth=profile['depth'], profile=profile, attachments=attachments,
     )
     usage: dict = {}
     parts: list[str] = []
@@ -2411,6 +2624,7 @@ async def stream_chat(
     try:
         async for kind, value in _stream_completion(
             messages, api_keys, log_fn, max_tokens=profile['max_tokens'],
+            think=profile['think'],
         ):
             if kind == 'usage':
                 usage = value
@@ -2439,6 +2653,7 @@ async def stream_chat(
             cont_tokens = CONTINUATION_TOKENS if profile['depth'] == 'quick' else CONTINUATION_TOKENS * 2
             async for kind, value in _stream_completion(
                 cont_messages, api_keys, log_fn, max_tokens=cont_tokens,
+                think=profile['think'],
             ):
                 if kind == 'usage':
                     cont_usage = value

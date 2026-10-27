@@ -15,6 +15,7 @@ Reglas:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 import re
@@ -23,14 +24,20 @@ from typing import Callable, Optional
 
 import httpx
 
+from costs import log_usage
+
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
 TRANSLATE_MODEL = os.getenv(
     'PMC_TRANSLATE_MODEL',
     os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'),
 )
-CHUNK_CHARS = max(1200, int(os.getenv('PMC_TRANSLATE_CHUNK_CHARS', '3200')))
+# Un lote mas grande no encarece el token (se cobra por token, no por llamada),
+# pero si reduce overhead y latencia: cada llamada paga ~1.2k tokens de prompt
+# de sistema. Con 5200 caracteres entran ~1700 tokens de salida, bien por
+# debajo del tope. La concurrencia se mantiene en 4 para no saturar la cuota.
+CHUNK_CHARS = max(1200, int(os.getenv('PMC_TRANSLATE_CHUNK_CHARS', '5200')))
 MAX_OUTPUT = max(800, int(os.getenv('PMC_TRANSLATE_MAX_TOKENS', '4000')))
-CONCURRENCY = max(1, int(os.getenv('PMC_TRANSLATE_CONCURRENCY', '3')))
+CONCURRENCY = max(1, int(os.getenv('PMC_TRANSLATE_CONCURRENCY', '4')))
 ATTEMPTS = max(1, int(os.getenv('PMC_TRANSLATE_ATTEMPTS', '2')))
 
 SYSTEM_PROMPT = """Eres traductor científico de PsiHub. Traducís al español textos académicos de psicología, psiquiatría y medicina.
@@ -231,7 +238,10 @@ async def translate_document(
         for key in ('title', 'subtitle', 'abstract_original')
     }
     units = _units(document)
-    usage_total = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0, 'calls': 0}
+    usage_total = {
+        'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0,
+        'prompt_cache_hit_tokens': 0, 'prompt_cache_miss_tokens': 0, 'calls': 0,
+    }
     if not units:
         return document, usage_total
 
@@ -240,12 +250,15 @@ async def translate_document(
     semaphore = asyncio.Semaphore(CONCURRENCY)
     translated: dict[int, str] = {}
     failures = 0
+    # Reparto circular real entre keys: antes dependia del tamano del lote y
+    # siempre empezaba por la misma, lo que concentraba la cuota.
+    key_cycle = itertools.count()
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
         async def run(group: list[tuple[int, str]], attempt: int = 0) -> None:
             nonlocal failures
             async with semaphore:
-                key = keys[(attempt + len(group)) % len(keys)]
+                key = keys[next(key_cycle) % len(keys)]
                 try:
                     parsed, usage = await _call(client, key, group, model_name)
                 except Exception as exc:  # noqa: BLE001 - se reintenta
@@ -256,7 +269,8 @@ async def translate_document(
                     failures += 1
                     log(f'[PMC] Lote de {len(group)} bloques fallo: {type(exc).__name__}: {exc}')
                     return
-                for name in ('prompt_tokens', 'completion_tokens', 'total_tokens'):
+                for name in ('prompt_tokens', 'completion_tokens', 'total_tokens',
+                             'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens'):
                     usage_total[name] += int(usage.get(name) or 0)
                 usage_total['calls'] += 1
                 missing = [index for index, _ in group if index not in parsed]
@@ -303,6 +317,17 @@ async def translate_document(
         'model': model_name,
         'elapsed_sec': round(time.time() - started, 1),
     }
+    log_usage(
+        'translation', usage_total,
+        model=model_name,
+        elapsed_sec=stats['elapsed_sec'],
+        title=str(meta.get('title_es') or meta.get('title') or ''),
+        doc_id=f"pmc-{meta.get('pmcid') or 'doc'}",
+        source='pmc',
+        blocks=len(units),
+        batches=len(groups),
+        failed_batches=failures,
+    )
     log(f'[PMC] Traduccion aplicada en {applied}/{len(units)} bloques')
     return document, stats
 
