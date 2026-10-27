@@ -118,7 +118,7 @@ actualiza la que pasás en `--update-env-vars`.
 | `CHAT_ENRICH_CANDIDATES` | `18` | Papers candidatos que se intentan enriquecer por búsqueda |
 | `CHAT_SNOWBALL_SEEDS` | `3` | Trabajos semilla cuyas referencias se expanden (`0` desactiva) |
 | `CHAT_SNOWBALL_IDS` | `80` | Máximo de referencias recuperadas por búsqueda |
-| `EUROPEPMC_API_KEY` | vacío | Key opcional de Europe PMC. Sin ella funciona igual, con el límite público de consultas |
+| `EUROPEPMC_API_KEY` | vacío | **No hace falta**: Europe PMC no emite claves ni pide registro. Si algún día se pone un proxy propio delante, la variable se envía como `apiKey`; con la API pública se ignora |
 | `EUROPEPMC_BASE` | `https://www.ebi.ac.uk/europepmc/webservices/rest` | Endpoint de Europe PMC |
 | `EUROPEPMC_TIMEOUT` | `20` | Segundos de espera por consulta |
 | `EUROPEPMC_CACHE_TTL` | `900` | Caché de resultados del motor |
@@ -315,6 +315,6 @@ npm run sync
 |---|---|
 | `503 No hay API key de DeepSeek configurada` | Falta `DEEPSEEK_API_CHAT` o `DEEPSEEK_API_KEY_1` en Cloud Run |
 | La respuesta llega de golpe, sin streaming | Un proxy intermedio está buffereando; Cloud Run ya envía `X-Accel-Buffering: no`. Evitá proxys propios |
-| `El buscador alcanzó su límite de consultas` | Cuota pública de Europe PMC agotada para esa IP; configurá `EUROPEPMC_API_KEY` (gratuita) en Cloud Run |
+| `El buscador alcanzó su límite de consultas` | Europe PMC limita por IP a ~10 consultas/segundo y responde 429. Se reintenta solo con espera creciente; si persiste, baja `CHAT_SEARCH_CONCURRENCY` o subí `--min-instances` (las instancias comparten IP de salida). No existe API key que lo aumente |
 | El chat responde pero no cita papers | Pregunta demasiado específica; probá términos más amplios o `access: all` |
 | `chat_keys: 0` en `/health` | La variable no llegó al servicio; revisá el deploy |
