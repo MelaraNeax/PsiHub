@@ -20,6 +20,8 @@ from typing import Any, Callable, Optional
 import httpx
 import pymupdf
 
+import llm
+
 VISION_DPI = int(os.getenv('VISION_DPI', '128'))
 VISION_JPEG_QUALITY = int(os.getenv('VISION_JPEG_QUALITY', '82'))
 VISION_MAX_TOKENS = int(os.getenv('VISION_MAX_TOKENS', '4096'))
@@ -378,7 +380,19 @@ async def _extract_page(client: httpx.AsyncClient, url: str, keys: list[str], mo
     for attempt in range(attempts):
         key = keys[attempt % len(keys)]
         try:
-            obj, usage = await _request_page(client, url, key, model, image_b64, page_number)
+            if llm.USE_CLAUDE:
+                text, usage, stop = await llm.vision_page(
+                    image_b64,
+                    f'Pagina {page_number}. Extrae y traduce al espanol.',
+                    key, VISION_MAX_TOKENS, system_prompt=PAGE_PROMPT,
+                )
+                if not text:
+                    raise VisionError('Claude devolvio una respuesta vacia.')
+                if stop == 'max_tokens':
+                    raise VisionError('Respuesta truncada por limite de tokens.')
+                obj = _parse_json_content(text)
+            else:
+                obj, usage = await _request_page(client, url, key, model, image_b64, page_number)
             return normalize_page_payload(obj, page_number), usage
         except Exception as exc:  # noqa: BLE001 - se reintenta con otra key
             last_error = exc
@@ -749,7 +763,7 @@ async def extract_document(pdf_bytes: bytes, api_keys: list[str], model: Optiona
                            log_fn: Optional[Callable[[str], None]] = None) -> dict:
     """Renderiza, extrae y fusiona todas las paginas de un PDF."""
     if not api_keys:
-        raise VisionError('No hay API keys de DeepSeek configuradas.')
+        raise VisionError(f'No hay API keys de {llm.PROVIDER.capitalize()} configuradas.')
     if not pdf_bytes[:10].startswith(b'%PDF'):
         raise VisionError('El archivo no es un PDF valido.')
 

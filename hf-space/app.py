@@ -63,6 +63,7 @@ if not _DEEPSEEK_CHAT_KEYS:
 # motor viven en su propio juego de variables (ver llm.py).
 CHAT_API_KEYS = llm.chat_keys(_DEEPSEEK_CHAT_KEYS)
 TRAD_API_KEYS = llm.trad_keys(DEEPSEEK_API_KEYS)
+VISION_API_KEYS = llm.vision_keys(DEEPSEEK_API_KEYS)
 
 # ID canonico de DeepSeek-V4.1-Flash (el alias deepseek-v4-flash apunta aqui).
 DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
@@ -273,10 +274,12 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None,
         raise ValueError('PDF vacio.')
     if not pdf_bytes[:10].startswith(b'%PDF'):
         raise ValueError('El archivo no es un PDF valido.')
-    if not DEEPSEEK_API_KEYS:
-        raise RuntimeError('No hay API key de DeepSeek configurada.')
+    if not VISION_API_KEYS:
+        raise RuntimeError(
+            f'No hay API key de {llm.PROVIDER.capitalize()} para leer el PDF.'
+        )
 
-    selected_model = (model or '').strip() or DEEPSEEK_MODEL
+    selected_model = (model or '').strip() or llm.model_for(DEEPSEEK_MODEL)
     doc_id = hashlib.sha256(pdf_bytes).hexdigest()
     key = cache_key(pdf_bytes, selected_model)
 
@@ -294,7 +297,7 @@ async def process_pdf(pdf_bytes: bytes, model: Optional[str] = None,
 
     document = await extract_document(
         pdf_bytes,
-        DEEPSEEK_API_KEYS,
+        VISION_API_KEYS,
         model=selected_model,
         progress=progress,
         images_dir=IMAGES_STORE_DIR / doc_id,
@@ -1248,13 +1251,12 @@ def _pdf_text(data: bytes) -> tuple[str, int, bool]:
 
 
 async def _image_text(data: bytes, mime: str) -> str:
-    """Transcribe una imagen con el modelo de vision de DeepSeek."""
-    # La vision sigue en DeepSeek aunque el texto use Claude.
-    keys = DEEPSEEK_API_KEYS or _DEEPSEEK_CHAT_KEYS
+    """Transcribe una imagen con el modelo de vision del motor activo."""
+    keys = VISION_API_KEYS
     if not keys:
         raise HTTPException(
             status_code=503,
-            detail='No hay API key de vision (DeepSeek) para leer imagenes.',
+            detail=f'No hay API key de {llm.PROVIDER.capitalize()} para leer imagenes.',
         )
     prompt = (
         'Transcribi literalmente todo el texto visible de esta imagen (en su idioma '
@@ -1262,6 +1264,15 @@ async def _image_text(data: bytes, mime: str) -> str:
         'No resumas el contenido textual ni inventes lo que no se lee. Si es una '
         'pagina de un paper, conserva titulos, autores y secciones.'
     )
+    image_b64 = base64.b64encode(data).decode('ascii')
+    if llm.USE_CLAUDE:
+        text, _usage, _stop = await llm.vision_page(
+            image_b64, prompt, keys[0], 2400, media_type=mime or 'image/jpeg',
+        )
+        if not text:
+            raise HTTPException(status_code=422, detail='La imagen no devolvio texto legible.')
+        return text
+
     payload = {
         'model': chat_service.CHAT_MODEL,
         'messages': [{
@@ -1269,7 +1280,7 @@ async def _image_text(data: bytes, mime: str) -> str:
             'content': [
                 {'type': 'text', 'text': prompt},
                 {'type': 'image_url', 'image_url': {
-                    'url': f'data:{mime};base64,' + base64.b64encode(data).decode('ascii'),
+                    'url': f'data:{mime};base64,' + image_b64,
                 }},
             ],
         }],

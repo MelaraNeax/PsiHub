@@ -60,6 +60,14 @@ def trad_keys(deepseek_default: Optional[list[str]] = None) -> list[str]:
     return keys
 
 
+def vision_keys(deepseek_default: Optional[list[str]] = None) -> list[str]:
+    """Claves para leer paginas de PDF como imagen."""
+    if not USE_CLAUDE:
+        return [k for k in (deepseek_default or []) if k]
+    keys = _split(os.getenv('CLAUDE_VISION_API', ''))
+    return keys or _split(os.getenv('CLAUDE_CHAT_API', ''))
+
+
 def model_for(deepseek_model: str) -> str:
     return CLAUDE_MODEL if USE_CLAUDE else deepseek_model
 
@@ -190,6 +198,49 @@ async def complete(
             last_error = exc
             await asyncio.sleep(0.8)
     raise RuntimeError(f'Claude no respondio: {last_error}')
+
+
+async def vision_page(
+    image_b64: str,
+    user_text: str,
+    api_key: str,
+    max_tokens: int,
+    system_prompt: str = '',
+    media_type: str = 'image/jpeg',
+    timeout: float = 240.0,
+) -> tuple[str, dict, Optional[str]]:
+    """Una pagina renderizada como JPEG -> texto crudo del modelo.
+
+    Devuelve (texto, usage, stop_reason). El modelo no piensa: transcribir una
+    pagina no gana nada con razonamiento y solo cuesta tokens de salida.
+    """
+    params: dict = {
+        'model': CLAUDE_MODEL,
+        'max_tokens': max_tokens,
+        'thinking': {'type': 'disabled'},
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {
+                    'type': 'image',
+                    'source': {
+                        'type': 'base64',
+                        'media_type': media_type,
+                        'data': image_b64,
+                    },
+                },
+                {'type': 'text', 'text': user_text},
+            ],
+        }],
+    }
+    if system_prompt:
+        params['system'] = system_prompt
+    async with _client(api_key, timeout) as client:
+        response = await client.messages.create(**params)
+    text = ''.join(
+        block.text for block in response.content if block.type == 'text'
+    ).strip()
+    return text, _map_usage(response.usage), response.stop_reason
 
 
 async def stream(
