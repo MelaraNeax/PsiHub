@@ -18,13 +18,20 @@ from urllib.parse import quote
 
 import httpx
 
+import llm
+
 COST_BUCKET = os.getenv('COST_BUCKET', '').strip()
 COST_PREFIX = os.getenv('COST_PREFIX', 'costs').strip('/')
-# DeepSeek V4.1 Flash: USD por millon de tokens (tarifa estandar).
-PRICE_INPUT = float(os.getenv('DEEPSEEK_PRICE_INPUT', '0.15'))
-PRICE_OUTPUT = float(os.getenv('DEEPSEEK_PRICE_OUTPUT', '0.60'))
+# Tarifa por millon de tokens, segun el motor activo.
+# DeepSeek V4.1 Flash: 0.15 / 0.60, cache 0.03.
+# Claude Haiku 5.5:    0.10 / 0.50, cache 0.01.
+_PRICE_DEFAULTS = (
+    ('0.10', '0.50', '0.01') if llm.USE_CLAUDE else ('0.15', '0.60', '0.03')
+)
+PRICE_INPUT = float(os.getenv('LLM_PRICE_INPUT', _PRICE_DEFAULTS[0]))
+PRICE_OUTPUT = float(os.getenv('LLM_PRICE_OUTPUT', _PRICE_DEFAULTS[1]))
 # Tokens de entrada servidos desde la cache de prompt (mucho mas baratos).
-PRICE_CACHE_HIT = float(os.getenv('DEEPSEEK_PRICE_CACHE_HIT', '0.03'))
+PRICE_CACHE_HIT = float(os.getenv('LLM_PRICE_CACHE_HIT', _PRICE_DEFAULTS[2]))
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '').strip()
 ADMIN_TOKEN_OBJECT = os.getenv('ADMIN_TOKEN_OBJECT', 'admin/token.txt').strip('/')
 # Hash SHA-256 de la frase de acceso; permite abrir /costos sin guardar el texto.

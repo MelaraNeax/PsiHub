@@ -19,10 +19,13 @@ from typing import Optional
 import httpx
 import pymupdf
 
+import llm
 from costs import log_usage
 
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
-SUMMARY_MODEL = os.getenv('SUMMARY_MODEL', os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
+SUMMARY_MODEL = llm.model_for(
+    os.getenv('SUMMARY_MODEL', os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
+)
 MAX_OUTPUT_TOKENS = max(300, int(os.getenv('SUMMARY_MAX_TOKENS', '900')))
 MAX_PDF_CHARS = max(8000, int(os.getenv('SUMMARY_PDF_CHARS', '60000')))
 
@@ -102,7 +105,15 @@ async def _request(messages: list[dict], api_keys: list[str],
                    max_tokens: int = MAX_OUTPUT_TOKENS,
                    temperature: float = 0.2) -> tuple[str, dict]:
     if not api_keys:
-        raise RuntimeError('No hay API key de DeepSeek configurada.')
+        raise RuntimeError(f'No hay API key de {llm.PROVIDER.capitalize()} configurada.')
+    if llm.USE_CLAUDE:
+        content, usage = await llm.complete(
+            messages, api_keys, max_tokens=max_tokens, timeout=180.0,
+        )
+        if not content:
+            raise RuntimeError('Claude devolvio una respuesta vacia.')
+        return content, usage
+
     payload = {
         'model': SUMMARY_MODEL,
         'messages': messages,

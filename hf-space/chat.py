@@ -26,18 +26,21 @@ import re
 import time
 import unicodedata
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
 
 import europepmc
+import llm
 import storage
 import enrich
 from costs import log_usage
 
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
-CHAT_MODEL = os.getenv('CHAT_MODEL', os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
+CHAT_MODEL = llm.model_for(
+    os.getenv('CHAT_MODEL', os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'))
+)
 
 OPENALEX_WORKS_URL = 'https://api.openalex.org/works'
 OPENALEX_MAILTO = os.getenv('OPENALEX_MAILTO', 'psyhub.app.research@gmail.com').strip()
@@ -2194,7 +2197,16 @@ async def _complete(
 ) -> tuple[str, dict]:
     """Llamada corta sin streaming (planificacion de la busqueda)."""
     if not api_keys:
-        raise ChatStartError('No hay API key de DeepSeek configurada.')
+        raise ChatStartError(
+            f'No hay API key de {llm.PROVIDER.capitalize()} configurada.'
+        )
+
+    if llm.USE_CLAUDE:
+        try:
+            return await llm.complete(messages, api_keys, max_tokens=max_tokens,
+                                      timeout=60.0)
+        except Exception as exc:  # noqa: BLE001
+            raise ChatStartError(f'Claude HTTP: {exc}') from exc
 
     payload = {
         'model': CHAT_MODEL,
@@ -2340,9 +2352,25 @@ async def _stream_completion(
     max_tokens: Optional[int] = None,
     temperature: float = 0.25,
     think: bool = False,
-):
+) -> AsyncIterator[tuple[str, Any]]:
     if not api_keys:
-        raise ChatStartError('No hay API key de DeepSeek configurada.')
+        raise ChatStartError(
+            f'No hay API key de {llm.PROVIDER.capitalize()} configurada.'
+        )
+
+    if llm.USE_CLAUDE:
+        async for kind, value in llm.stream(
+            messages, api_keys,
+            max_tokens=max_tokens or MAX_OUTPUT_TOKENS,
+            think=think,
+        ):
+            if kind == 'delta':
+                yield ('delta', str(value))
+            elif kind == 'usage':
+                yield ('usage', dict(value or {}))
+            elif kind == 'finish':
+                yield ('finish', str(value) if value else None)
+        return
 
     payload = {
         'model': CHAT_MODEL,
@@ -2541,7 +2569,7 @@ async def stream_chat(
                     yield _sse({'type': 'delta', 'text': value})
         except Exception as exc:  # noqa: BLE001
             log_fn(f'[chat] respuesta directa fallo: {type(exc).__name__}: {exc}')
-            yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
+            yield _sse({'type': 'error', 'message': str(exc) or f'{llm.PROVIDER.capitalize()} no respondio.'})
             return
 
         if is_support:
@@ -2636,7 +2664,7 @@ async def stream_chat(
     except Exception as exc:  # noqa: BLE001
         log_fn(f'[chat] generacion fallo: {type(exc).__name__}: {exc}')
         yield sources_event(sources, search_meta)
-        yield _sse({'type': 'error', 'message': str(exc) or 'DeepSeek no respondio.'})
+        yield _sse({'type': 'error', 'message': str(exc) or f'{llm.PROVIDER.capitalize()} no respondio.'})
         return
 
     # Si el modelo agoto max_tokens (finish_reason == 'length'), la respuesta

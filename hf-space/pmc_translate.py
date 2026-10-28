@@ -24,6 +24,7 @@ from typing import Callable, Optional
 
 import httpx
 
+import llm
 from costs import log_usage
 
 DEEPSEEK_URL = os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/chat/completions')
@@ -192,12 +193,23 @@ async def _call(
     for index, text in group:
         payload_lines.append(f'<<<{index}>>>\n{text}')
     user_content = '\n\n'.join(payload_lines)
+    messages = [
+        {'role': 'system', 'content': SYSTEM_PROMPT},
+        {'role': 'user', 'content': user_content},
+    ]
+    if llm.USE_CLAUDE:
+        try:
+            content, usage = await llm.complete(
+                messages, [api_key], max_tokens=MAX_OUTPUT, timeout=180.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise TranslationError(f'Claude: {exc}') from exc
+        parsed = _parse(content, [index for index, _ in group])
+        return parsed, usage
+
     body = {
         'model': model,
-        'messages': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': user_content},
-        ],
+        'messages': messages,
         'temperature': 0.0,
         'stream': False,
         'thinking': {'type': 'disabled'},
@@ -228,7 +240,7 @@ async def translate_document(
     log = log_fn or (lambda _msg: None)
     keys = [k for k in (api_keys or []) if k]
     if not keys:
-        raise TranslationError('No hay API key de DeepSeek configurada.')
+        raise TranslationError(f'No hay API key de {llm.PROVIDER.capitalize()} configurada.')
     started = time.time()
     model_name = (model or TRANSLATE_MODEL).strip()
     # Se guarda el original antes de tocar nada: la ficha muestra el titulo en

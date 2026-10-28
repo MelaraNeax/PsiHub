@@ -34,6 +34,37 @@ límite de cuota con la traducción):
 > El archivo `hf-space/.env` es solo para desarrollo local. Está en
 > `.gitignore` y en `.gcloudignore`: nunca se sube al repositorio ni a Cloud Run.
 
+### Cambiar de motor: DeepSeek ⇄ Claude
+
+Una sola variable decide quién responde. Toda la app (chat, traducción PMC,
+resúmenes) cambia junta:
+
+| `LLM_PROVIDER` | Motor | Claves |
+| --- | --- | --- |
+| `0` (u omitida) | DeepSeek | `DEEPSEEK_API_CHAT`, `DEEPSEEK_API_KEY_1…6` |
+| `1` | Claude | `CLAUDE_CHAT_API`, `CLAUDE_TRAD_API_1`, `CLAUDE_TRAD_API_2` |
+
+Opcionales en modo Claude:
+
+- `CLAUDE_MODEL` — por defecto `claude-haiku-5-5`.
+- `LLM_PRICE_INPUT` / `LLM_PRICE_OUTPUT` / `LLM_PRICE_CACHE_HIT` — USD por
+  millón de tokens para el ledger de costos (por defecto los de Haiku 5.5).
+
+Las claves `Trad` se reparten en círculo entre los lotes de un mismo artículo,
+así que dos claves alcanzan para paralelizar la traducción. La visión de PDFs
+escaneados sigue en DeepSeek: el modelo de Claude configurado aquí es de texto.
+
+Cloud Run (ejemplo):
+
+```bash
+gcloud run services update mi-servidor-api --region southamerica-east1 \
+  --update-env-vars LLM_PROVIDER=1,CLAUDE_MODEL=claude-haiku-5-5,CLAUDE_CHAT_API=sk-ant-...,CLAUDE_TRAD_API_1=sk-ant-...,CLAUDE_TRAD_API_2=sk-ant-...
+```
+
+`/health` muestra `llm_provider` y `trad_keys` para confirmar que quedó activo.
+Cada motor guarda su propia caché de traducción, así que volver a `0` sigue
+sirviendo los documentos ya traducidos con DeepSeek.
+
 ---
 
 ## 2. Probar localmente (opcional)

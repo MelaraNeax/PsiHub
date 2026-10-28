@@ -34,6 +34,7 @@ import storage
 import enrich
 import europepmc
 import exports as export_service
+import llm
 import pmc_translate
 import auth_supabase
 import summarize as summarize_service
@@ -54,9 +55,14 @@ DEEPSEEK_API_KEYS = [k for k in DEEPSEEK_API_KEYS if k]
 # El chat puede usar una key dedicada (DEEPSEEK_API_CHAT, admite varias
 # separadas por coma) para no competir con la traduccion. Si no existe,
 # reutiliza las mismas keys de traduccion.
-CHAT_API_KEYS = [k.strip() for k in os.getenv('DEEPSEEK_API_CHAT', '').split(',') if k.strip()]
-if not CHAT_API_KEYS:
-    CHAT_API_KEYS = DEEPSEEK_API_KEYS
+_DEEPSEEK_CHAT_KEYS = [k.strip() for k in os.getenv('DEEPSEEK_API_CHAT', '').split(',') if k.strip()]
+if not _DEEPSEEK_CHAT_KEYS:
+    _DEEPSEEK_CHAT_KEYS = DEEPSEEK_API_KEYS
+
+# LLM_PROVIDER=0 usa DeepSeek; LLM_PROVIDER=1 usa Claude. Las claves de cada
+# motor viven en su propio juego de variables (ver llm.py).
+CHAT_API_KEYS = llm.chat_keys(_DEEPSEEK_CHAT_KEYS)
+TRAD_API_KEYS = llm.trad_keys(DEEPSEEK_API_KEYS)
 
 # ID canonico de DeepSeek-V4.1-Flash (el alias deepseek-v4-flash apunta aqui).
 DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')
@@ -436,15 +442,20 @@ async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pm
             'Este articulo no tiene texto completo abierto en el PMC; '
             'probá con el PDF original o con otra fuente.'
         )
-    if not DEEPSEEK_API_KEYS:
-        raise RuntimeError('No hay API key de DeepSeek configurada.')
+    if not TRAD_API_KEYS:
+        raise RuntimeError(
+            f'No hay API key de {llm.PROVIDER.capitalize()} configurada.'
+        )
 
     selected_model = (model or '').strip() or DEEPSEEK_MODEL
     doc_id = _pmc_doc_id(clean)
     # El sufijo separa el pipeline PMC del de vision: un documento viejo —de
     # cuando el XML se guardaba sin traducir— no debe servirse como si fuera la
     # traduccion actual.
-    key = cache_key(xml_text.encode('utf-8'), selected_model) + '_pmc2'
+    # El motor entra en la clave: la traduccion de Claude no es la de DeepSeek.
+    key = cache_key(xml_text.encode('utf-8'), selected_model) + (
+        '_pmc2_claude' if llm.USE_CLAUDE else '_pmc2'
+    )
 
     cached = load_cache(key)
     if cached:
@@ -458,7 +469,7 @@ async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pm
     log(f'[PMC] Procesando {clean} ({len(xml_text):,} caracteres de XML, modelo: {selected_model})')
     document = europepmc.xml_to_document(xml_text)
     document, stats = await pmc_translate.translate_document(
-        document, DEEPSEEK_API_KEYS, model=selected_model, log_fn=log,
+        document, TRAD_API_KEYS, model=selected_model, log_fn=log,
     )
 
     paths = _artifact_paths(doc_id)
@@ -1238,9 +1249,13 @@ def _pdf_text(data: bytes) -> tuple[str, int, bool]:
 
 async def _image_text(data: bytes, mime: str) -> str:
     """Transcribe una imagen con el modelo de vision de DeepSeek."""
-    keys = CHAT_API_KEYS or DEEPSEEK_API_KEYS
+    # La vision sigue en DeepSeek aunque el texto use Claude.
+    keys = DEEPSEEK_API_KEYS or _DEEPSEEK_CHAT_KEYS
     if not keys:
-        raise HTTPException(status_code=503, detail='No hay API key para leer imagenes.')
+        raise HTTPException(
+            status_code=503,
+            detail='No hay API key de vision (DeepSeek) para leer imagenes.',
+        )
     prompt = (
         'Transcribi literalmente todo el texto visible de esta imagen (en su idioma '
         'original) y describi en espanol tablas, figuras y graficos relevantes. '
@@ -1405,8 +1420,10 @@ async def health():
         'service': 'PsiHub Reader',
         'version': '10.0',
         'engine': 'deepseek-vision-json',
+        'llm_provider': llm.PROVIDER,
         'deepseek': bool(DEEPSEEK_API_KEYS),
         'deepseek_keys': len(DEEPSEEK_API_KEYS),
+        'trad_keys': len(TRAD_API_KEYS),
         'model': DEEPSEEK_MODEL,
         'chat_model': chat_service.CHAT_MODEL,
         'chat_keys': len(CHAT_API_KEYS),
