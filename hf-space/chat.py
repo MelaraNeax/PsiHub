@@ -2367,7 +2367,7 @@ async def _stream_completion(
             if kind == 'delta':
                 yield ('delta', str(value))
             elif kind == 'usage':
-                yield ('usage', dict(value or {}))
+                yield ('usage', value if isinstance(value, dict) else {})
             elif kind == 'finish':
                 yield ('finish', str(value) if value else None)
         return

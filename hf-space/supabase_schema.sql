@@ -134,6 +134,23 @@ drop policy if exists "translations: propias" on public.translations;
 create policy "translations: propias" on public.translations
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+-- ─── Espejo de estado del cliente (sincronización entre dispositivos) ───────
+-- El frontend guarda chats, carpetas, papers guardados, resumenes y perfil en
+-- localStorage. Cuando hay sesion, el modulo src/services/sync.js vuelca todo
+-- ese estado en una fila por usuario (jsonb) y lo recupera al iniciar sesion,
+-- de modo que el historial viaja entre dispositivos sin reescribir cada tabla.
+create table if not exists public.user_sync (
+  user_id     uuid primary key references auth.users(id) on delete cascade,
+  data        jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now()
+);
+
+alter table public.user_sync enable row level security;
+
+drop policy if exists "user_sync: propia" on public.user_sync;
+create policy "user_sync: propia" on public.user_sync
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 -- ─── Uso y costo (espejo consultable del ledger de Cloud Logging) ──────────
 create table if not exists public.usage_events (
   id                  bigserial primary key,

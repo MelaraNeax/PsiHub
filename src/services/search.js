@@ -38,8 +38,9 @@ const SUBTYPE_TERMS = {
 // servidor; sin él no hay página siguiente.
 const pageCache = new Map();
 
-function cacheKey({ query, subtype, sort, perPage, access, scope }) {
-  return [query, subtype || 'all', sort || 'relevance', perPage, access || 'all', scope || 'psy']
+function cacheKey({ query, subtype, sort, perPage, access, scope, yearFrom, yearTo, study, precise }) {
+  return [query, subtype || 'all', sort || 'relevance', perPage, access || 'all', scope || 'psy',
+    yearFrom || '', yearTo || '', study || 'all', precise ? 'precise' : 'broad']
     .join('|')
     .toLowerCase();
 }
@@ -68,6 +69,9 @@ async function requestPage(params, cursor, signal) {
     mode: params.precise ? 'precise' : 'broad'
   });
   if (params.sort) qs.set('sort', params.sort);
+  if (params.yearFrom) qs.set('year_from', String(params.yearFrom));
+  if (params.yearTo) qs.set('year_to', String(params.yearTo));
+  if (params.study && params.study !== 'all') qs.set('study', params.study);
 
   const res = await fetch(`${SEARCH_URL}?${qs}`, { signal: withTimeout(signal) });
   if (res.status === 503) {
@@ -149,6 +153,9 @@ export async function fetchPapers({
   precise = true,
   access = 'all',
   scope = 'psy',
+  yearFrom = null,
+  yearTo = null,
+  study = null,
   signal = null
 } = {}) {
   const extras = SUBTYPE_TERMS[subtype] || '';
@@ -158,7 +165,10 @@ export async function fetchPapers({
     access,
     scope,
     sort,
-    precise
+    precise,
+    yearFrom,
+    yearTo,
+    study
   };
 
   try {
@@ -185,7 +195,7 @@ export async function fetchPapers({
     if (signal?.aborted) throw err;
     // Respaldo: OpenAlex directo. Mantiene la app usable si el proxy falla.
     console.warn('[Buscador] Europe PMC no respondió, usando OpenAlex:', err?.message || err);
-    return openalexFetchPapers({ query, subtype, sort, perPage, page, precise, access, signal });
+    return openalexFetchPapers({ query, subtype, sort, perPage, page, precise, access, yearFrom, yearTo, study, signal });
   }
 }
 

@@ -6,6 +6,7 @@
 import { fetchPapers, fetchWorkById } from './src/services/search.js?v=40';
 import { translateToSpanish, translateBatch, translateToEnglish } from './src/services/translate.js?v=2';
 import { auth } from './src/services/auth.js?v=1';
+import { sync } from './src/services/sync.js?v=1';
 
 // ═══════════════════════════════════════════════════
 // EXPANSIÓN DE QUERIES — Diccionario ES → EN + sinónimos clave
@@ -458,6 +459,11 @@ function initDOMRefs() {
     resultsBgGlow: $('results-bg-glow'),
     subtabBtns: document.querySelectorAll('.subtab'),
     resultsSort: $('results-sort'),
+    searchFilter: $('search-filter'),
+    searchFilterBtn: $('btn-search-filter'),
+    searchFilterMenu: $('search-filter-menu'),
+    searchYearFrom: $('search-year-from'),
+    searchYearTo: $('search-year-to'),
     resultsCount: $('results-count'),
     resultsLoading: $('results-loading'),
     resultsEmpty: $('results-empty'),
@@ -560,6 +566,7 @@ function initDOMRefs() {
     authConnected: $('auth-connected'),
     btnGoogleLogin: $('btn-google-login'),
     btnGoogleLogout: $('btn-google-logout'),
+    gateGoogleLogin: $('gate-google-login'),
     connectedUserEmail: $('connected-user-email'),
     googleModalOverlay: $('google-modal-overlay'),
     googleModalSheet: $('google-modal-sheet'),
@@ -966,13 +973,17 @@ async function doFetch({ nextPage = false } = {}) {
       if (label) label.textContent = 'Verificando descarga en 1 clic…';
     }
 
+    const sf = getSearchFilters();
     const fetchOptions = {
       query: S.baseQuery,
       subtype: S.activeSubtype,
       sort: S.sort || null,
       perPage: needsVerification ? Math.max(S.perPage, 15) : S.perPage,
       page: requestedPage,
-      access: S.accessFilter
+      access: S.accessFilter,
+      yearFrom: sf.year_from,
+      yearTo: sf.year_to,
+      study: sf.study
     };
 
     const { results, meta } = isFirstPage
@@ -988,6 +999,12 @@ async function doFetch({ nextPage = false } = {}) {
         return s[S.activeSubtype] > 0;
       });
       finalResults = filtered.length > 0 ? filtered : results;
+    }
+
+    // Cuartil: se resuelve en cliente sobre el resultado ya devuelto, igual
+    // que en el chat, para no depender de datos que el buscador no conoce.
+    if (searchFilters.quartile !== 'all') {
+      finalResults = finalResults.filter(p => journalQuartile(p) === searchFilters.quartile);
     }
 
     // "Solo 1 clic": se muestran únicamente los PDF cuya descarga directa
@@ -1399,13 +1416,14 @@ function updateModalPaperAction(paper) {
   const sub = document.getElementById('modal-psihub-btn-sub');
   const btn = document.getElementById('btn-modal-psihub-options');
 
-  if (paper.isAutomatic) {
+  const verified = paper.pdfChecked === true && paper.isAutomatic === true;
+  if (verified) {
     if (label) label.textContent = 'Leer en PsiHub';
     if (sub) sub.textContent = '1-click · traducción automática';
     if (btn) btn.dataset.mode = 'auto';
   } else {
-    if (label) label.textContent = 'Traducir PDF descargado';
-    if (sub) sub.textContent = 'Requiere descarga manual';
+    if (label) label.textContent = 'Leer en PsiHub';
+    if (sub) sub.textContent = paper.pdfChecked ? 'Incluye traducción y resumen' : 'Verificando disponibilidad…';
     if (btn) btn.dataset.mode = 'manual';
   }
 }
@@ -1571,10 +1589,10 @@ function pumpPdfChecks() {
 
 async function checkPaperPdf(paper) {
   if (!paper || paper.pdfChecking) return;
-  // Los papers de PMC no tienen PDF del editor: el backend arma el PDF desde
-  // el XML, así que se marcan como descarga directa sin sondear una URL.
+  // Los papers de PMC no ofrecen descarga directa: el texto completo se lee
+  // desde el XML. Se marca como acceso libre, nunca como 1-click.
   if (paper.pmcid && paper.hasFullText) {
-    applyPdfResult(paper, true, 'pmc-xml');
+    applyPdfResult(paper, false, 'pmc-xml');
     return;
   }
   const url = paper.pdfUrl || paper.oaUrl;
@@ -1629,8 +1647,8 @@ function validatePdfUrls(papers) {
 async function verifyPaperOneClick(paper, signal) {
   if (!paper) return false;
   if (paper.pmcid && paper.hasFullText) {
-    applyPdfResult(paper, true, 'pmc-xml');
-    return true;
+    applyPdfResult(paper, false, 'pmc-xml');
+    return false;
   }
   if (paper.pdfChecked) return paper.isAutomatic === true;
 
@@ -1734,15 +1752,19 @@ function paperAccessCategory(paper) {
   const status = String(paper.pdfCheckStatus || '');
   // Solo una verificación concluyente manda sobre la clasificación del backend.
   // 'metadata-gated' o 'cors' no prueban que el PDF no exista.
-  const conclusive = /^(verified|auth|missing|landing|blocked|http-\d+)$/.test(status);
+  const conclusive = /^(verified|auth|missing|landing|blocked|http-\d+|pmc-xml|no-url|no-fulltext)$/.test(status);
   if (paper.pdfChecked && conclusive) {
+    if (status === 'pmc-xml') return 'free';
     if (paper.isAutomatic === true) return 'oneclick';
     return paper.isOa === false ? 'paid' : 'free';
   }
+  // "1-click" exige una verificación real del PDF: isAutomatic solo no basta,
+  // porque las rutas de traducción también lo ponen en true.
+  if (paper.pdfChecked === true && paper.isAutomatic === true) return 'oneclick';
   const explicit = paper.accessCategory || paper.access;
-  if (explicit === 'oneclick' || explicit === 'free' || explicit === 'paid') return explicit;
-  if (paper.isAutomatic === true) return 'oneclick';
+  if (explicit === 'paid') return 'paid';
   if (paper.pdfChecked) return paper.isOa === false ? 'paid' : 'free';
+  if (explicit === 'free') return 'free';
   if (paper.isOa === false) return 'paid';
   if (paper.isOa === true) return 'free';
   return null;
@@ -1950,79 +1972,142 @@ function tagLabel(t) {
 // RECOMENDACIONES — "TE PUEDE INTERESAR"
 // ═══════════════════════════════════════════════════
 
+const REC_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'about', 'into', 'over', 'after',
+  'under', 'between', 'during', 'without', 'through', 'study', 'studies', 'effect',
+  'effects', 'using', 'based', 'role', 'systematic', 'review', 'meta-analysis', 'analysis',
+  'para', 'sobre', 'entre', 'hacia', 'desde', 'como', 'pero', 'estudio', 'analisis', 'efecto',
+  'una', 'unos', 'unas', 'los', 'las', 'del', 'por', 'con', 'sus', 'que'
+]);
+
+function shuffleInPlace(list) {
+  for (let i = list.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list;
+}
+
+// Una consulta derivada de un guardado al azar, para que la mezcla también
+// tenga algo que ver con lo que la persona ya eligió.
+function bookmarkRecSource() {
+  if (!S.bookmarks.length) return null;
+  const bk = S.bookmarks[Math.floor(Math.random() * S.bookmarks.length)];
+  const words = (bk.title || '')
+    .replace(/[^\w\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !REC_STOPWORDS.has(w.toLowerCase()));
+
+  let query;
+  if (bk.topics?.length && Math.random() > 0.4) {
+    query = bk.topics[Math.floor(Math.random() * bk.topics.length)];
+  } else if (words.length >= 2) {
+    const start = Math.floor(Math.random() * (Math.max(0, words.length - 2) + 1));
+    query = words.slice(start, start + 3).join(' ');
+  } else {
+    query = (bk.title || 'psicoterapia clínica').split(' ').slice(0, 4).join(' ');
+  }
+  return query ? { label: 'Tus guardados', query } : null;
+}
+
+function collectUniquePapers(settled) {
+  const out = [];
+  const seen = new Set();
+  settled.forEach(entry => {
+    if (entry.status !== 'fulfilled') return;
+    (entry.value?.results || []).forEach(paper => {
+      if (!paper?.id || seen.has(paper.id)) return;
+      seen.add(paper.id);
+      out.push(paper);
+    });
+  });
+  return shuffleInPlace(out);
+}
+
+function authorKeyOf(paper) {
+  const first = (paper.authors || [])[0];
+  const name = typeof first === 'string' ? first : (first?.name || '');
+  return name.trim().toLowerCase().split(/\s+/).slice(-1)[0] || '';
+}
+
+function topicKeyOf(paper) {
+  const t = (paper.topics || [])[0] || paper.paperType || paper.tag || '';
+  return String(t).trim().toLowerCase();
+}
+
+// Reparte por autores y temas: primero un paper por autor, luego dos, luego
+// sin tope. Así no aparece el mismo nombre seis veces seguidas.
+function diversifyPapers(list, limit) {
+  const picked = [];
+  const byAuthor = new Map();
+  const byTopic = new Map();
+  const chosen = new Set();
+
+  const passes = [[1, 2], [2, 4], [Infinity, Infinity]];
+  for (const [maxAuthor, maxTopic] of passes) {
+    if (picked.length >= limit) break;
+    for (const paper of list) {
+      if (picked.length >= limit) break;
+      if (chosen.has(paper.id)) continue;
+      const a = authorKeyOf(paper);
+      const t = topicKeyOf(paper);
+      if (a && (byAuthor.get(a) || 0) >= maxAuthor) continue;
+      if (t && (byTopic.get(t) || 0) >= maxTopic) continue;
+      picked.push(paper);
+      chosen.add(paper.id);
+      if (a) byAuthor.set(a, (byAuthor.get(a) || 0) + 1);
+      if (t) byTopic.set(t, (byTopic.get(t) || 0) + 1);
+    }
+  }
+  return picked;
+}
+
 async function loadRecommendations() {
   // Mostrar skeletons mientras carga
   el.recsList.innerHTML = '<div class="rec-skeleton"></div><div class="rec-skeleton"></div><div class="rec-skeleton"></div>';
 
-  let query;
-  let sort = 'cited_by_count:desc';
-  let page = 1;
-
+  // Una sola consulta devolvía siempre el mismo racimo (a veces el mismo
+  // autor seis veces seguidas). Ahora mezclamos tres orígenes distintos y
+  // después repartimos autores y temas antes de recortar a ocho.
+  const picks = [];
   if (S.bookmarks.length > 0) {
-    // Seleccionar un guardado al azar para variar la fuente entre los guardados del usuario
-    const randomBk = S.bookmarks[Math.floor(Math.random() * S.bookmarks.length)];
-
-    // Extraer palabras clave sustanciales del título
-    const stopWords = new Set([
-      'the', 'and', 'for', 'with', 'from', 'that', 'this', 'about', 'into', 'over', 'after',
-      'under', 'between', 'during', 'without', 'through', 'study', 'studies', 'effect',
-      'effects', 'using', 'based', 'role', 'systematic', 'review', 'meta-analysis', 'analysis',
-      'para', 'sobre', 'entre', 'hacia', 'desde', 'como', 'pero', 'estudio', 'analisis', 'efecto'
-    ]);
-    const words = (randomBk.title || '')
-      .replace(/[^\w\s]/gi, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 3 && !stopWords.has(w.toLowerCase()));
-
-    // Alternar entre temas/conceptos y palabras clave del título
-    if (randomBk.topics && randomBk.topics.length > 0 && Math.random() > 0.4) {
-      query = randomBk.topics[Math.floor(Math.random() * randomBk.topics.length)];
-    } else if (words.length >= 2) {
-      // Tomar una ventana aleatoria de 2 o 3 palabras para rotar búsquedas
-      const maxStart = Math.max(0, words.length - 2);
-      const start = Math.floor(Math.random() * (maxStart + 1));
-      query = words.slice(start, start + 3).join(' ');
-    } else {
-      query = (randomBk.title || 'psicoterapia clínica').split(' ').slice(0, 4).join(' ');
-    }
-
-    // Variar ordenamiento y página para garantizar resultados diferentes en cada clic
-    const sorts = ['cited_by_count:desc', 'relevance_score:desc', 'publication_year:desc'];
-    sort = sorts[Math.floor(Math.random() * sorts.length)];
-    page = Math.floor(Math.random() * 3) + 1;
-
-    el.recsSubtitle.textContent = 'Basado en tus guardados';
-  } else {
-    // Si no hay guardados, explorar una corriente al azar
-    const randCorrente = CORRIENTES[Math.floor(Math.random() * CORRIENTES.length)];
-    query = randCorrente.query;
-    const sorts = ['cited_by_count:desc', 'relevance_score:desc'];
-    sort = sorts[Math.floor(Math.random() * sorts.length)];
-    page = Math.floor(Math.random() * 2) + 1;
-    el.recsSubtitle.textContent = `Explorando: ${randCorrente.label}`;
+    const fromBookmark = bookmarkRecSource();
+    if (fromBookmark) picks.push(fromBookmark);
+  }
+  const pool = CORRIENTES.slice();
+  while (picks.length < 3 && pool.length) {
+    picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
   }
 
+  const sorts = ['relevance_score:desc', 'cited_by_count:desc', 'publication_year:desc'];
+  const sources = picks.map((src, i) => ({
+    query: src.query,
+    page: Math.floor(Math.random() * 2) + 1,
+    sort: sorts[(i + Math.floor(Math.random() * sorts.length)) % sorts.length]
+  }));
+
+  el.recsSubtitle.textContent = S.bookmarks.length > 0
+    ? 'Basado en tus guardados'
+    : `Explorando: ${picks.map(p => p.label).join(' · ')}`;
+
   try {
-    let data;
-    try {
-      data = await fetchPapers({ query, page, perPage: 8, sort });
-    } catch (errRecs) {
-      // Primer arranque en frío: se espera al backend y se reintenta una vez
-      // antes de mostrar el error en la pantalla de inicio.
-      console.warn('[Recs] reintentando tras fallo inicial:', errRecs?.name || errRecs);
+    let settled = await Promise.allSettled(
+      sources.map(s => fetchPapers({ query: s.query, page: s.page, perPage: 6, sort: s.sort }))
+    );
+    let results = collectUniquePapers(settled);
+
+    if (!results.length) {
+      // Primer arranque en frío: se espera al backend y se reintenta una vez.
+      console.warn('[Recs] sin resultados, reintentando tras calentar el backend');
       await warmBackend();
       await new Promise(r => setTimeout(r, 700));
-      data = await fetchPapers({ query, page: 1, perPage: 8, sort: 'cited_by_count:desc' });
-    }
-    let { results } = data;
-
-    // Si la página aleatoria vino vacía, reintentar con la primera página
-    if ((!results || !results.length) && page > 1) {
-      const retry = await fetchPapers({ query, page: 1, perPage: 8, sort: 'cited_by_count:desc' });
-      results = retry.results;
+      settled = await Promise.allSettled(
+        sources.map(s => fetchPapers({ query: s.query, page: 1, perPage: 6, sort: s.sort }))
+      );
+      results = collectUniquePapers(settled);
     }
 
-    if (!results || !results.length) {
+    if (!results.length) {
       el.recsList.innerHTML = '<p style="font-size:13px; color:var(--txt-3); padding: 8px 0;">No se encontraron resultados.</p>';
       return;
     }
@@ -2034,6 +2119,8 @@ async function loadRecommendations() {
         results = unbookmarked;
       }
     }
+
+    results = diversifyPapers(results, 8);
 
     // Traducir títulos y snippets en lote
     const titles = results.map(p => p.title);
@@ -2382,18 +2469,10 @@ function buildMetaPanelHTML(paper) {
 }
 
 function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, translating) {
-  const isCorriente = Boolean(corriente && corriente.label);
   let tagsHtml = '';
-  if (isCorriente) {
-    const tagColor = corriente.color || 'var(--txt-3)';
-    const tagStyle = `background:${tagColor}1c; color:${tagColor}; border:1px solid ${tagColor}44;`;
-    tagsHtml += `<span class="modal-tag" style="${tagStyle}">${esc(corriente.label)}</span>`;
-  }
   if (tags && tags.length) {
     const validTag = tags.find(t => t && !t.toLowerCase().includes('articulo') && !t.toLowerCase().includes('artículo'));
-    if (validTag && (!isCorriente || validTag !== corriente.label)) {
-      tagsHtml += tagBadge(validTag);
-    }
+    if (validTag) tagsHtml = tagBadge(validTag);
   }
 
   const abstractContent = paper.abstract || 'El buscador no incluyó el abstract original para este artículo.';
@@ -2413,12 +2492,13 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
     return s.length > 22 ? s.slice(0, 21) + '…' : s;
   });
 
+  const verified = paper.pdfChecked === true && paper.isAutomatic === true;
   const availabilityKnown = paper.pdfChecked === true;
-  const isFreePdf = paper.isAutomatic === true;
-  const primaryLabel = (availabilityKnown && !isFreePdf) ? 'Traducir PDF descargado' : 'Leer en PsiHub';
+  const isFreePdf = verified;
+  const primaryLabel = 'Leer en PsiHub';
   const primarySub = !availabilityKnown
     ? 'Verificando disponibilidad…'
-    : (isFreePdf ? '1-click · traducción automática' : 'Requiere descarga manual');
+    : (isFreePdf ? '1-click · traducción automática' : 'Incluye traducción y resumen');
 
   const accessHtml = accessBadgeHtml(paper);
   const facts = [];
@@ -2437,20 +2517,20 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
   return `
     <div class="paper-detail">
       <div class="detail-fixed-head">
-        ${tagsHtml ? `<div class="modal-tags">${tagsHtml}</div>` : ''}
+        ${(tagsHtml || accessHtml) ? `<div class="modal-tags">${tagsHtml}${accessHtml}</div>` : ''}
         <h2 class="modal-title">${esc(displayTitle || 'Sin título')}</h2>
         ${authorsStr ? `<p class="modal-byline">${esc(authorsStr)}</p>` : ''}
-        <div class="modal-facts">${factsHtml}${accessHtml ? `<span class="modal-fact-dot" aria-hidden="true">·</span><span class="modal-access">${accessHtml}</span>` : ''}</div>
+        <div class="modal-facts">${factsHtml}</div>
         <div class="detail-tabs" role="tablist" aria-label="Información del paper">
           <button class="detail-tab is-active" type="button" data-panel="abstract" role="tab" aria-selected="true">
-            <i class="ph-bold ph-text-align-left"></i><span>Abstract</span>
+            <span>Abstract</span>
           </button>
           <button class="detail-tab" type="button" data-panel="summary" role="tab" aria-selected="false">
-            <i class="ph-bold ph-magic-wand"></i><span>Resumen IA</span>
+            <span>Resumen IA</span>
             <span class="detail-tab-dot" ${summary ? '' : 'hidden'}></span>
           </button>
           <button class="detail-tab" type="button" data-panel="meta" role="tab" aria-selected="false">
-            <i class="ph-bold ph-identification-card"></i><span>Ficha</span>
+            <span>Ficha</span>
           </button>
         </div>
       </div>
@@ -2484,9 +2564,6 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
                 <div class="empty-icon-wrap"><i class="ph-bold ph-magic-wand"></i></div>
                 <p class="empty-title">Todavía no hay resumen</p>
                 <p class="empty-subtitle">Generá un resumen claro del abstract, con hallazgos y límites.</p>
-                <button class="btn-cta-primary detail-empty-btn" type="button" id="btn-detail-summarize-empty">
-                  <i class="ph-bold ph-magic-wand"></i> Resumir con IA
-                </button>
               </div>
               <div class="detail-markdown" id="detail-summary-body" ${summary ? '' : 'hidden'}>${summaryHtml}</div>
             </div>
@@ -2509,17 +2586,17 @@ function buildModalHTML(paper, corriente, tags, displayTitle, abstractEs, transl
         </button>
 
         <div class="modal-action-row detail-action-row">
-          <button class="modal-action-btn" id="btn-detail-summarize" type="button">
+          <button class="modal-action-btn" id="btn-detail-summarize" type="button" title="Resumir con IA" aria-label="Resumir con IA">
             <i class="ph-bold ph-magic-wand"></i><span>Resumir</span>
           </button>
-          <button class="modal-action-btn" id="btn-detail-export" type="button">
+          <button class="modal-action-btn" id="btn-detail-export" type="button" title="Exportar referencia" aria-label="Exportar referencia">
             <i class="ph-bold ph-export"></i><span>Exportar</span>
           </button>
-          <button class="modal-action-btn" id="btn-modal-share" type="button">
+          <button class="modal-action-btn" id="btn-modal-share" type="button" title="Compartir" aria-label="Compartir">
             <i class="ph-bold ph-share-network"></i><span>Compartir</span>
           </button>
           ${pdfHref
-      ? `<a class="modal-action-btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">
+      ? `<a class="modal-action-btn" href="${esc(pdfHref)}" target="_blank" rel="noopener" title="Abrir PDF" aria-label="Abrir PDF">
              <i class="ph-bold ph-file-pdf"></i><span>PDF</span>
            </a>`
       : ''}
@@ -3304,6 +3381,62 @@ async function startPaperSummary(kind = 'basic') {
   }
 }
 
+async function streamTranslatePaper(payload, { onDelta, onStatus, signal } = {}) {
+  const apiUrl = `${HF_SPACE_URL}/api/translate-stream`;
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const data = await response.json();
+      if (data?.detail) detail = data.detail;
+    } catch { }
+    throw new Error(detail);
+  }
+  if (!response.body) throw new Error('El servidor no devolvió un stream.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+
+  const handleEvent = (evt) => {
+    if (!evt) return;
+    if (evt.type === 'delta' && evt.markdown) onDelta?.(evt.markdown);
+    else if (evt.type === 'status') onStatus?.(evt.done, evt.total);
+    else if (evt.type === 'error') throw new Error(evt.message || 'Error en la traducción.');
+    else if (evt.type === 'done') result = evt.result;
+  };
+
+  const flush = (chunk) => {
+    const dataLine = chunk.split('\n').find(line => line.startsWith('data:'));
+    if (!dataLine) return;
+    const raw = dataLine.slice(5).trim();
+    if (!raw) return;
+    let evt;
+    try { evt = JSON.parse(raw); } catch { return; }
+    handleEvent(evt);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+    for (const part of parts) flush(part);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) flush(buffer);
+
+  if (!result) throw new Error('La traducción terminó sin resultado.');
+  return result;
+}
+
 async function openReaderModal(paperUrl, paperId, paperObj) {
   const paper = paperObj || S.currentPaper;
   const effectiveId = paperId || paper?.id || paperUrl;
@@ -3468,18 +3601,35 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
     }
 
     try {
-      const apiUrl = `${HF_SPACE_URL}/api/translate`;
-      const data = await fetchWithBackgroundRetry(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      let streamShown = false;
+      const data = await streamTranslatePaper(
+        {
           url: paperUrl || '',
           pmcid: pmcId || null,
           doi: paper?.doi || null,
           paper_id: effectiveId,
           id: effectiveId
-        })
-      });
+        },
+        {
+          onDelta(markdown) {
+            if (S.readerPaperId !== effectiveId) return;
+            if (!streamShown) {
+              streamShown = true;
+              el.readerLoading.style.display = 'none';
+              if (el.readerProgressFill) el.readerProgressFill.style.width = '0%';
+            }
+            // Se pinta lo que ya llegó sin mover el scroll: queda arriba y el
+            // usuario baja a medida que entra el resto.
+            renderReaderPaperContent(paper, markdown);
+          },
+          onStatus(done, total) {
+            if (typeof done === 'number' && total) {
+              updateReaderProgressBar(Math.min(90, Math.round((done / total) * 90)),
+                `Traduciendo secciones (${done}/${total})`);
+            }
+          }
+        }
+      );
 
       if (LocalNotifications) {
         try {
@@ -3544,7 +3694,7 @@ async function openReaderModal(paperUrl, paperId, paperObj) {
       return;
     }
 
-    await finishReaderLoadingProgress();
+    stopReaderLoadingProgress();
     if (S.readerPaperId !== effectiveId) return;
 
     el.readerLoading.style.display = 'none';
@@ -3966,14 +4116,68 @@ function updateProfileUI(googleUser, userEmail) {
   }
 }
 
-// Sesión real con Supabase (si el proyecto está configurado). Es opcional:
-// sin configuración, la cuenta local de siempre sigue funcionando igual.
+// Estado completo que viaja a la nube (una fila por usuario en `user_sync`).
+function syncableData() {
+  return {
+    chats: Array.isArray(S.chats) ? S.chats : [],
+    bookmarks: Array.isArray(S.bookmarks) ? S.bookmarks : [],
+    folders: Array.isArray(S.folders) ? S.folders : [],
+    summaries: (S.summaries && typeof S.summaries === 'object') ? S.summaries : {},
+    profile: (S.profile && typeof S.profile === 'object') ? S.profile : {}
+  };
+}
+
+// Muestra u oculta la pantalla de login. Cuando Supabase está configurado, la
+// app exige sesión para entrar; sin configuración, sigue en modo local.
+function applyLoginGate() {
+  const gate = document.getElementById('login-gate');
+  if (!gate) return;
+  const loggedIn = Boolean(auth.session()?.access_token);
+  if (!auth.isConfigured() || loggedIn) {
+    gate.classList.add('hidden');
+    gate.setAttribute('aria-hidden', 'true');
+  } else {
+    gate.classList.remove('hidden');
+    gate.removeAttribute('aria-hidden');
+  }
+}
+
+// Descarga el estado remoto al iniciar sesión y lo vuelca en S + localStorage.
+async function hydrateFromCloud() {
+  const remote = await sync.pull();
+  if (!remote) {
+    // Sin datos en la nube: sube lo local para no perder el historial previo.
+    sync.push(syncableData());
+    return;
+  }
+  if (Array.isArray(remote.chats) && remote.chats.length) S.chats = remote.chats;
+  if (Array.isArray(remote.bookmarks)) S.bookmarks = remote.bookmarks;
+  if (Array.isArray(remote.folders)) S.folders = remote.folders;
+  if (remote.summaries && typeof remote.summaries === 'object') S.summaries = remote.summaries;
+  if (remote.profile && typeof remote.profile === 'object') {
+    S.profile = { ...(S.profile || {}), ...remote.profile };
+  }
+  saveData(CHAT_STORE_KEY, S.chats);
+  saveData('psyhub_bk', S.bookmarks);
+  saveData('psyhub_folders', S.folders);
+  saveData('psyhub_summaries', S.summaries);
+  saveData('psyhub_profile', S.profile);
+  // Re-renderiza lo ya visible para reflejar el estado descargado.
+  loadProfile();
+  refreshFolders();
+  renderChatHistory();
+}
+
+// Sesión real con Supabase. Si el proyecto está configurado, la app exige
+// login; sin configuración, la cuenta local de siempre sigue funcionando.
 async function bootAuth() {
   const hadRedirect = auth.handleRedirect();
+  applyLoginGate();
   if (auth.currentUser()) loadProfile();
   if (auth.isConfigured() && auth.session()?.access_token) {
     const verified = await auth.verifyWithServer(HF_SPACE_URL);
     if (verified) updateProfileUI(null, verified.email || '');
+    await hydrateFromCloud();
   }
   if (hadRedirect) {
     const user = auth.currentUser();
@@ -4310,12 +4514,20 @@ window.removeSavedPaperByIndex = removeSavedPaperByIndex;
 // EVENT LISTENERS
 // ═══════════════════════════════════════════════════
 
+// El velo se oculta 220 ms después de cerrar. Si el panel se reabre antes,
+// hay que cancelar ese timeout o el velo queda en display:none con el panel
+// abierto y ya no se puede cerrar tocando el fondo.
+let drawerCloseTimer = null;
+
 function openDrawer() {
   if (!el.appDrawer || !el.drawerScrim) return;
+  if (drawerCloseTimer) { clearTimeout(drawerCloseTimer); drawerCloseTimer = null; }
   el.drawerScrim.classList.remove('hidden');
   el.appDrawer.classList.add('open');
   el.appDrawer.setAttribute('aria-hidden', 'false');
-  requestAnimationFrame(() => el.drawerScrim.classList.add('visible'));
+  requestAnimationFrame(() => {
+    if (el.appDrawer.classList.contains('open')) el.drawerScrim.classList.add('visible');
+  });
 }
 
 function closeDrawer() {
@@ -4323,7 +4535,11 @@ function closeDrawer() {
   el.appDrawer.classList.remove('open');
   el.appDrawer.setAttribute('aria-hidden', 'true');
   el.drawerScrim.classList.remove('visible');
-  setTimeout(() => el.drawerScrim.classList.add('hidden'), 220);
+  if (drawerCloseTimer) clearTimeout(drawerCloseTimer);
+  drawerCloseTimer = setTimeout(() => {
+    if (!el.appDrawer.classList.contains('open')) el.drawerScrim.classList.add('hidden');
+    drawerCloseTimer = null;
+  }, 220);
 }
 
 function setupDrawer() {
@@ -4352,12 +4568,21 @@ function setupDrawer() {
     navigateTo(link.dataset.navPage);
   });
 
-  // Deslizar desde el borde izquierdo: gesto natural de apps móviles.
+  // Deslizamiento horizontal en toda la pantalla: a la derecha abre el panel,
+  // a la izquierda lo cierra. Se excluyen los controles que ya usan el gesto
+  // horizontal para otra cosa (inputs, modales, carruseles con scroll lateral).
+  const NO_SWIPE = 'input, textarea, select, [contenteditable], .reader-overlay, .modal-overlay, ' +
+                   '.corrientes-row, .subtabs-bar, .filter-bar, .chat-history-panel, .app-drawer';
   let startX = null;
   let startY = null;
+  let startWasOpen = false;
   document.addEventListener('touchstart', e => {
     const touch = e.touches[0];
-    if (!touch || touch.clientX > 24 || e.target.closest('input, textarea, .reader-overlay, .modal-overlay')) {
+    startWasOpen = !!el.appDrawer?.classList.contains('open');
+    if (!touch) { startX = null; return; }
+    // Dentro del panel abierto sí escuchamos (para cerrarlo deslizando).
+    if (e.target.closest(NO_SWIPE) && !startWasOpen) { startX = null; return; }
+    if (startWasOpen && e.target.closest('.app-drawer') && e.target.closest('input, textarea, select')) {
       startX = null;
       return;
     }
@@ -4370,12 +4595,19 @@ function setupDrawer() {
     if (!touch) return;
     const dx = touch.clientX - startX;
     const dy = Math.abs(touch.clientY - startY);
-    if (dx > 64 && dy < 50) {
+    if (dy >= 60) { startX = null; return; }   // gesto vertical: es scroll
+    if (startWasOpen) {
+      if (dx < -56) { closeDrawer(); startX = null; }
+      return;
+    }
+    if (dx > 56) {
       openDrawer();
       startX = null;
     }
   }, { passive: true });
-  document.addEventListener('touchend', () => { startX = null; }, { passive: true });
+  const resetSwipe = () => { startX = null; startWasOpen = !!el.appDrawer?.classList.contains('open'); };
+  document.addEventListener('touchend', resetSwipe, { passive: true });
+  document.addEventListener('touchcancel', resetSwipe, { passive: true });
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeDrawer();
@@ -4490,6 +4722,7 @@ function setupFolderEvents() {
 function setupEventListeners() {
   setupDrawer();
   setupFolderEvents();
+  setupSearchFilters();
 
   // Deslizar entre Abstract / Resumen / Ficha dentro del modal.
   let detailX = null;
@@ -5233,6 +5466,13 @@ function setupEventListeners() {
     });
   }
 
+  // Login gate (pantalla de entrada cuando no hay sesión).
+  if (el.gateGoogleLogin) {
+    el.gateGoogleLogin.addEventListener('click', () => {
+      auth.signInWithGoogle();
+    });
+  }
+
   // Google Sign-In Modal
   if (el.btnGoogleLogin && el.googleModalOverlay) {
     el.btnGoogleLogin.addEventListener('click', () => {
@@ -5297,10 +5537,12 @@ function setupEventListeners() {
 
   if (el.btnGoogleLogout) {
     el.btnGoogleLogout.addEventListener('click', async () => {
+      await sync.flushNow();
       await auth.signOut();
       localStorage.removeItem('psyhub_user_email');
       localStorage.removeItem('psyhub_google_user');
       loadProfile();
+      applyLoginGate();
       showToast('Cuenta de Google desconectada');
     });
   }
@@ -5659,7 +5901,14 @@ function showToast(msg, options = {}) {
 // ═══════════════════════════════════════════════════
 
 function loadData(k, def) { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } }
-function saveData(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } }
+function saveData(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); } catch { }
+  // Los datos sincronizables se espejan en Supabase cuando hay sesión.
+  if (k === 'psyhub_bk' || k === 'psyhub_folders' || k === 'psyhub_summaries'
+      || k === 'psyhub_profile' || k === 'psyhub_chats_v2') {
+    try { sync.push(syncableData()); } catch { }
+  }
+}
 function esc(str) {
   return String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -6056,6 +6305,10 @@ const CHAT_ACCESS_META = {
 const chatFilters = { quartile: 'all', study: 'all' };
 const chatAttachments = [];
 
+// Filtros de la búsqueda de resultados: mismos grupos que el chat.
+// El acceso se sincroniza con S.accessFilter; el año vive en los inputs del DOM.
+const searchFilters = { quartile: 'all', study: 'all' };
+
 function getChatDepth() {
   const chat = getActiveChat();
   return chat?.depth === 'deep' ? 'deep' : 'quick';
@@ -6323,6 +6576,211 @@ function showChatFilterPanel(name) {
   });
   menu.classList.toggle('is-sub', Boolean(name));
   if (name) menu.scrollTop = 0;
+}
+
+// ── Filtros de la búsqueda de resultados ─────────────────────────────
+// Espejo del filtro del chat, con ids `search-*` y atributos `data-s*`.
+// El acceso vive en S.accessFilter; cuartil y estudio en `searchFilters`.
+
+function getSearchFilters() {
+  const year = input => {
+    const n = parseInt(input?.value, 10);
+    return Number.isFinite(n) && n >= 1900 && n <= 2100 ? n : null;
+  };
+  return {
+    access: S.accessFilter,
+    year_from: year(el.searchYearFrom),
+    year_to: year(el.searchYearTo),
+    quartile: searchFilters.quartile,
+    study: searchFilters.study
+  };
+}
+
+function activeSearchFilterCount() {
+  const f = getSearchFilters();
+  let n = 0;
+  if (f.access !== 'all') n += 1;
+  if (f.year_from || f.year_to) n += 1;
+  if (f.quartile !== 'all') n += 1;
+  if (f.study !== 'all') n += 1;
+  return n;
+}
+
+function setSearchChoice(group, value) {
+  el.searchFilterMenu?.querySelectorAll(`.chat-access-option[data-s${group}]`).forEach(btn => {
+    const on = btn.dataset[`s${group}`] === value;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function setSearchAccess(access) {
+  const value = ['free', 'oneclick', 'paid'].includes(access) ? access : 'all';
+  setSearchChoice('access', value);
+  if (el.resultsAccess) el.resultsAccess.value = value;
+  S.accessFilter = value;
+  updateSearchFilterSummary();
+}
+
+function setSearchQuartile(value) {
+  searchFilters.quartile = ['q1', 'q2', 'q3', 'q4'].includes(value) ? value : 'all';
+  setSearchChoice('quartile', searchFilters.quartile);
+  updateSearchFilterSummary();
+}
+
+function setSearchStudy(value) {
+  const allowed = ['meta', 'review', 'rct', 'observational', 'qualitative'];
+  searchFilters.study = allowed.includes(value) ? value : 'all';
+  setSearchChoice('study', searchFilters.study);
+  updateSearchFilterSummary();
+}
+
+function updateSearchFilterSummary() {
+  const menu = el.searchFilterMenu;
+  if (!menu) return;
+  const f = getSearchFilters();
+  const setText = (key, text) => {
+    const node = menu.querySelector(`[data-sfilter-value="${key}"]`);
+    if (node) node.textContent = text;
+  };
+  setText('access', CHAT_ACCESS_META[f.access]?.label || 'Todos');
+
+  let period = 'Cualquier año';
+  if (f.year_from && f.year_to) period = `${f.year_from}–${f.year_to}`;
+  else if (f.year_from) period = `Desde ${f.year_from}`;
+  else if (f.year_to) period = `Hasta ${f.year_to}`;
+  setText('period', period);
+  menu.querySelector('[data-sfilter-open="period"]')?.classList.toggle('has-value', Boolean(f.year_from || f.year_to));
+
+  setText('quartile', f.quartile === 'all' ? 'Todos' : f.quartile.toUpperCase());
+  setText('study', CHAT_STUDY_META[f.study] || 'Todos');
+
+  ['access', 'quartile', 'study'].forEach(key => {
+    const value = key === 'access' ? f.access : f[key];
+    menu.querySelector(`[data-sfilter-open="${key}"]`)?.classList.toggle('has-value', value !== 'all');
+  });
+
+  const count = activeSearchFilterCount();
+  const badge = menu.querySelector('#search-filter-count');
+  if (badge) {
+    badge.textContent = String(count);
+    badge.toggleAttribute('hidden', count === 0);
+  }
+  if (el.searchFilterBtn) el.searchFilterBtn.classList.toggle('has-filter', count > 0);
+}
+
+function showSearchFilterPanel(name) {
+  const menu = el.searchFilterMenu;
+  if (!menu) return;
+  const root = menu.querySelector('[data-sfilter-root]');
+  if (root) root.toggleAttribute('hidden', Boolean(name));
+  menu.querySelectorAll('[data-sfilter-panel]').forEach(panel => {
+    panel.toggleAttribute('hidden', panel.dataset.sfilterPanel !== name);
+  });
+  menu.classList.toggle('is-sub', Boolean(name));
+  if (name) menu.scrollTop = 0;
+}
+
+function toggleSearchFilter(open) {
+  if (!el.searchFilterMenu || !el.searchFilterBtn) return;
+  const next = typeof open === 'boolean' ? open : el.searchFilterMenu.hasAttribute('hidden');
+  el.searchFilterMenu.toggleAttribute('hidden', !next);
+  el.searchFilterBtn.setAttribute('aria-expanded', next ? 'true' : 'false');
+  if (next) showSearchFilterPanel(null);
+}
+
+function clearSearchFilters() {
+  setSearchAccess('all');
+  setSearchQuartile('all');
+  setSearchStudy('all');
+  if (el.searchYearFrom) el.searchYearFrom.value = '';
+  if (el.searchYearTo) el.searchYearTo.value = '';
+  updateSearchFilterSummary();
+}
+
+function rerunSearchAfterFilterChange() {
+  if (!S.baseQuery) return;
+  if (currentFetchController) {
+    try { currentFetchController.abort(); } catch { }
+  }
+  S.page = 1;
+  S.papers = [];
+  S.hasMore = false;
+  if (el.paperList) el.paperList.innerHTML = '';
+  if (el.resultsCount) el.resultsCount.textContent = '';
+  if (el.searchResultsScroll) el.searchResultsScroll.scrollTop = 0;
+  if (el.infiniteScrollContainer) el.infiniteScrollContainer.style.display = 'none';
+  if (el.resultsEndNotice) el.resultsEndNotice.style.display = 'none';
+  if (el.scrollRetryContainer) el.scrollRetryContainer.style.display = 'none';
+  if (el.btnLoadMore) el.btnLoadMore.style.display = 'none';
+  doFetch();
+}
+
+function setupSearchFilters() {
+  if (!el.searchFilterMenu || !el.searchFilterBtn) return;
+
+  el.searchFilterBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleSearchFilter();
+  });
+
+  // Categorías del nivel raíz: abren su subpanel.
+  el.searchFilterMenu.querySelectorAll('[data-sfilter-open]').forEach(btn => {
+    btn.addEventListener('click', () => showSearchFilterPanel(btn.dataset.sfilterOpen));
+  });
+
+  // Botón «volver» dentro de un subpanel.
+  el.searchFilterMenu.querySelectorAll('[data-sfilter-back]').forEach(btn => {
+    btn.addEventListener('click', () => showSearchFilterPanel(null));
+  });
+
+  // Opciones de acceso, cuartil y estudio.
+  el.searchFilterMenu.querySelectorAll('[data-saccess]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setSearchAccess(btn.dataset.saccess);
+      rerunSearchAfterFilterChange();
+    });
+  });
+  el.searchFilterMenu.querySelectorAll('[data-squartile]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setSearchQuartile(btn.dataset.squartile);
+      rerunSearchAfterFilterChange();
+    });
+  });
+  el.searchFilterMenu.querySelectorAll('[data-sstudy]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setSearchStudy(btn.dataset.sstudy);
+      rerunSearchAfterFilterChange();
+    });
+  });
+
+  // Años.
+  const yearInputs = [el.searchYearFrom, el.searchYearTo].filter(Boolean);
+  yearInputs.forEach(input => {
+    input.addEventListener('change', () => {
+      updateSearchFilterSummary();
+      rerunSearchAfterFilterChange();
+    });
+  });
+
+  // Limpiar.
+  const clearBtn = el.searchFilterMenu.querySelector('#btn-search-filters-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      clearSearchFilters();
+      rerunSearchAfterFilterChange();
+    });
+  }
+
+  // Cerrar al tocar fuera.
+  document.addEventListener('click', e => {
+    if (!el.searchFilterMenu.hasAttribute('hidden')
+      && !e.target.closest('#search-filter')) {
+      toggleSearchFilter(false);
+    }
+  });
+
+  updateSearchFilterSummary();
 }
 
 function toggleChatAttachMenu(open) {

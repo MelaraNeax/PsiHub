@@ -235,6 +235,7 @@ async def translate_document(
     api_keys: list[str],
     model: Optional[str] = None,
     log_fn: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[dict, dict]:
     """Traduce el documento en el lugar y devuelve (documento, uso de tokens)."""
     log = log_fn or (lambda _msg: None)
@@ -292,6 +293,14 @@ async def translate_document(
                     await asyncio.sleep(0.8)
                     await run(retry_group, attempt + 1)
                 translated.update(parsed)
+                # Se aplica en caliente cada bloque traducido: el endpoint con
+                # streaming regenera el Markdown a partir de `document` y lo
+                # envia sin esperar a que terminen los demas lotes.
+                for index, text in parsed.items():
+                    kind, target, key, _orig = units[index]
+                    _set(document, kind, target, key, text)
+                if on_progress:
+                    on_progress(len(translated), len(units))
 
         await asyncio.gather(*(run(group) for group in groups))
 

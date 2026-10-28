@@ -18,7 +18,7 @@ import re
 import time
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -409,10 +409,11 @@ async def download_pdf(url: str) -> bytes:
     return data
 
 
-async def process_url(url: str, model: Optional[str] = None) -> dict:
+async def process_url(url: str, model: Optional[str] = None,
+                      progress: Optional[Callable[[int, int], None]] = None) -> dict:
     log(f'[DOWNLOAD] {url}')
     pdf_bytes = await download_pdf(url)
-    return await process_pdf(pdf_bytes, model=model, source='url')
+    return await process_pdf(pdf_bytes, model=model, source='url', progress=progress)
 
 
 # ---------------------------------------------------------------------------
@@ -431,8 +432,13 @@ def _pmc_doc_id(pmcid: str) -> str:
     return hashlib.sha256(f'pmc:{pmcid}'.encode('utf-8')).hexdigest()
 
 
-async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pmc') -> dict:
-    """Traduce el articulo completo de un registro PMC a Markdown y PDF."""
+async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pmc',
+                      on_delta: Optional[Callable[[str], None]] = None) -> dict:
+    """Traduce el articulo completo de un registro PMC a Markdown y PDF.
+
+    Si se pasa `on_delta`, se invoca con el Markdown parcial tras cada lote
+    traducido, para el streaming del lector.
+    """
     clean = re.sub(r'[^A-Za-z0-9]', '', str(pmcid or '')).upper()
     if not clean.startswith('PMC'):
         clean = f'PMC{clean}'
@@ -473,6 +479,7 @@ async def process_pmc(pmcid: str, model: Optional[str] = None, source: str = 'pm
     document = europepmc.xml_to_document(xml_text)
     document, stats = await pmc_translate.translate_document(
         document, TRAD_API_KEYS, model=selected_model, log_fn=log,
+        on_progress=(lambda _done, _total: on_delta(document_to_markdown(document))) if on_delta else None,
     )
 
     paths = _artifact_paths(doc_id)
@@ -840,6 +847,88 @@ async def api_translate(request: TranslateRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _sse(payload: dict) -> str:
+    return f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
+
+
+@app.post('/api/translate-stream')
+async def api_translate_stream(request: TranslateRequest):
+    """Traduccion con streaming SSE: el Markdown llega por partes en cuanto se
+    traduce cada lote, para que el lector pinte contenido desde el inicio."""
+    pmcid = (request.pmcid or '').strip()
+    if not pmcid:
+        for raw in (request.paper_id, request.id, request.url):
+            match = re.search(r'(PMC\d{4,})', str(raw or ''), re.I)
+            if match:
+                pmcid = match.group(1)
+                break
+    url = (request.url or '').strip()
+
+    if not pmcid and not url:
+        raise HTTPException(status_code=400, detail='Falta la URL o el identificador PMC.')
+
+    async def produce():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def run():
+            try:
+                if pmcid:
+                    try:
+                        result = await process_pmc(
+                            pmcid, request.model,
+                            on_delta=lambda md: queue.put_nowait(('delta', md)),
+                        )
+                    except ValueError as exc:
+                        # Sin texto completo en PMC: se usa el PDF de la URL.
+                        if not url:
+                            raise
+                        log(f'[PMC] {pmcid} sin texto completo ({exc}); se intenta el PDF.')
+                        result = await process_url(
+                            url, request.model,
+                            progress=lambda done, total: queue.put_nowait(
+                                ('status', {'done': done, 'total': total})),
+                        )
+                else:
+                    result = await process_url(
+                        url, request.model,
+                        progress=lambda done, total: queue.put_nowait(
+                            ('status', {'done': done, 'total': total})),
+                    )
+                await queue.put(('done', result))
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log(f'[ERROR] translate-stream: {type(exc).__name__}: {exc}')
+                await queue.put(('error', str(exc)))
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == 'delta':
+                    yield _sse({'type': 'delta', 'markdown': payload})
+                elif kind == 'status':
+                    yield _sse({'type': 'status', **payload})
+                elif kind == 'error':
+                    yield _sse({'type': 'error', 'message': payload})
+                    break
+                elif kind == 'done':
+                    yield _sse({'type': 'done', 'result': payload})
+                    break
+        finally:
+            task.cancel()
+
+    return StreamingResponse(
+        produce(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
+
 @app.get('/api/openalex')
 async def api_openalex(request: Request):
     allowed = {'filter', 'search', 'sort', 'page', 'per-page', 'select', 'api_key'}
@@ -912,6 +1001,9 @@ async def api_search(
     sort: str = Query(''),
     scope: str = Query('psy'),
     mode: str = Query('broad'),
+    year_from: Optional[str] = Query(None),
+    year_to: Optional[str] = Query(None),
+    study: Optional[str] = Query(None),
 ):
     """Pagina de resultados ya normalizada para la interfaz.
 
@@ -925,6 +1017,17 @@ async def api_search(
     if not europepmc.STATE.available:
         raise HTTPException(status_code=503, detail='Europe PMC no está disponible en este momento.')
 
+    # Año y tipo de estudio se traducen a clausulas del dialecto de Europe PMC
+    # reutilizando el filtro del chat. El cuartil se resuelve en cliente.
+    extra = ''
+    if year_from or year_to or study:
+        filters = chat_service.normalize_filters({
+            'year_from': year_from,
+            'year_to': year_to,
+            'study_type': study,
+        })
+        extra = chat_service.filters_clause(filters)
+
     size = page_size or europepmc.EPMC_PAGE_SIZE
     try:
         works, meta = await europepmc.search(
@@ -935,6 +1038,7 @@ async def api_search(
             sort=sort or None,
             scope=scope,
             mode=mode,
+            extra=extra,
             # Relevancia: el orden propio del motor es "lo mas nuevo primero",
             # asi que para la interfaz se mezcla con los mas citados.
             balanced=not sort or sort == 'relevance',
