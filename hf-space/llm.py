@@ -130,7 +130,13 @@ def _client(api_key: str, timeout: float):
     return anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=1)
 
 
-def _params(messages: list[dict], max_tokens: int) -> dict:
+# Si el modelo rechaza `thinking: disabled`, se deja de enviarlo en este
+# proceso en vez de fallar en cada llamada.
+_thinking_disabled_ok = True
+
+
+def _params(messages: list[dict], max_tokens: int,
+            think: Optional[bool] = None) -> dict:
     system, turns = _split_system(messages)
     params: dict = {
         'model': CLAUDE_MODEL,
@@ -139,6 +145,9 @@ def _params(messages: list[dict], max_tokens: int) -> dict:
     }
     if system:
         params['system'] = system
+    # En traduccion el razonamiento solo gasta tokens de salida: se apaga.
+    if think is not None and _thinking_disabled_ok:
+        params['thinking'] = {'type': 'adaptive' if think else 'disabled'}
     return params
 
 
@@ -148,9 +157,11 @@ async def complete(
     max_tokens: int,
     temperature: Optional[float] = None,
     timeout: float = 120.0,
+    think: bool = False,
 ) -> tuple[str, dict]:
     """Respuesta sin streaming. `temperature` se ignora: Haiku 5.5 rechaza
     valores no estandar de muestreo."""
+    global _thinking_disabled_ok
     keys = [k for k in (api_keys or []) if k]
     if not keys:
         raise RuntimeError('No hay API key de Claude configurada.')
@@ -159,9 +170,18 @@ async def complete(
     for key in keys[:KEY_ATTEMPTS]:
         try:
             async with _client(key, timeout) as client:
-                response = await client.messages.create(
-                    **_params(messages, max_tokens)
-                )
+                try:
+                    response = await client.messages.create(
+                        **_params(messages, max_tokens, think)
+                    )
+                except Exception:
+                    if not _thinking_disabled_ok or think:
+                        raise
+                    # El modelo no acepta apagar thinking: se reintenta sin el.
+                    _thinking_disabled_ok = False
+                    response = await client.messages.create(
+                        **_params(messages, max_tokens, None)
+                    )
             text = ''.join(
                 block.text for block in response.content if block.type == 'text'
             ).strip()
@@ -191,7 +211,7 @@ async def stream(
         produced = False
         try:
             async with _client(key, timeout) as client:
-                async with client.messages.stream(**_params(messages, max_tokens)) as response_stream:
+                async with client.messages.stream(**_params(messages, max_tokens, think)) as response_stream:
                     async for chunk in response_stream.text_stream:
                         if not chunk:
                             continue

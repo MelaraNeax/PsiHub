@@ -82,7 +82,7 @@ def _year(value: object) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _authors_from_names(names: list[str]) -> list[str]:
+def _authors_from_names(names: list[object]) -> list[str]:
     seen: list[str] = []
     for name in names:
         clean = _WS_RE.sub(' ', str(name or '')).strip(' ,;')
