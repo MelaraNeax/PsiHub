@@ -17,16 +17,16 @@
 
   <!-- Login opcional con Supabase/Google: completar para activar el OAuth real.
        Sin estos datos, la app usa la cuenta local de siempre. -->
-  <meta name="psyhub-supabase-url" content="">
-  <meta name="psyhub-supabase-anon" content="">
+  <meta name="psyhub-supabase-url" content="https://yoklqknhakmfsiobjcsy.supabase.co">
+  <meta name="psyhub-supabase-anon" content="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlva2xxa25oYWttZnNpb2JqY3N5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMxNDc4NTEsImV4cCI6MjEwODcyMzg1MX0.4fo7WFqhDJmqhVoHnBtEDlQjQ527E2f1WrSX-FrGPMI">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&display=swap"
     rel="stylesheet">
   <script src="https://unpkg.com/@phosphor-icons/web" defer></script>
-  <link rel="stylesheet" href="style.css?v=43">
-  <link rel="stylesheet" href="style-chat.css?v=5">
+  <link rel="stylesheet" href="style.css?v=46">
+  <link rel="stylesheet" href="style-chat.css?v=6">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
 </head>
 
@@ -60,25 +60,19 @@
           </div>
         </div>
 
+      </div>
+    </header>
+
+    <div class="page-scroll">
+
+      <!-- Buscador + temáticas en píldoras -->
+      <section class="home-search-section">
         <div class="search-inline-wrapper home-search-bar" id="search-inline-wrapper" role="search">
           <i class="ph-bold ph-magnifying-glass search-inline-icon"></i>
           <input type="search" id="search-input" class="search-inline-input"
             placeholder="Buscar artículos, autores, temas…" autocomplete="off" enterkeyhint="search">
           <button class="btn-clear-search" id="btn-clear-search" style="display:none;"><i
               class="ph-bold ph-x"></i></button>
-        </div>
-      </div>
-    </header>
-
-    <div class="page-scroll">
-
-      <!-- Temáticas — fila deslizable -->
-      <section class="section topics-section">
-        <div class="section-header-row topics-header">
-          <h2 class="section-eyebrow">Temáticas</h2>
-          <button class="btn-see-all" id="btn-all-topics">
-            Ver todas <i class="ph-bold ph-arrow-right"></i>
-          </button>
         </div>
         <div class="corrientes-row" id="corrientes-row">
           <!-- Generado por JS -->
@@ -198,7 +192,7 @@
           <button class="app-menu-btn" type="button" aria-label="Abrir menú" title="Menú">
             <i class="ph-bold ph-list"></i>
           </button>
-          <h1 class="app-title">Perfil</h1>
+          <h1 class="app-title">Cuenta</h1>
         </div>
       </div>
     </header>
@@ -306,6 +300,20 @@
         </div>
       </div>
 
+      <!-- Accesos de cuenta -->
+      <nav class="account-links" aria-label="Cuenta y ajustes">
+        <button class="account-link" type="button" data-nav-page="settings">
+          <i class="ph-bold ph-gear-six"></i>
+          <span>Configuración</span>
+          <i class="ph-bold ph-caret-right"></i>
+        </button>
+        <button class="account-link" type="button" data-nav-page="pricing">
+          <i class="ph-bold ph-tag"></i>
+          <span>Precios</span>
+          <span class="account-link-tag">Pronto</span>
+        </button>
+      </nav>
+
       <!-- Métricas rápidas (Stats) -->
       <!-- Se quitó el contador de guardados: la lista ya comunica el contenido -->
 
@@ -410,7 +418,7 @@
             <i class="ph-bold ph-list"></i>
           </button>
           <div class="brand-block">
-            <h1 class="app-title">Biblioteca</h1>
+            <h1 class="app-title">Leer</h1>
           </div>
         </div>
       </div>
@@ -418,18 +426,19 @@
 
     <div class="page-scroll profile-scroll library-scroll">
 
-      <!-- Guardados por carpeta -->
+      <!-- Colecciones -->
       <section class="library-folders-card" id="library-folders-card">
         <div class="folder-bar-head">
-          <h2 class="section-eyebrow">Guardados</h2>
-          <button class="folder-new-btn" id="btn-new-folder" type="button">
-            <i class="ph-bold ph-plus"></i> Nueva carpeta
-          </button>
+          <h2 class="section-eyebrow">Colecciones</h2>
         </div>
 
-        <!-- Vista 1: rectángulos de carpetas (estilo Instagram) -->
+        <!-- Vista 1: rectángulos de colecciones (estilo Instagram) -->
         <div class="folder-grid-view" id="folder-grid-view">
           <div class="folder-grid" id="folder-grid"></div>
+
+          <button class="folder-see-all" id="btn-show-all-folders" type="button" hidden>
+            Ver todas las colecciones <i class="ph-bold ph-arrow-down"></i>
+          </button>
 
           <form class="folder-new-form" id="folder-new-form" hidden>
             <input class="folder-name-input" id="folder-name-input" type="text" maxlength="60"
@@ -447,7 +456,7 @@
         <div class="folder-detail-view" id="folder-detail-view" hidden>
           <div class="folder-detail-bar">
             <button class="folder-back-btn" id="btn-folder-back" type="button">
-              <i class="ph-bold ph-caret-left"></i><span>Todas las carpetas</span>
+              <i class="ph-bold ph-caret-left"></i><span>Colecciones</span>
             </button>
             <div class="folder-toolbar-actions">
               <button class="folder-tool-btn" id="btn-rename-folder" type="button" title="Renombrar carpeta"
@@ -480,37 +489,11 @@
           <ul class="saved-list paper-list folder-saved-list" id="folder-saved-list"></ul>
           <div class="profile-empty-saved folder-empty" id="folder-empty" hidden>
             <div class="empty-icon-wrap"><i class="ph-bold ph-bookmark-simple"></i></div>
-            <p class="empty-title" style="font-size: 14px;">Carpeta vacía</p>
-            <p class="empty-subtitle">Guardá papers desde cualquier sección y elegí esta carpeta con “Cambiar”.</p>
+            <p class="empty-title" style="font-size: 14px;">Colección vacía</p>
+            <p class="empty-subtitle">Guardá artículos desde cualquier sección y elegí esta colección con “Cambiar”.</p>
           </div>
         </div>
       </section>
-
-      <!-- Módulo principal: Traducir y convertir -->
-      <div class="library-hero-card" id="library-reader-card">
-        <div class="library-hero-badge">
-          <i class="ph-bold ph-translate"></i>
-        </div>
-        <h3 class="library-hero-title">Traducir y convertir en PsiHub</h3>
-        <p class="library-hero-desc">
-          Traducí papers completos al español, exportalos en PDF o Markdown y leelos dentro de la app.
-        </p>
-        <div class="library-hero-features">
-          <span class="library-feature"><i class="ph-bold ph-translate"></i> Traducción</span>
-          <span class="library-feature"><i class="ph-bold ph-file-pdf"></i> PDF</span>
-          <span class="library-feature"><i class="ph-bold ph-file-text"></i> Markdown</span>
-          <span class="library-feature"><i class="ph-bold ph-book-open"></i> Modo lectura</span>
-        </div>
-        <label class="library-upload-btn" for="library-file-upload">
-          <span class="library-upload-icon"><i class="ph-bold ph-upload-simple"></i></span>
-          <span class="library-upload-copy">
-            <span class="library-upload-title">Subir archivo PDF</span>
-            <span class="library-upload-sub">Traducilo y leelo dentro de PsiHub</span>
-          </span>
-          <i class="ph-bold ph-arrow-right library-upload-arrow"></i>
-          <input type="file" id="library-file-upload" accept=".pdf" style="display: none;">
-        </label>
-      </div>
 
       <!-- Artículos recientes (procesados) -->
       <div class="library-recent" id="library-processed-card">
@@ -530,6 +513,15 @@
         </div>
       </div>
 
+    </div>
+
+    <!-- Barra fija: subir PDF -->
+    <div class="library-upload-dock">
+      <label class="library-upload-btn" for="library-file-upload">
+        <i class="ph-bold ph-upload-simple"></i>
+        <span>Subir archivo PDF</span>
+        <input type="file" id="library-file-upload" accept=".pdf" style="display: none;">
+      </label>
     </div>
   </div>
 
@@ -928,20 +920,10 @@
           <i class="ph-bold ph-compass"></i><span>Explorar</span>
         </button>
         <button class="drawer-item" type="button" data-page="library">
-          <i class="ph-bold ph-books"></i><span>Mis archivos</span>
+          <i class="ph-bold ph-book-open"></i><span>Leer</span>
         </button>
         <button class="drawer-item" type="button" data-page="chat">
           <i class="ph-bold ph-chat-circle-dots"></i><span>Investigación (IA)</span>
-        </button>
-        <button class="drawer-item" type="button" data-page="pricing">
-          <i class="ph-bold ph-tag"></i><span>Precios</span>
-          <span class="drawer-badge">Pronto</span>
-        </button>
-      </nav>
-      <div class="drawer-divider"></div>
-      <nav class="drawer-nav" aria-label="Cuenta y ajustes">
-        <button class="drawer-item" type="button" data-page="settings">
-          <i class="ph-bold ph-gear-six"></i><span>Configuración</span>
         </button>
         <button class="drawer-item" type="button" data-page="profile">
           <i class="ph-bold ph-user-circle"></i><span>Cuenta</span>
@@ -1169,7 +1151,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script type="module" src="app.js?v=20261030"></script>
+  <script type="module" src="app.js?v=20261031"></script>
 </body>
 
 </html>

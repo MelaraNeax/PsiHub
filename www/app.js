@@ -369,6 +369,7 @@ const S = {
 let folderPickerPaper = null;
 // 'grid' = rectángulos de carpetas; 'detail' = papers de la carpeta elegida.
 let folderView = 'grid';
+let folderShowAll = false;
 
 // ─── Guardados: carpetas ───────────────────────────────────────────────
 // Migra los guardados viejos (sin carpeta) a "Guardados" sin perder nada.
@@ -521,8 +522,10 @@ function initDOMRefs() {
     librarySavedContainer: $('library-saved-container'),
     iconToggleSaved: $('icon-toggle-saved'),
     libraryFileUpload: $('library-file-upload'),
+    libraryRecent: document.querySelector('.library-recent'),
     folderGrid: $('folder-grid'),
     folderGridView: $('folder-grid-view'),
+    btnShowAllFolders: $('btn-show-all-folders'),
     folderDetailView: $('folder-detail-view'),
     btnFolderBack: $('btn-folder-back'),
     folderSavedList: $('folder-saved-list'),
@@ -4101,29 +4104,37 @@ function refreshFolders() {
   const total = S.bookmarks.length;
   const showDetail = folderView === 'detail';
 
-  // Vista de rectángulos: una tarjeta por carpeta + tarjeta para crear.
-  el.folderGrid.innerHTML = S.folders.map((folder, index) => {
+  // Vista de colecciones: rectángulos grandes con nombre y cantidad adentro.
+  // Se muestran hasta 4 (2x2); si hay más, un botón despliega el resto.
+  const VISIBLE_FOLDERS = 3;
+  const overflow = S.folders.length > VISIBLE_FOLDERS;
+  const folders = folderShowAll ? S.folders : S.folders.slice(0, VISIBLE_FOLDERS);
+  el.folderGrid.innerHTML = folders.map(folder => {
     const count = folderPapers(folder.id).length;
-    const isSaved = folder.id === 'saved';
-    const icon = isSaved ? 'ph-bookmark-simple' : 'ph-folder';
     return `<button class="folder-tile" type="button" data-folder="${esc(folder.id)}"
-      data-tone="${index % 4}" aria-label="Abrir carpeta ${esc(folder.name)}, ${count} papers">
-      <span class="folder-tile-cover">
-        <i class="ph-bold ${icon}"></i>
-        <span class="folder-tile-badge">${count}</span>
-      </span>
+      aria-label="Abrir la colección ${esc(folder.name)}, ${count} artículos">
       <span class="folder-tile-name">${esc(folder.name)}</span>
-      <span class="folder-tile-meta">${count === 1 ? '1 paper' : `${count} papers`}</span>
+      <span class="folder-tile-meta">${count === 1 ? '1 artículo' : `${count} artículos`}</span>
     </button>`;
   }).join('') + `
     <button class="folder-tile folder-tile-new" type="button" data-folder-create>
-      <span class="folder-tile-cover"><i class="ph-bold ph-plus"></i></span>
-      <span class="folder-tile-name">Nueva carpeta</span>
-      <span class="folder-tile-meta">Organizá tus papers</span>
+      <span class="folder-tile-name">Nueva colección</span>
+      <span class="folder-tile-meta">Agregar</span>
+      <i class="ph-bold ph-plus folder-tile-plus"></i>
     </button>`;
+
+  if (el.btnShowAllFolders) {
+    el.btnShowAllFolders.hidden = !overflow;
+    el.btnShowAllFolders.innerHTML = folderShowAll
+      ? 'Ver menos <i class="ph-bold ph-arrow-up"></i>'
+      : `Ver todas las colecciones (${S.folders.length}) <i class="ph-bold ph-arrow-down"></i>`;
+  }
 
   if (el.folderGridView) el.folderGridView.hidden = showDetail;
   if (el.folderDetailView) el.folderDetailView.hidden = !showDetail;
+  // Dentro de una colección, la página se enfoca en su lista.
+  document.getElementById('library-folders-card')?.classList.toggle('is-detail', showDetail);
+  if (el.libraryRecent) el.libraryRecent.hidden = showDetail;
 
   const folder = currentFolder();
   const papers = folder ? folderPapers(folder.id) : [];
@@ -4131,7 +4142,7 @@ function refreshFolders() {
     el.folderCurrentName.textContent = folder ? folder.name : 'Guardados';
   }
   if (el.folderCurrentCount) {
-    el.folderCurrentCount.textContent = papers.length === 1 ? '1 paper' : `${papers.length} papers`;
+    el.folderCurrentCount.textContent = papers.length === 1 ? '1 artículo' : `${papers.length} artículos`;
   }
   if (el.btnDeleteFolder) {
     el.btnDeleteFolder.disabled = !folder || folder.id === 'saved';
@@ -4333,6 +4344,14 @@ function setupDrawer() {
     });
   });
 
+  // Accesos internos (Cuenta → Configuración / Precios).
+  document.addEventListener('click', e => {
+    const link = e.target.closest('[data-nav-page]');
+    if (!link) return;
+    e.preventDefault();
+    navigateTo(link.dataset.navPage);
+  });
+
   // Deslizar desde el borde izquierdo: gesto natural de apps móviles.
   let startX = null;
   let startY = null;
@@ -4377,6 +4396,12 @@ function setupFolderEvents() {
     });
   }
   if (el.btnFolderBack) el.btnFolderBack.addEventListener('click', closeFolderDetail);
+  if (el.btnShowAllFolders) {
+    el.btnShowAllFolders.addEventListener('click', () => {
+      folderShowAll = !folderShowAll;
+      refreshFolders();
+    });
+  }
 
   if (el.btnNewFolder) {
     el.btnNewFolder.addEventListener('click', () => {

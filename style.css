@@ -55,7 +55,7 @@
   --header-h:   56px;
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-display: 'Lora', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-read: 'Lora', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -6465,3 +6465,511 @@ body::after { opacity: 0.016; }
   .detail-meta-row { grid-template-columns: 96px minmax(0, 1fr); }
   .detail-tab span { font-size: 10.5px; }
 }
+
+/* ═══════════════════════════════════════════════════
+   REFINAMIENTO 2026-10 · tipografía y superficies sobrias
+   Una sola familia (Inter), escala fija de tamaños y
+   superficies planas con líneas de 1px en vez de paneles.
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  /* Escala tipográfica: nada de tamaños sueltos. */
+  --t-micro:  9.5px;   /* etiquetas en mayúsculas */
+  --t-xs:    10.5px;   /* metadatos */
+  --t-sm:    11.5px;   /* pestañas, píldoras, botones chicos */
+  --t-base:  13px;     /* cuerpo */
+  --t-md:    14.5px;   /* títulos de tarjeta */
+  --t-lg:    17px;     /* títulos de sección */
+  --t-xl:    21px;     /* título de página */
+  --t-2xl:   26px;     /* logotipo */
+  --w-reg: 400;
+  --w-med: 500;
+  --w-semi: 600;
+  --line-body: 1.55;
+  --line-tight: 1.25;
+  --track-label: 0.14em;
+  --track-title: -0.012em;
+  --hairline: rgba(255, 255, 255, 0.09);
+  --hairline-soft: rgba(255, 255, 255, 0.06);
+}
+
+body {
+  font-family: var(--font);
+  font-size: var(--t-base);
+  font-weight: var(--w-reg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Sin halos de color: las páginas se apoyan en el fondo liso. */
+.home-bg-glow,
+.library-bg-glow,
+.profile-bg-glow,
+.chat-bg-glow { display: none !important; }
+
+/* ─── Escala de títulos ─── */
+.app-title {
+  font-family: var(--font);
+  font-size: var(--t-xl);
+  font-weight: var(--w-med);
+  letter-spacing: var(--track-title);
+  line-height: var(--line-tight);
+}
+
+.app-logo {
+  font-size: var(--t-2xl);
+  font-weight: var(--w-med);
+  letter-spacing: -0.022em;
+}
+
+.section-title {
+  font-family: var(--font);
+  font-size: var(--t-lg);
+  font-weight: var(--w-med);
+  letter-spacing: var(--track-title);
+}
+
+.section-eyebrow {
+  font-family: var(--font);
+  font-size: var(--t-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--txt-3);
+}
+
+.section-subtitle,
+.btn-see-all,
+.btn-link-subtle { font-size: var(--t-sm); }
+
+/* ─── Cabecera de inicio ─── */
+.home-header {
+  padding: calc(env(safe-area-inset-top, 0px) + 14px) var(--gutter) 0;
+}
+
+.home-header-top { margin-bottom: 0; }
+.home-header-left { align-items: center; gap: 10px; }
+
+/* ─── Inicio: buscador y temáticas ─── */
+.home-search-section {
+  padding: 14px var(--gutter) 4px;
+}
+
+.home-search-section .home-search-bar {
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 0 12px 0 13px;
+}
+
+.home-search-section .home-search-bar:focus-within {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.home-search-section .search-inline-input,
+.home-search-section .search-inline-input::placeholder {
+  font-size: var(--t-base);
+}
+
+.home-search-section .search-inline-icon { font-size: 15px; }
+
+/* Píldoras de temáticas: transparentes y deslizables. */
+.home-search-section .corrientes-row {
+  margin: 12px calc(var(--gutter) * -1) 0;
+  padding: 0 var(--gutter) 2px;
+  gap: 7px;
+  border-bottom: 0;
+  align-items: center;
+}
+
+.home-search-section .topic-tab {
+  padding: 6px 12px;
+  border: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 999px;
+  margin-bottom: 0;
+  font-size: var(--t-sm);
+  font-weight: var(--w-med);
+  letter-spacing: 0.005em;
+  color: var(--txt-2);
+  background: transparent;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.home-search-section .topic-tab.active {
+  color: var(--txt);
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ─── "Te puede interesar" más contenido ─── */
+.section-recs { padding: 16px var(--gutter) 4px; }
+
+.recs-header {
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.section-recs .section-title { font-size: var(--t-md); font-weight: var(--w-med); }
+
+/* ─── Tarjetas de artículo: filas planas ─── */
+.paper-card {
+  padding: 14px 30px 14px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.paper-card-title {
+  font-family: var(--font);
+  font-size: var(--t-md);
+  font-weight: var(--w-med);
+  line-height: 1.38;
+  letter-spacing: 0;
+}
+
+.paper-card-authors {
+  font-size: var(--t-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.paper-card-meta { font-size: var(--t-xs); letter-spacing: 0.02em; }
+.paper-card-meta i { font-size: 11.5px; }
+.btn-card-bk { font-size: 17px; top: 12px; }
+.paper-card-arrow { font-size: 11px; bottom: 14px; }
+.tag-pill { font-size: 8.5px; letter-spacing: 0.08em; }
+
+.rec-skeleton { height: 84px; }
+
+/* ─── Leer: colecciones ─── */
+.library-scroll {
+  gap: 20px;
+  padding: 8px var(--gutter) 100px;
+}
+
+.library-folders-card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.folder-bar-head { margin-bottom: 10px; }
+
+.folder-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.folder-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  aspect-ratio: 1.28;
+  padding: 13px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.folder-tile:hover {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.folder-tile:active { transform: none; background: rgba(255, 255, 255, 0.07); }
+
+.folder-tile-name {
+  padding: 0;
+  font-size: var(--t-md);
+  font-weight: var(--w-med);
+  letter-spacing: -0.008em;
+  line-height: 1.25;
+  color: var(--txt);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.folder-tile-meta {
+  padding: 0;
+  font-size: var(--t-xs);
+  color: var(--txt-3);
+}
+
+.folder-tile-new {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: transparent;
+}
+
+.folder-tile-new .folder-tile-name { color: var(--txt-2); }
+.folder-tile-new .folder-tile-meta { color: var(--txt-3); }
+
+.folder-tile-plus {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  font-size: 14px;
+  color: var(--txt-3);
+}
+
+.folder-tile-new:hover {
+  border-color: rgba(138, 171, 144, 0.55);
+  background: rgba(138, 171, 144, 0.04);
+}
+
+.folder-tile-new:hover .folder-tile-plus,
+.folder-tile-new:hover .folder-tile-name { color: var(--txt); }
+
+.folder-see-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--txt-3);
+  font-size: var(--t-sm);
+  font-weight: var(--w-med);
+  transition: color 0.16s ease;
+}
+
+.folder-see-all:hover { color: var(--txt); }
+.folder-see-all[hidden] { display: none !important; }
+
+/* Detalle de colección */
+.folder-detail-bar { border: 0; padding: 0 0 4px; }
+.folder-back-btn { font-size: var(--t-sm); color: var(--txt-2); }
+.folder-current-name { font-size: var(--t-lg); font-weight: var(--w-med); letter-spacing: var(--track-title); }
+.folder-current-count { font-size: var(--t-xs); color: var(--txt-3); }
+.folder-tool-btn { font-size: 14px; }
+
+/* ─── Barra fija para subir un PDF ─── */
+.library-upload-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  padding: 10px var(--gutter) calc(env(safe-area-inset-bottom, 0px) + 12px);
+  background: linear-gradient(180deg, rgba(9, 9, 10, 0) 0%, rgba(9, 9, 10, 0.92) 46%, var(--bg) 100%);
+}
+
+.library-upload-dock .library-upload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  height: 46px;
+  border-radius: 12px;
+  background: #f1efe9;
+  color: #0b0b0c;
+  font-size: var(--t-base);
+  font-weight: var(--w-semi);
+  letter-spacing: 0.002em;
+  box-shadow: none;
+  transition: background 0.15s ease;
+}
+
+.library-upload-dock .library-upload-btn:hover { background: #ffffff; }
+.library-upload-dock .library-upload-btn i { font-size: 15px; }
+
+.library-recent { padding-top: 0; }
+.library-recent-header { padding-bottom: 9px; border-bottom: 1px solid var(--hairline-soft); }
+
+/* ─── Cuenta: accesos sobrios ─── */
+.account-links {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--hairline-soft);
+}
+
+.account-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: none;
+  color: var(--txt-2);
+  font-size: var(--t-base);
+  text-align: left;
+  transition: color 0.15s ease;
+}
+
+.account-link > i:first-child { font-size: 15px; color: var(--txt-3); }
+.account-link > i:last-child { margin-left: auto; font-size: 11px; color: var(--txt-3); }
+.account-link:hover { color: var(--txt); }
+
+.account-link-tag {
+  margin-left: auto;
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--txt-3);
+}
+
+/* ─── Superficies planas en Cuenta ─── */
+.profile-scroll { padding: 6px var(--gutter) 40px; gap: 18px; }
+
+.profile-card {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.profile-user-card { border-bottom: 1px solid var(--hairline-soft); padding-bottom: 18px; }
+.profile-auth-card { padding: 16px 0; border-bottom: 1px solid var(--hairline-soft); }
+
+.profile-input,
+.profile-role-pill,
+.btn-google-login,
+.btn-disconnect-google { font-size: var(--t-base); }
+
+.profile-user-name { font-size: var(--t-lg); font-weight: var(--w-med); }
+
+.auth-card-title { font-size: var(--t-md); font-weight: var(--w-med); }
+.auth-card-subtitle,
+.auth-card-desc { font-size: var(--t-sm); line-height: var(--line-body); }
+
+/* ─── Drawer sobrio ─── */
+.drawer-item {
+  font-size: var(--t-base);
+  font-weight: var(--w-med);
+  letter-spacing: 0.002em;
+}
+
+.drawer-item i { font-size: 16px; }
+.drawer-brand { font-size: 15px; font-weight: var(--w-semi); letter-spacing: -0.01em; }
+.drawer-foot { font-size: var(--t-xs); }
+
+/* ─── Chat: compositor con la misma escala ─── */
+.chat-composer textarea,
+.chat-composer-input { font-size: var(--t-md); }
+
+@media (min-width: 640px) {
+  .folder-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (min-width: 900px) {
+  .folder-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ─── Correcciones puntuales del rediseño ─── */
+
+/* El buscador salió de la cabecera: la marca ya no necesita empujarse. */
+#page-home .home-header-top { justify-content: flex-start; }
+
+#page-home .home-header-top.searching .home-header-left .brand-block {
+  opacity: 1;
+  max-width: 220px;
+}
+
+/* La barra de búsqueda vive en el contenido y está siempre expandida. */
+#page-home .home-search-section .home-search-bar,
+#page-home .home-search-section .home-search-bar.active {
+  width: 100% !important;
+  flex: 1 1 auto;
+  height: 42px;
+  padding: 0 12px 0 13px !important;
+  justify-content: flex-start;
+  cursor: text;
+}
+
+#page-home .home-search-section .home-search-bar .search-inline-input,
+#page-home .home-search-section .home-search-bar.active .search-inline-input {
+  flex: 1 1 auto;
+  width: auto;
+  opacity: 1;
+  padding: 0 8px 0 10px !important;
+  pointer-events: auto;
+}
+
+#page-home .home-search-section .home-search-bar .search-inline-icon {
+  font-size: 15px;
+  color: var(--txt-2);
+}
+
+/* Textos secundarios que heredaban tamaños sueltos. */
+.library-recent-header .btn-clear-saved-text,
+.btn-clear-saved-text {
+  font-size: var(--t-sm);
+  color: var(--txt-3);
+  font-weight: var(--w-med);
+}
+
+.profile-empty-saved .empty-icon-wrap {
+  width: 44px;
+  height: 44px;
+  font-size: 17px;
+}
+
+.profile-empty-saved .empty-title {
+  font-size: var(--t-base) !important;
+  font-weight: var(--w-med);
+}
+
+.profile-empty-saved .empty-subtitle {
+  font-size: var(--t-sm);
+  line-height: var(--line-body);
+  color: var(--txt-3);
+}
+
+.folder-tile-meta { letter-spacing: 0; }
+
+/* ─── Ajustes finos de escala y foco ─── */
+
+.app-logo { font-size: 23px; }
+
+.paper-card-title { font-size: 13.5px; line-height: 1.42; }
+
+.drawer-item { font-size: 12.5px; }
+
+.folder-tile-meta,
+.paper-card-meta { color: var(--txt-3); }
+
+/* Dentro de una colección no se repite el encabezado de la grilla. */
+.library-folders-card.is-detail .folder-bar-head { display: none; }
+.library-folders-card.is-detail { display: block; }
+
+.library-recent[hidden] { display: none !important; }
+
+/* Cuenta: más aire arriba y piezas más chicas. */
+.profile-scroll { padding-top: 12px; }
+.profile-user-card { padding-top: 2px; }
+.profile-user-main { gap: 14px; margin-bottom: 16px; }
+.profile-avatar, .profile-avatar-img, .profile-avatar-container { width: 48px; height: 48px; }
+.profile-role-pill { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+.btn-google-login { height: 44px; font-size: var(--t-base); }
+
+/* La barra fija no debe tapar el último artículo. */
+.library-scroll { padding-bottom: 104px; }
+
+/* ─── Resultados: misma escala que el resto ─── */
+.results-header-title { font-size: 20px; font-weight: var(--w-med); letter-spacing: var(--track-title); }
+.results-header-label { font-size: var(--t-micro); letter-spacing: var(--track-label); }
+.subtabs-bar { gap: 22px; padding-top: 2px; }
+.subtab { font-size: 12.5px; padding: 9px 0 11px; }
+.filter-bar { padding: 12px var(--gutter) 2px; }
+.sort-select { font-size: 11.5px; padding: 8px 28px 8px 32px; }
+.results-count { font-size: var(--t-micro); letter-spacing: 0.06em; }
+.results-nav-title { font-size: var(--t-micro); letter-spacing: var(--track-label); }
+
+/* ─── Chat: saludo y sugerencias algo más contenidos ─── */
+.chat-empty-title { font-size: 19px; font-weight: var(--w-med); letter-spacing: var(--track-title); }
+.chat-suggestions .chat-suggestion,
+.chat-suggestion { font-size: 12.5px; }
+.chat-disclaimer { font-size: var(--t-micro); color: var(--txt-3); }
