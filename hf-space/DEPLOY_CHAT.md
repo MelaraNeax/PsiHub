@@ -47,12 +47,20 @@ resúmenes) cambia junta:
 Opcionales en modo Claude:
 
 - `CLAUDE_MODEL` — por defecto `claude-haiku-5-5`.
+- `CLAUDE_VISION_API` — clave para leer PDFs escaneados; si falta se usa
+  `CLAUDE_CHAT_API`.
+- `CLAUDE_BASE_URL` — endpoint del SDK. Por defecto `https://api.anthropic.com`.
+  **No lo omitas en una máquina que tenga exportado `ANTHROPIC_BASE_URL`**: el
+  SDK lo lee del entorno y las claves `sk-ant-` acabarían en ese endpoint (con
+  Claude Code + DeepSeek local eso da 401 en bucle). El código ya lo fija
+  explícitamente, así que normalmente no hace falta.
 - `LLM_PRICE_INPUT` / `LLM_PRICE_OUTPUT` / `LLM_PRICE_CACHE_HIT` — USD por
   millón de tokens para el ledger de costos (por defecto los de Haiku 5.5).
 
 Las claves `Trad` se reparten en círculo entre los lotes de un mismo artículo,
 así que dos claves alcanzan para paralelizar la traducción. La visión de PDFs
-escaneados sigue en DeepSeek: el modelo de Claude configurado aquí es de texto.
+escaneados usa el mismo motor: con `LLM_PROVIDER=1` las páginas van como imagen
+a Claude.
 
 Cloud Run (ejemplo):
 

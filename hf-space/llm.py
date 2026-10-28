@@ -27,6 +27,14 @@ USE_CLAUDE = PROVIDER == 'claude'
 
 CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-haiku-5-5').strip() or 'claude-haiku-5-5'
 
+# El SDK de Anthropic toma ANTHROPIC_BASE_URL del entorno. En esta maquina esa
+# variable apunta al endpoint compatible de DeepSeek (la usa Claude Code), asi
+# que las claves sk-ant- acababan en el motor equivocado con un 401. Fijamos el
+# endpoint de Anthropic salvo que se pida otro por CLAUDE_BASE_URL.
+CLAUDE_BASE_URL = (
+    os.getenv('CLAUDE_BASE_URL', '').strip() or 'https://api.anthropic.com'
+)
+
 # Reintentos por clave dentro de una misma llamada.
 KEY_ATTEMPTS = 3
 
@@ -135,7 +143,12 @@ def _stop_reason(value: Optional[str]) -> str:
 def _client(api_key: str, timeout: float):
     import anthropic  # import perezoso: modo DeepSeek no necesita el paquete
 
-    return anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=1)
+    return anthropic.AsyncAnthropic(
+        api_key=api_key,
+        base_url=CLAUDE_BASE_URL,
+        timeout=timeout,
+        max_retries=1,
+    )
 
 
 # Si el modelo rechaza `thinking: disabled`, se deja de enviarlo en este
