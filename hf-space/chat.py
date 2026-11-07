@@ -114,9 +114,9 @@ FULLTEXT_CHARS = max(400, int(os.getenv('CHAT_FULLTEXT_CHARS', '1200')))
 FULLTEXT_CONCURRENCY = max(1, int(os.getenv('CHAT_FULLTEXT_CONCURRENCY', '6')))
 # Presupuesto duro para la lectura de textos completos. Es un extra: si PMC
 # tarda, se responde con los que llegaron en vez de esperar 20-30 s mas.
-FULLTEXT_BUDGET = max(2.0, float(os.getenv('CHAT_FULLTEXT_BUDGET', '14')))
+FULLTEXT_BUDGET = max(2.0, float(os.getenv('CHAT_FULLTEXT_BUDGET', '8')))
 ABSTRACT_FILL = max(0, int(os.getenv('CHAT_ABSTRACT_FILL', '18')))
-ABSTRACT_FILL_TIMEOUT = max(2.0, float(os.getenv('CHAT_ABSTRACT_FILL_TIMEOUT', '12')))
+ABSTRACT_FILL_TIMEOUT = max(2.0, float(os.getenv('CHAT_ABSTRACT_FILL_TIMEOUT', '6')))
 
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
 ABSTRACT_DIR = CACHE_DIR / 'abstracts'
