@@ -818,7 +818,9 @@ async def full_text_xml(pmcid: str, client_: Optional[httpx.AsyncClient] = None)
     if clean.upper() == 'PMC':
         return None
     owned = client_ is None
-    http = client_ or client(timeout=30.0)
+    # 15 s alcanza para un XML normal; con 30 s un PMC caido bloqueaba la
+    # respuesta entera y el chat parecia colgado.
+    http = client_ or client(timeout=15.0)
     try:
         url = f'{EPMC_BASE}/{clean.upper()}/fullTextXML'
         # El endpoint de XML responde 406 si se le pide JSON: el Accept de la

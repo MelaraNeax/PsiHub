@@ -2057,9 +2057,28 @@ function diversifyPapers(list, limit) {
   return picked;
 }
 
+const RECS_CACHE_KEY = 'psyhub_cached_recs';
+
+function renderRecommendationCards(papers) {
+  if (!el.recsList) return;
+  el.recsList.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  papers.forEach(paper => {
+    try { frag.appendChild(buildCard(paper)); } catch { }
+  });
+  el.recsList.appendChild(frag);
+}
+
 async function loadRecommendations() {
-  // Mostrar skeletons mientras carga
-  el.recsList.innerHTML = '<div class="rec-skeleton"></div><div class="rec-skeleton"></div><div class="rec-skeleton"></div>';
+  // Lo último que se mostró queda guardado: al abrir la app se pinta al
+  // instante aunque el backend esté arrancando en frío. Antes la pantalla de
+  // inicio quedaba vacía hasta refrescar.
+  const cached = loadData(RECS_CACHE_KEY, null);
+  const cachedPapers = Array.isArray(cached?.papers) ? cached.papers : [];
+  if (cachedPapers.length) renderRecommendationCards(cachedPapers);
+  else {
+    el.recsList.innerHTML = '<div class="rec-skeleton"></div><div class="rec-skeleton"></div><div class="rec-skeleton"></div>';
+  }
 
   // Una sola consulta devolvía siempre el mismo racimo (a veces el mismo
   // autor seis veces seguidas). Ahora mezclamos tres orígenes distintos y
@@ -2086,24 +2105,33 @@ async function loadRecommendations() {
     : `Explorando: ${picks.map(p => p.label).join(' · ')}`;
 
   try {
-    let settled = await Promise.allSettled(
-      sources.map(s => fetchPapers({ query: s.query, page: s.page, perPage: 6, sort: s.sort }))
-    );
-    let results = collectUniquePapers(settled);
-
-    if (!results.length) {
-      // Primer arranque en frío: se espera al backend y se reintenta una vez.
-      console.warn('[Recs] sin resultados, reintentando tras calentar el backend');
-      await warmBackend();
-      await new Promise(r => setTimeout(r, 700));
-      settled = await Promise.allSettled(
-        sources.map(s => fetchPapers({ query: s.query, page: 1, perPage: 6, sort: s.sort }))
+    // Hasta tres intentos: el primero suele coincidir con el arranque en frío
+    // de Cloud Run y devuelve vacío. Se calienta el backend y se reintenta en
+    // vez de dejar el inicio sin resultados.
+    let results = [];
+    for (let attempt = 0; attempt < 3 && !results.length; attempt++) {
+      if (attempt) {
+        await warmBackend();
+        await new Promise(r => setTimeout(r, attempt === 1 ? 800 : 1800));
+      }
+      const settled = await Promise.allSettled(
+        sources.map(s => fetchPapers({
+          query: s.query,
+          page: attempt ? 1 : s.page,
+          perPage: 6,
+          sort: s.sort
+        }))
       );
       results = collectUniquePapers(settled);
     }
 
     if (!results.length) {
-      el.recsList.innerHTML = '<p style="font-size:13px; color:var(--txt-3); padding: 8px 0;">No se encontraron resultados.</p>';
+      // Se conserva lo cacheado si lo hay; si no, se ofrece reintentar sin
+      // recargar toda la app.
+      if (!cachedPapers.length) {
+        el.recsList.innerHTML = '<p style="font-size:13px; color:var(--txt-3); padding: 8px 0;">No se pudieron cargar las recomendaciones. <button type="button" id="btn-recs-retry" style="color:var(--green); text-decoration:underline;">Reintentar</button></p>';
+        el.recsList.querySelector('#btn-recs-retry')?.addEventListener('click', () => loadRecommendations());
+      }
       return;
     }
 
@@ -2131,12 +2159,8 @@ async function loadRecommendations() {
       p.abstractEs = translatedSnippets[i] + '...';
     });
 
-    el.recsList.innerHTML = '';
-    const frag = document.createDocumentFragment();
-    results.forEach(paper => {
-      frag.appendChild(buildCard(paper));
-    });
-    el.recsList.appendChild(frag);
+    renderRecommendationCards(results);
+    try { saveData(RECS_CACHE_KEY, { papers: results, at: Date.now() }); } catch { }
 
     // Igual que en la búsqueda: verificar si el PDF es de descarga libre
     // para habilitar la traducción automática desde el inicio.
@@ -2145,7 +2169,10 @@ async function loadRecommendations() {
 
   } catch (err) {
     console.error('[Recs]', err);
-    el.recsList.innerHTML = '<p style="font-size:13px; color:var(--txt-3); padding: 8px 0;">Error al cargar recomendaciones.</p>';
+    if (!cachedPapers.length) {
+      el.recsList.innerHTML = '<p style="font-size:13px; color:var(--txt-3); padding: 8px 0;">Error al cargar recomendaciones. <button type="button" id="btn-recs-retry" style="color:var(--green); text-decoration:underline;">Reintentar</button></p>';
+      el.recsList.querySelector('#btn-recs-retry')?.addEventListener('click', () => loadRecommendations());
+    }
   }
 }
 
@@ -5564,6 +5591,15 @@ const GITHUB_STORIES_REMOTE_URL = window.PSYHUB_STORIES_REMOTE_URL ||
 
 async function loadStories(forceRefresh = false) {
   try {
+    // Pintar primero la copia guardada: el inicio nunca queda vacío mientras
+    // se espera a GitHub (en el primer arranque, esa espera se sentía como
+    // "no funciona hasta refrescar").
+    const cached = loadData('psyhub_cached_stories', null);
+    if (cached && Array.isArray(cached.stories) && cached.stories.length > 0) {
+      S.stories = cached.stories;
+      renderCurrentStory(S.activeStoryIdx || 0);
+    }
+
     let data = null;
 
     // 1. Intentar cargar desde GitHub remoto (historias actualizadas por GitHub Actions)
@@ -5589,9 +5625,8 @@ async function loadStories(forceRefresh = false) {
       }
     }
 
-    // 2. Si no hay internet o falló GitHub, intentar desde caché local guardada
+    // 2. Si no hay internet o falló GitHub, usar la caché ya pintada
     if (!data) {
-      const cached = loadData('psyhub_cached_stories', null);
       if (cached && Array.isArray(cached.stories) && cached.stories.length > 0) {
         data = cached;
         console.log('[Stories] Cargadas desde caché local previa ✓');

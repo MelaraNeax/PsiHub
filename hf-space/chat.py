@@ -48,7 +48,7 @@ OPENALEX_API_KEY = os.getenv('OPENALEX_API_KEY', '').strip()
 
 # Marca de la version del pipeline de chat. Se expone en /health para poder
 # confirmar sin ambiguedad que revision del codigo esta corriendo el servicio.
-CHAT_PIPELINE_VERSION = '2026-10-27-relative-size-v7'
+CHAT_PIPELINE_VERSION = '2026-11-07-continuations-v8'
 
 # Presupuesto de contexto: 12 fuentes con ~460 caracteres de resumen cubren
 # mejor cada constructo (y dejan entrar papers discrepantes) sin disparar el
@@ -59,6 +59,14 @@ ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '460')))
 # continuacion acotada en vez de entregar una respuesta cortada a mitad.
 MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '900')))
 CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '500')))
+# Cuantas veces se puede pedir una continuacion si el modelo sigue cortando por
+# limite de longitud. Evita el bucle infinito y deja margen para respuestas
+# largas del modo profundo.
+CONTINUATION_ROUNDS = max(0, int(os.getenv('CHAT_CONTINUATION_ROUNDS', '3')))
+# Razonamiento del proveedor (DeepSeek/Claude). Con el modelo flash actual
+# apagarlo da respuestas completas y mucho mas rapidas; se puede reactivar por
+# env var cuando el modelo lo aproveche de verdad.
+PROVIDER_THINKING = os.getenv('CHAT_PROVIDER_THINKING', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 # Modo profundo (marcado PRO): mas fuentes, abstracts mas largos y respuestas
 # extensas, con secciones plegables en la interfaz. La relevancia minima sube para que las 20+ fuentes no
 # incluyan papers apenas relacionados.
@@ -101,8 +109,12 @@ CHAT_FULLTEXT = os.getenv('CHAT_FULLTEXT', '1').strip() not in {'0', 'false', 'n
 FULLTEXT_QUICK = max(0, int(os.getenv('CHAT_FULLTEXT_QUICK', '4')))
 FULLTEXT_DEEP = max(0, int(os.getenv('CHAT_FULLTEXT_DEEP', '8')))
 FULLTEXT_CHARS = max(400, int(os.getenv('CHAT_FULLTEXT_CHARS', '1200')))
-FULLTEXT_CONCURRENCY = max(1, int(os.getenv('CHAT_FULLTEXT_CONCURRENCY', '4')))
-ABSTRACT_FILL = max(0, int(os.getenv('CHAT_ABSTRACT_FILL', '24')))
+FULLTEXT_CONCURRENCY = max(1, int(os.getenv('CHAT_FULLTEXT_CONCURRENCY', '6')))
+# Presupuesto duro para la lectura de textos completos. Es un extra: si PMC
+# tarda, se responde con los que llegaron en vez de esperar 20-30 s mas.
+FULLTEXT_BUDGET = max(2.0, float(os.getenv('CHAT_FULLTEXT_BUDGET', '14')))
+ABSTRACT_FILL = max(0, int(os.getenv('CHAT_ABSTRACT_FILL', '18')))
+ABSTRACT_FILL_TIMEOUT = max(2.0, float(os.getenv('CHAT_ABSTRACT_FILL_TIMEOUT', '12')))
 
 CACHE_DIR = Path(os.getenv('CACHE_DIR', './cache')).resolve()
 ABSTRACT_DIR = CACHE_DIR / 'abstracts'
@@ -1463,9 +1475,16 @@ async def search_sources(
     ]
     if missing_abstract:
         missing_abstract.sort(key=lambda w: -int(w.get('cited_by_count') or 0))
-        filled = await europepmc.fill_abstracts(
-            missing_abstract, limit=ABSTRACT_FILL, concurrency=6,
-        )
+        try:
+            filled = await asyncio.wait_for(
+                europepmc.fill_abstracts(
+                    missing_abstract, limit=ABSTRACT_FILL, concurrency=10,
+                ),
+                timeout=ABSTRACT_FILL_TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001 - el resumen completo es un extra
+            log_fn(f'[chat-search] resumen desde PMC omitido: {type(exc).__name__}')
+            filled = 0
         if filled:
             log_fn(f'[chat-search] resumen recuperado del texto completo: {filled}')
 
@@ -1757,7 +1776,16 @@ async def _attach_full_text(
                     if abstract:
                         source['abstract'] = abstract
 
-    await asyncio.gather(*(read(source) for source in chosen))
+    # El texto completo es un extra: se espera como mucho FULLTEXT_BUDGET y se
+    # sigue con lo que haya llegado. Antes, un PMC lento sumaba 20-30 s a cada
+    # respuesta sin que el usuario pudiera cancelar la espera.
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(read(source) for source in chosen)),
+            timeout=FULLTEXT_BUDGET,
+        )
+    except Exception:  # noqa: BLE001 - timeout o fallo puntual de PMC
+        log_fn('[chat-fulltext] presupuesto agotado; se sigue con lo leido')
     # Se conservan solo las primeras `count` lecturas exitosas: el contexto del
     # prompt no crece de más y las sobrantes quedan sin texto.
     kept = 0
@@ -2362,7 +2390,7 @@ async def _stream_completion(
         async for kind, value in llm.stream(
             messages, api_keys,
             max_tokens=max_tokens or MAX_OUTPUT_TOKENS,
-            think=think,
+            think=think and PROVIDER_THINKING,
         ):
             if kind == 'delta':
                 yield ('delta', str(value))
@@ -2372,15 +2400,19 @@ async def _stream_completion(
                 yield ('finish', str(value) if value else None)
         return
 
-    payload = {
+    payload: dict = {
         'model': CHAT_MODEL,
         'messages': messages,
         'temperature': temperature,
         'stream': True,
         'stream_options': {'include_usage': True},
-        'thinking': {'type': 'enabled' if think else 'disabled'},
         'max_tokens': max_tokens or MAX_OUTPUT_TOKENS,
     }
+    # El razonamiento del proveedor solo se pide si esta habilitado: con el
+    # modelo flash se comia todo el presupuesto de salida y dejaba la
+    # respuesta vacia o cortada.
+    if PROVIDER_THINKING:
+        payload['thinking'] = {'type': 'enabled' if think else 'disabled'}
     last_error: Optional[BaseException] = None
 
     for attempt in range(min(len(api_keys), 3)):
@@ -2415,7 +2447,12 @@ async def _stream_completion(
                         reason = choices[0].get('finish_reason')
                         if reason:
                             yield ('finish', reason)
-                        delta = (choices[0].get('delta') or {}).get('content') or ''
+                        delta_chunk = choices[0].get('delta') or {}
+                        # El razonamiento del proveedor no se muestra, pero
+                        # cuenta como avance: no hay que rotar de API key.
+                        if delta_chunk.get('reasoning_content'):
+                            produced = True
+                        delta = delta_chunk.get('content') or ''
                         if delta:
                             produced = True
                             yield ('delta', delta)
@@ -2667,30 +2704,62 @@ async def stream_chat(
         yield _sse({'type': 'error', 'message': str(exc) or f'{llm.PROVIDER.capitalize()} no respondio.'})
         return
 
+    # Con razonamiento activado el modelo puede gastar todo el presupuesto de
+    # salida pensando y no escribir ni una palabra: el cliente recibia una
+    # respuesta vacia. Si paso eso, se pide de nuevo sin razonamiento.
+    if finish_reason == 'length' and not ''.join(parts).strip():
+        log_fn('[chat] sin texto tras agotar tokens: reintentando sin razonamiento')
+        try:
+            direct_usage: dict = {}
+            async for kind, value in _stream_completion(
+                messages, api_keys, log_fn,
+                max_tokens=max(profile['max_tokens'], MAX_OUTPUT_TOKENS),
+                think=False,
+            ):
+                if kind == 'usage':
+                    direct_usage = value
+                elif kind == 'finish':
+                    finish_reason = value
+                elif kind == 'delta':
+                    parts.append(value)
+                    yield _sse({'type': 'delta', 'text': value})
+            usage = _merge_usage(usage, direct_usage)
+        except Exception as exc:  # noqa: BLE001
+            log_fn(f'[chat] reintento directo fallo: {type(exc).__name__}: {exc}')
+
     # Si el modelo agoto max_tokens (finish_reason == 'length'), la respuesta
-    # quedaba cortada a mitad de una seccion y sin el cierre util. En vez de
-    # entregarla asi, se pide una unica continuacion acotada y se suma al flujo.
-    if finish_reason == 'length' and ''.join(parts).strip():
-        log_fn('[chat] respuesta truncada: pidiendo continuacion')
+    # quedaba cortada a mitad de una seccion y sin el cierre util. Se piden
+    # continuaciones acotadas hasta que termine, con un tope de vueltas para
+    # no quedarse en un bucle. Las continuaciones nunca razonan: el
+    # razonamiento volveria a comerse el presupuesto sin escribir texto.
+    continuation_rounds = 0
+    while finish_reason == 'length' and ''.join(parts).strip() and continuation_rounds < CONTINUATION_ROUNDS:
+        continuation_rounds += 1
+        log_fn(f'[chat] respuesta truncada: continuacion {continuation_rounds}')
         cont_messages = messages + [
             {'role': 'assistant', 'content': ''.join(parts)},
             {'role': 'user', 'content': CONTINUE_PROMPT},
         ]
         cont_usage: dict = {}
+        cont_finish: Optional[str] = None
         try:
             cont_tokens = CONTINUATION_TOKENS if profile['depth'] == 'quick' else CONTINUATION_TOKENS * 2
             async for kind, value in _stream_completion(
                 cont_messages, api_keys, log_fn, max_tokens=cont_tokens,
-                think=profile['think'],
+                think=False,
             ):
                 if kind == 'usage':
                     cont_usage = value
+                elif kind == 'finish':
+                    cont_finish = value
                 elif kind == 'delta':
                     parts.append(value)
                     yield _sse({'type': 'delta', 'text': value})
         except Exception as exc:  # noqa: BLE001
             log_fn(f'[chat] continuacion fallo: {type(exc).__name__}: {exc}')
+            break
         usage = _merge_usage(usage, cont_usage)
+        finish_reason = cont_finish
 
     out_of_range, uncited = _citation_report(''.join(parts), len(sources))
     if out_of_range or len(uncited) >= max(3, len(sources) // 2):
