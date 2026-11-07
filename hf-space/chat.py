@@ -57,8 +57,10 @@ MAX_SOURCES = max(1, int(os.getenv('CHAT_MAX_SOURCES', '12')))
 ABSTRACT_CHARS = max(300, int(os.getenv('CHAT_ABSTRACT_CHARS', '460')))
 # Tope de salida. Si el modelo lo alcanza igual, stream_chat pide una
 # continuacion acotada en vez de entregar una respuesta cortada a mitad.
-MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '900')))
-CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '500')))
+MAX_OUTPUT_TOKENS = max(200, int(os.getenv('CHAT_MAX_OUTPUT_TOKENS', '1200')))
+# La continuacion tambien puede razonar antes de seguir escribiendo: con un
+# presupuesto muy chico volvia vacia y la respuesta seguia cortada.
+CONTINUATION_TOKENS = max(150, int(os.getenv('CHAT_CONTINUATION_TOKENS', '1500')))
 # Cuantas veces se puede pedir una continuacion si el modelo sigue cortando por
 # limite de longitud. Evita el bucle infinito y deja margen para respuestas
 # largas del modo profundo.
@@ -73,7 +75,7 @@ PROVIDER_THINKING = os.getenv('CHAT_PROVIDER_THINKING', '0').strip().lower() in 
 # Techo de fuentes relevantes para el aviso del plan Pro.
 DEEP_MAX_SOURCES = max(MAX_SOURCES, int(os.getenv('CHAT_DEEP_MAX_SOURCES', '28')))
 DEEP_MIN_RELEVANCE = float(os.getenv('CHAT_DEEP_MIN_RELEVANCE', '0.18'))
-DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '800')))
+DIRECT_MAX_OUTPUT = max(120, int(os.getenv('CHAT_DIRECT_TOKENS', '1500')))
 MAX_HISTORY_MESSAGES = max(0, int(os.getenv('CHAT_HISTORY_MESSAGES', '3')))
 HISTORY_CHARS = max(200, int(os.getenv('CHAT_HISTORY_CHARS', '450')))
 # Mensajes de historial que ve el router para saber a que se refiere la charla.
@@ -1879,13 +1881,19 @@ def _concept_notes(plan: Optional[dict], meta: Optional[dict]) -> str:
 # La extension es relativa al plan: el mismo boton "mediano" rinde mas en Pro.
 # Cada combinacion fija fuentes, caracteres por abstract, tope de salida y
 # palabras objetivo. "Pensar mas" no cambia el largo: activa razonamiento.
+# (fuentes, caracteres de resumen, max_tokens, palabras, viñetas)
+# El modelo actual razona antes de escribir y esos tokens de razonamiento no
+# los limita `max_tokens` pero sí consumen la cuenta: con presupuestos bajos
+# terminaba sin escribir una sola palabra (respuesta vacía en modo Pro). Los
+# valores dejan margen para el razonamiento y la redacción; el modelo igual se
+# detiene solo cuando termina, así que el techo solo se paga si hace falta.
 SIZE_PROFILES = {
-    ('basic', 'small'):  (8, 380, 650, '180 a 260', '2 a 3'),
-    ('basic', 'medium'): (12, 460, 900, '260 a 380', '3 a 5'),
-    ('basic', 'large'):  (16, 520, 1200, '380 a 520', '4 a 6'),
-    ('pro', 'small'):    (12, 480, 900, '260 a 380', '3 a 5'),
-    ('pro', 'medium'):   (20, 560, 1500, '450 a 650', '5 a 7'),
-    ('pro', 'large'):    (28, 640, 2400, '700 a 1000', '7 a 10'),
+    ('basic', 'small'):  (8, 380, 1800, '180 a 260', '2 a 3'),
+    ('basic', 'medium'): (12, 460, 2400, '260 a 380', '3 a 5'),
+    ('basic', 'large'):  (16, 520, 3000, '380 a 520', '4 a 6'),
+    ('pro', 'small'):    (12, 480, 2600, '260 a 380', '3 a 5'),
+    ('pro', 'medium'):   (20, 560, 4500, '450 a 650', '5 a 7'),
+    ('pro', 'large'):    (28, 640, 7000, '700 a 1000', '7 a 10'),
 }
 
 
@@ -2595,15 +2603,30 @@ async def stream_chat(
                 SUPPORT_PROMPT if is_support else DIRECT_PROMPT,
                 attachments,
             )
+            # Igual que el modo investigación: si el razonamiento del modelo se
+            # comió el presupuesto y no escribió nada, se reintenta más holgado.
+            direct_buffer: list[str] = []
             async for kind, value in _stream_completion(
                 messages, api_keys, log_fn,
                 max_tokens=DIRECT_MAX_OUTPUT,
                 temperature=0.45,
             ):
                 if kind == 'usage':
-                    direct_usage = value
+                    direct_usage = _merge_usage(direct_usage, value)
                 elif kind == 'delta':
+                    direct_buffer.append(value)
                     yield _sse({'type': 'delta', 'text': value})
+            if not ''.join(direct_buffer).strip():
+                log_fn('[chat] respuesta directa vacia: reintentando con mas margen')
+                async for kind, value in _stream_completion(
+                    messages, api_keys, log_fn,
+                    max_tokens=max(DIRECT_MAX_OUTPUT * 3, MAX_OUTPUT_TOKENS * 3),
+                    temperature=0.45,
+                ):
+                    if kind == 'usage':
+                        direct_usage = _merge_usage(direct_usage, value)
+                    elif kind == 'delta':
+                        yield _sse({'type': 'delta', 'text': value})
         except Exception as exc:  # noqa: BLE001
             log_fn(f'[chat] respuesta directa fallo: {type(exc).__name__}: {exc}')
             yield _sse({'type': 'error', 'message': str(exc) or f'{llm.PROVIDER.capitalize()} no respondio.'})
@@ -2703,6 +2726,11 @@ async def stream_chat(
         yield sources_event(sources, search_meta)
         yield _sse({'type': 'error', 'message': str(exc) or f'{llm.PROVIDER.capitalize()} no respondio.'})
         return
+
+    log_fn(
+        f'[chat] fin de generacion: finish_reason={finish_reason} '
+        f'chars={len("".join(parts))} max_tokens={profile["max_tokens"]}'
+    )
 
     # Con razonamiento activado el modelo puede gastar todo el presupuesto de
     # salida pensando y no escribir ni una palabra: el cliente recibia una

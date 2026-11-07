@@ -7687,6 +7687,11 @@ async function sendChatMessage({ stopIfStreaming = false } = {}) {
   // en modo normal usa el perfil básico y en razonamiento el perfil Pro.
   const size = 'medium';
   const think = getChatThink();
+  // El razonamiento del proveedor se pide siempre apagado: con el modelo
+  // actual se comía el presupuesto de salida y la respuesta llegaba vacía o
+  // cortada (sobre todo en modo Pro). El modo lo lleva `depth`: «deep» pide
+  // el perfil Pro (más fuentes y más extensión) sin ese riesgo.
+  const requestThinking = false;
   chat.access = access;
   chat.depth = think ? 'deep' : 'quick';
   try { localStorage.setItem(CHAT_ACCESS_KEY, access); } catch { }
@@ -7755,7 +7760,7 @@ async function sendChatMessage({ stopIfStreaming = false } = {}) {
         access,
         depth: think ? 'deep' : 'quick',
         size,
-        think,
+        think: requestThinking,
         filters: {
           access: filters.access,
           year_from: filters.year_from,
