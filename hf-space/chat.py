@@ -88,7 +88,7 @@ ONECLICK_CANDIDATES = max(1, int(os.getenv('CHAT_ONECLICK_CANDIDATES', '12')))
 # Relevancia minima (0-1) para considerar que un paper tiene relacion real.
 MIN_RELEVANCE = float(os.getenv('CHAT_MIN_RELEVANCE', '0.14'))
 # Consultas simultaneas contra OpenAlex (limite comodo del polite pool).
-SEARCH_CONCURRENCY = max(1, int(os.getenv('CHAT_SEARCH_CONCURRENCY', '4')))
+SEARCH_CONCURRENCY = max(1, int(os.getenv('CHAT_SEARCH_CONCURRENCY', '6')))
 PLANNER_MAX_OUTPUT = max(120, int(os.getenv('CHAT_PLANNER_TOKENS', '550')))
 # Enriquecimiento de metadatos (Crossref / Europe PMC / Semantic Scholar) para
 # papers sin abstract, año o DOI antes de armar el digest.
@@ -114,7 +114,7 @@ FULLTEXT_CHARS = max(400, int(os.getenv('CHAT_FULLTEXT_CHARS', '1200')))
 FULLTEXT_CONCURRENCY = max(1, int(os.getenv('CHAT_FULLTEXT_CONCURRENCY', '6')))
 # Presupuesto duro para la lectura de textos completos. Es un extra: si PMC
 # tarda, se responde con los que llegaron en vez de esperar 20-30 s mas.
-FULLTEXT_BUDGET = max(2.0, float(os.getenv('CHAT_FULLTEXT_BUDGET', '8')))
+FULLTEXT_BUDGET = max(2.0, float(os.getenv('CHAT_FULLTEXT_BUDGET', '6')))
 ABSTRACT_FILL = max(0, int(os.getenv('CHAT_ABSTRACT_FILL', '18')))
 ABSTRACT_FILL_TIMEOUT = max(2.0, float(os.getenv('CHAT_ABSTRACT_FILL_TIMEOUT', '6')))
 
