@@ -104,6 +104,9 @@
 
 #page-chat {
   background: var(--bg);
+  /* Alto reservado para el teclado en navegadores que no encogen el layout
+     (iOS). En Android con resizes-content queda en 0. */
+  padding-bottom: var(--keyboard-inset, 0px);
 }
 
 .chat-bg-glow {
@@ -1033,7 +1036,9 @@
 /* ─── Composer ─── */
 .chat-composer-wrap {
   flex-shrink: 0;
-  padding: 6px var(--gutter) 4px;
+  /* Deja libre el indicador de inicio del iPhone; con el teclado abierto el
+     inset vale 0 y manda el alto reservado en #page-chat. */
+  padding: 6px var(--gutter) max(4px, env(safe-area-inset-bottom, 0px));
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(to bottom, rgba(9, 9, 10, 0.4), var(--bg) 34%);
 }
@@ -1296,13 +1301,6 @@
     pointer-events: none;
   }
 
-  body.chat-input-focused .chat-disclaimer {
-    display: none;
-  }
-
-  body.chat-input-focused .chat-composer-wrap {
-    padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
-  }
 }
 
 @media (min-width: 900px) {
@@ -1402,16 +1400,12 @@
   border-color: rgba(138, 171, 144, 0.3);
 }
 
-/* Extensión: botón «Extensión» + barra deslizable de 3 puntos */
-.chat-size-wrap {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.chat-size-btn {
+/* Modo razonamiento: un único botón que se aprieta o desactiva. */
+.chat-tool-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex-shrink: 0;
   height: 28px;
   padding: 0 10px 0 8px;
   border-radius: 999px;
@@ -1425,145 +1419,19 @@
   transition: color 0.15s var(--ease), background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
 
-.chat-size-btn i { font-size: 13px; }
+.chat-tool-pill i { font-size: 13px; }
 
-.chat-size-btn:hover,
-.chat-size-btn:active,
-.chat-size-btn[aria-expanded="true"] {
+.chat-tool-pill:hover,
+.chat-tool-pill:active {
   color: var(--txt-2);
   background: rgba(255, 255, 255, 0.06);
 }
 
-.chat-size-btn.has-value,
-.chat-size-btn[aria-expanded="true"] {
-  color: var(--txt);
+.chat-tool-pill[aria-pressed="true"],
+.chat-tool-pill.is-active {
+  color: var(--green);
   border-color: rgba(138, 171, 144, 0.35);
   background: rgba(138, 171, 144, 0.1);
-}
-
-.chat-size-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  width: 236px;
-  padding: 11px 12px 10px;
-  border-radius: 14px;
-  background: rgba(22, 22, 24, 0.98);
-  border: 1px solid var(--stroke-strong);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  z-index: 41;
-}
-
-.chat-size-menu[hidden] { display: none; }
-
-.chat-size-menu-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--txt-3);
-}
-
-.chat-size-value {
-  font-size: 11px;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--txt);
-  font-weight: 600;
-}
-
-/* Barra: riel fino y pulgar grande para arrastrar con el dedo. */
-.chat-size-range {
-  --size-pct: 50%;
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 26px;
-  margin: 4px 0 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.chat-size-range::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(to right,
-    var(--green) 0 var(--size-pct),
-    rgba(255, 255, 255, 0.12) var(--size-pct) 100%);
-}
-
-.chat-size-range::-moz-range-track {
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.chat-size-range::-moz-range-progress {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--green);
-}
-
-.chat-size-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  margin-top: -6px;
-  border-radius: 50%;
-  background: var(--txt);
-  border: 2px solid rgba(22, 22, 24, 0.95);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-}
-
-.chat-size-range::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--txt);
-  border: 2px solid rgba(22, 22, 24, 0.95);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-}
-
-.chat-size-range:focus-visible {
-  outline: 2px solid rgba(138, 171, 144, 0.5);
-  outline-offset: 3px;
-  border-radius: 999px;
-}
-
-.chat-size-ticks {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 1px;
-}
-
-.chat-size-ticks button {
-  padding: 3px 2px;
-  border-radius: 6px;
-  color: var(--txt-3);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1;
-}
-
-.chat-size-ticks button:hover { color: var(--txt-2); }
-
-.chat-size-ticks button.is-active {
-  color: var(--txt);
-  font-weight: 600;
-}
-
-.chat-size-hint {
-  margin: 7px 0 0;
-  font-size: 9.5px;
-  line-height: 1.4;
-  color: var(--txt-3);
 }
 
 /* Menú de adjuntos */
@@ -1926,7 +1794,7 @@
     gap: 3px;
   }
 
-  .chat-size-btn {
+  .chat-tool-pill {
     padding: 0 8px 0 7px;
     font-size: 10px;
   }
@@ -1934,17 +1802,9 @@
   .chat-attachment-name { max-width: 120px; }
 }
 
-@media (max-width: 820px) {
-  body.chat-input-focused .chat-composer-wrap {
-    padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
-  }
-
-  /* Con el teclado abierto, las herramientas se ocultan para dejar aire. */
-  body.chat-input-focused .chat-composer-tools,
-  body.chat-input-focused .chat-attachments {
-    display: none;
-  }
-}
+/* Las herramientas del composer quedan siempre visibles: ocultarlas al
+   enfocar el input cambiaba el alto del composer y hacía que el primer toque
+   en «enviar» cayera fuera del botón (se cerraba el teclado sin enviar). */
 
 /* ═══════════════════════════════════════════════════
    RESULTADOS — filtros compactos en una línea

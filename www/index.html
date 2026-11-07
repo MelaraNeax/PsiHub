@@ -621,36 +621,15 @@
               </button>
             </div>
           </div>
-          <div class="chat-size-wrap">
-            <button type="button" class="chat-tool-btn chat-size-btn" id="btn-chat-size"
-              aria-haspopup="true" aria-expanded="false" aria-controls="chat-size-menu"
-              aria-label="Extensión de la respuesta" title="Extensión de la respuesta">
-              <i class="ph-bold ph-text-align-left"></i><span>Extensión</span>
-            </button>
-            <div class="chat-size-menu" id="chat-size-menu" hidden>
-              <div class="chat-size-menu-head">
-                <span>Extensión</span>
-                <span class="chat-size-value" id="chat-size-value">Mediano</span>
-              </div>
-              <input type="range" class="chat-size-range" id="chat-size-range" min="0" max="2" step="1"
-                value="1" aria-label="Extensión de la respuesta">
-              <div class="chat-size-ticks">
-                <button type="button" data-size-step="0">Poco</button>
-                <button type="button" data-size-step="1" class="is-active">Mediano</button>
-                <button type="button" data-size-step="2">Largo</button>
-              </div>
-              <p class="chat-size-hint" id="chat-size-hint">Respuesta media · hasta 6 fuentes</p>
-            </div>
-          </div>
-
           <button type="button" class="chat-tool-icon" id="btn-chat-paper-type" data-paper="all"
             aria-pressed="false" aria-label="Tipo de paper" title="Tipo de paper: todos">
             <i class="ph-bold ph-article" id="chat-paper-icon"></i>
           </button>
 
-          <button type="button" class="chat-tool-icon" id="btn-chat-think" aria-pressed="false"
-            aria-label="Pensar más" title="Pensar más: respuesta más profunda (más lenta)">
-            <i class="ph-bold ph-brain"></i>
+          <button type="button" class="chat-tool-pill" id="btn-chat-think" aria-pressed="false"
+            aria-label="Razonamiento: desactivado"
+            title="Razonamiento: respuesta más profunda (más lenta)">
+            <i class="ph-bold ph-brain"></i><span>Razonar</span>
           </button>
 
           <div class="chat-filter" id="chat-filter">

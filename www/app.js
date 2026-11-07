@@ -488,11 +488,6 @@ function initDOMRefs() {
     btnChatFilter: $('btn-chat-filter'),
     chatFilterLabel: $('chat-filter-label'),
     chatFilterIcon: $('chat-filter-icon'),
-    btnChatSize: $('btn-chat-size'),
-    chatSizeMenu: $('chat-size-menu'),
-    chatSizeRange: $('chat-size-range'),
-    chatSizeValue: $('chat-size-value'),
-    chatSizeHint: $('chat-size-hint'),
     btnChatThink: $('btn-chat-think'),
     btnChatPaperType: $('btn-chat-paper-type'),
     chatPaperIcon: $('chat-paper-icon'),
@@ -6106,21 +6101,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const CHAT_STORE_KEY = 'psyhub_chats_v2';
 const CHAT_ACCESS_KEY = 'psyhub_chat_access';
-const CHAT_SIZE_KEY = 'psyhub_chat_size';
 const CHAT_THINK_KEY = 'psyhub_chat_think';
 const CHAT_FILTERS_KEY = 'psyhub_chat_filters';
 const CHAT_PAPER_KEY = 'psyhub_chat_paper';
 
-// Extensión relativa al plan: el backend traduce small/medium/large a topes
-// de tokens y fuentes. En Pro esos topes son más altos para cada nivel.
-// La UI no muestra estos nombres técnicos: es un botón «Extensión» con una
-// barra deslizable de tres puntos.
-const CHAT_SIZE_ORDER = ['small', 'medium', 'large'];
-const CHAT_SIZE_META = {
-  small: { label: 'Poco', hint: 'Respuesta breve · hasta 4 fuentes' },
-  medium: { label: 'Mediano', hint: 'Respuesta media · hasta 6 fuentes' },
-  large: { label: 'Largo', hint: 'Respuesta amplia · hasta 9 fuentes' }
-};
+// Dos modos: normal y razonamiento. El botón «Razonar» activa el modo
+// profundo (más fuentes, más contexto y más tiempo de cómputo).
 const CHAT_STUDY_META = {
   all: 'Todos',
   meta: 'Meta-análisis',
@@ -6309,57 +6295,6 @@ const chatAttachments = [];
 // El acceso se sincroniza con S.accessFilter; el año vive en los inputs del DOM.
 const searchFilters = { quartile: 'all', study: 'all' };
 
-function getChatDepth() {
-  const chat = getActiveChat();
-  return chat?.depth === 'deep' ? 'deep' : 'quick';
-}
-
-function getChatSize() {
-  const index = parseInt(el.chatSizeRange?.value, 10);
-  const value = CHAT_SIZE_ORDER[Number.isFinite(index) ? index : 1] || 'medium';
-  return CHAT_SIZE_ORDER.includes(value) ? value : 'medium';
-}
-
-function setChatSize(size, { persist = true } = {}) {
-  const value = CHAT_SIZE_META[size] ? size : 'medium';
-  const meta = CHAT_SIZE_META[value];
-  const index = CHAT_SIZE_ORDER.indexOf(value);
-  if (el.chatSizeRange) {
-    el.chatSizeRange.value = String(index);
-    el.chatSizeRange.style.setProperty('--size-pct', `${(index / 2) * 100}%`);
-    el.chatSizeRange.setAttribute('aria-valuetext', meta.label);
-  }
-  if (el.chatSizeValue) el.chatSizeValue.textContent = meta.label;
-  if (el.chatSizeHint) el.chatSizeHint.textContent = meta.hint;
-  el.chatSizeMenu?.querySelectorAll('[data-size-step]').forEach(btn => {
-    const on = btn.dataset.sizeStep === String(index);
-    btn.classList.toggle('is-active', on);
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
-  if (el.btnChatSize) {
-    el.btnChatSize.title = `Extensión: ${meta.label}`;
-    el.btnChatSize.setAttribute('aria-label', `Extensión de la respuesta: ${meta.label}`);
-    el.btnChatSize.classList.toggle('has-value', value !== 'medium');
-  }
-  if (persist) {
-    try { localStorage.setItem(CHAT_SIZE_KEY, value); } catch { }
-  }
-  updateChatFilterLabel();
-  return value;
-}
-
-function toggleChatSizeMenu(open) {
-  if (!el.chatSizeMenu || !el.btnChatSize) return;
-  const next = typeof open === 'boolean' ? open : el.chatSizeMenu.hasAttribute('hidden');
-  el.chatSizeMenu.toggleAttribute('hidden', !next);
-  el.btnChatSize.setAttribute('aria-expanded', next ? 'true' : 'false');
-  el.btnChatSize.classList.toggle('is-active', next);
-  if (next) {
-    toggleChatFilter(false);
-    toggleChatAttachMenu(false);
-  }
-}
-
 function getChatThink() {
   return el.btnChatThink?.getAttribute('aria-pressed') === 'true';
 }
@@ -6369,6 +6304,10 @@ function setChatThink(on, { persist = true } = {}) {
   if (el.btnChatThink) {
     el.btnChatThink.setAttribute('aria-pressed', value ? 'true' : 'false');
     el.btnChatThink.classList.toggle('is-active', value);
+    el.btnChatThink.setAttribute(
+      'aria-label',
+      value ? 'Razonamiento: activado' : 'Razonamiento: desactivado'
+    );
   }
   if (persist) {
     try { localStorage.setItem(CHAT_THINK_KEY, value ? '1' : '0'); } catch { }
@@ -6428,19 +6367,18 @@ function activeChatFilterCount() {
 function updateChatFilterLabel() {
   if (el.btnChatFilter) {
     const count = activeChatFilterCount();
-    const size = CHAT_SIZE_META[getChatSize()].label;
-    const think = getChatThink() ? ' · pensando más' : '';
+    const think = getChatThink() ? ' · razonamiento' : '';
     const text = count
-      ? `Filtros activos (${count}) · extensión ${size}${think}`
-      : `Filtros de búsqueda · extensión ${size}${think}`;
+      ? `Filtros activos (${count})${think}`
+      : `Filtros de búsqueda${think}`;
     el.btnChatFilter.title = text;
     el.btnChatFilter.setAttribute('aria-label', text);
     el.btnChatFilter.classList.toggle('has-filter', count > 0);
   }
   if (el.btnChatThink) {
     el.btnChatThink.title = getChatThink()
-      ? 'Pensar más: activado (más lento, más profundo)'
-      : 'Pensar más: respuesta más profunda (más lenta)';
+      ? 'Razonamiento activado (más lento, más profundo)'
+      : 'Razonamiento: respuesta más profunda (más lenta)';
   }
   updateFilterSummary();
 }
@@ -6558,7 +6496,6 @@ function toggleChatFilter(open) {
   el.chatAccessSeg.toggleAttribute('hidden', !next);
   el.btnChatFilter.setAttribute('aria-expanded', next ? 'true' : 'false');
   if (next) {
-    toggleChatSizeMenu(false);
     toggleChatAttachMenu(false);
     showChatFilterPanel(null);
   }
@@ -6791,7 +6728,6 @@ function toggleChatAttachMenu(open) {
   el.btnChatAttach.classList.toggle('is-active', next);
   if (next) {
     toggleChatFilter(false);
-    toggleChatSizeMenu(false);
   }
 }
 
@@ -6816,11 +6752,7 @@ function renderChatAttachments() {
         aria-label="Quitar adjunto"><i class="ph-bold ph-x"></i></button>
     </span>
   `).join('');
-  if (el.btnChatSend) {
-    el.btnChatSend.disabled = !S.chatStreaming
-      && !(el.chatInput?.value || '').trim()
-      && !chatAttachments.some(a => !a.loading);
-  }
+  updateChatSendState();
 }
 
 function addChatAttachment(item) {
@@ -6950,18 +6882,15 @@ function attachSavedPaper(paperId) {
 function initChat() {
   if (!el.chatMessages) return;
   let savedAccess = 'all';
-  let savedSize = 'medium';
   let savedThink = false;
   let savedPaper = 'all';
   let savedFilters = null;
   try {
     savedAccess = localStorage.getItem(CHAT_ACCESS_KEY) || 'all';
-    savedSize = localStorage.getItem(CHAT_SIZE_KEY) || 'medium';
     savedThink = localStorage.getItem(CHAT_THINK_KEY) === '1';
     savedPaper = localStorage.getItem(CHAT_PAPER_KEY) || 'all';
     savedFilters = JSON.parse(localStorage.getItem(CHAT_FILTERS_KEY) || 'null');
   } catch { }
-  setChatSize(savedSize, { persist: false });
   setChatThink(savedThink, { persist: false });
   setChatPaperType(savedPaper, { persist: false });
   applyChatFilters({ ...(savedFilters || {}), access: savedAccess });
@@ -7385,7 +7314,7 @@ function renderChatUpsellHtml(msg) {
   if (!used || relevant <= used) return '';
   return `
     <button type="button" class="chat-upsell" data-upsell="pro"
-      title="Desbloquear la extensión profunda">
+      title="Desbloquear el modo razonamiento">
       <i class="ph-bold ph-sparkle"></i>
       <span>Usaste <strong>${used}</strong> de <strong>${relevant}</strong> fuentes relevantes</span>
       <span class="chat-upsell-cta">Plan Pro</span>
@@ -7549,7 +7478,28 @@ function foldChatSections(container) {
 function autosizeChatInput() {
   if (!el.chatInput) return;
   el.chatInput.style.height = 'auto';
-  el.chatInput.style.height = `${Math.min(el.chatInput.scrollHeight || 24, 132)}px`;
+  // El tope se lee del CSS (el composer cambia según el ancho) para que la
+  // altura calculada nunca quede por encima del max-height real y recorte
+  // la última línea escrita.
+  const max = parseFloat(getComputedStyle(el.chatInput).maxHeight) || 132;
+  el.chatInput.style.height = `${Math.min(el.chatInput.scrollHeight || 24, max)}px`;
+}
+
+// En iOS el viewport de layout no se encoge cuando aparece el teclado: el
+// composer quedaba tapado y el texto escrito se veía cortado. Se mide la
+// diferencia contra visualViewport y se reserva ese alto en la página.
+function syncChatKeyboardInset() {
+  const vv = window.visualViewport;
+  const focused = document.body.classList.contains('chat-input-focused');
+  if (!vv || !focused) {
+    document.documentElement.style.setProperty('--keyboard-inset', '0px');
+    return;
+  }
+  // Un pinch-zoom también achica visualViewport; eso no es el teclado.
+  if (vv.scale > 1.01) return;
+  const inset = Math.round(window.innerHeight - vv.height - vv.offsetTop);
+  // Menos de 80 px suele ser la barra del navegador, no el teclado.
+  document.documentElement.style.setProperty('--keyboard-inset', `${inset > 80 ? inset : 0}px`);
 }
 
 function isChatNearBottom() {
@@ -7608,6 +7558,13 @@ function scheduleChatBubbleUpdate(wrap, msg) {
   });
 }
 
+function updateChatSendState() {
+  if (!el.btnChatSend) return;
+  const hasText = Boolean(el.chatInput?.value.trim());
+  const hasAttachments = chatAttachments.some(a => !a.loading);
+  el.btnChatSend.disabled = !S.chatStreaming && !hasText && !hasAttachments;
+}
+
 function setChatStreaming(streaming) {
   S.chatStreaming = streaming;
   if (el.btnChatSend) {
@@ -7617,6 +7574,7 @@ function setChatStreaming(streaming) {
       : '<i class="ph-bold ph-arrow-up"></i>';
     el.btnChatSend.setAttribute('aria-label', streaming ? 'Detener respuesta' : 'Enviar');
   }
+  updateChatSendState();
 }
 
 function stopChatStream() {
@@ -7657,11 +7615,18 @@ function handleChatEvent(payload, msg, wrap) {
   }
 }
 
-async function sendChatMessage() {
+async function sendChatMessage({ stopIfStreaming = false } = {}) {
   if (!el.chatInput) return;
 
   if (S.chatStreaming) {
-    stopChatStream();
+    // Solo el botón detiene: el botón cambia a «stop» mientras se escribe la
+    // respuesta. Enter o el submit no deben cortar lo que se está generando
+    // (era lo que dejaba respuestas a medias y sin enviar el mensaje nuevo).
+    if (stopIfStreaming) {
+      stopChatStream();
+      return;
+    }
+    showToast('Esperá a que termine la respuesta para enviar otra.', { duration: 1600 });
     return;
   }
 
@@ -7683,7 +7648,9 @@ async function sendChatMessage() {
 
   const access = getChatAccess();
   const filters = getChatFilters();
-  const size = getChatSize();
+  // Dos modos: normal y razonamiento. El tamaño queda fijo en «medium», que
+  // en modo normal usa el perfil básico y en razonamiento el perfil Pro.
+  const size = 'medium';
   const think = getChatThink();
   chat.access = access;
   chat.depth = think ? 'deep' : 'quick';
@@ -7782,14 +7749,12 @@ async function sendChatMessage() {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop() || '';
-      for (const part of parts) {
-        const dataLine = part.split('\n').find(line => line.startsWith('data:'));
+    // Un evento SSE termina en una línea en blanco. Se procesa en el mismo
+    // orden en que llega; lo que quede sin cerrar al final del stream también
+    // se procesa, porque si no se perdía el último tramo y el «done».
+    const consumeChatChunk = (chunk) => {
+      for (const part of chunk.split(/\r?\n\r?\n/)) {
+        const dataLine = part.split(/\r?\n/).find(line => line.startsWith('data:'));
         if (!dataLine) continue;
         const raw = dataLine.slice(5).trim();
         if (!raw || raw === '[DONE]') continue;
@@ -7799,7 +7764,20 @@ async function sendChatMessage() {
           console.warn('[chat] evento inválido', parseErr, raw);
         }
       }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const cut = buffer.lastIndexOf('\n\n');
+      if (cut === -1) continue;
+      const ready = buffer.slice(0, cut + 2);
+      buffer = buffer.slice(cut + 2);
+      consumeChatChunk(ready);
     }
+    buffer += decoder.decode();
+    if (buffer.trim()) consumeChatChunk(buffer);
 
     assistantMsg.streaming = false;
     updateChatBubble(wrap, assistantMsg);
@@ -7826,48 +7804,18 @@ async function sendChatMessage() {
 function setupChatEventListeners() {
   if (!el.chatMessages) return;
 
+  let sendingFromPointer = false;
+
   el.chatForm?.addEventListener('submit', (e) => {
     e.preventDefault();
+    // El toque en el botón ya envió en pointerdown; ignorar este submit.
+    if (sendingFromPointer) return;
     sendChatMessage();
   });
 
   el.chatInput?.addEventListener('input', () => {
     autosizeChatInput();
-    if (el.btnChatSend) {
-      el.btnChatSend.disabled = !S.chatStreaming
-        && !el.chatInput.value.trim()
-        && !chatAttachments.some(a => !a.loading);
-    }
-  });
-
-  // Extensión: botón «Extensión» con barra deslizable de 3 puntos.
-  const syncChatSizeToChat = () => {
-    const chat = getActiveChat();
-    if (chat) {
-      chat.size = getChatSize();
-      chat.updatedAt = Date.now();
-      persistChats();
-    }
-  };
-
-  el.btnChatSize?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleChatSizeMenu();
-  });
-
-  el.chatSizeMenu?.querySelectorAll('[data-size-step]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      setChatSize(CHAT_SIZE_ORDER[parseInt(btn.dataset.sizeStep, 10)] || 'medium');
-      syncChatSizeToChat();
-    });
-  });
-
-  el.chatSizeRange?.addEventListener('input', () => {
-    setChatSize(CHAT_SIZE_ORDER[parseInt(el.chatSizeRange.value, 10)] || 'medium', { persist: false });
-  });
-  el.chatSizeRange?.addEventListener('change', () => {
-    setChatSize(CHAT_SIZE_ORDER[parseInt(el.chatSizeRange.value, 10)] || 'medium');
-    syncChatSizeToChat();
+    updateChatSendState();
   });
 
   el.btnChatThink?.addEventListener('click', () => {
@@ -7971,14 +7919,34 @@ function setupChatEventListeners() {
     if (open) selectChat(open.dataset.chatId);
   });
 
-  // Al escribir en el chat se oculta el relleno (filtros y disclaimer) y la
-  // barra inferior, para dejarle todo el alto al teclado en celular.
+  // Al enfocar se oculta solo la barra inferior (sin cambiar el alto del
+  // composer: eso movía el botón enviar y perdía el primer toque).
   el.chatInput?.addEventListener('focus', () => {
     document.body.classList.add('chat-input-focused');
-    setTimeout(() => scrollChatToBottom(true), 260);
+    syncChatKeyboardInset();
+    setTimeout(() => {
+      syncChatKeyboardInset();
+      scrollChatToBottom(true);
+    }, 260);
   });
   el.chatInput?.addEventListener('blur', () => {
     document.body.classList.remove('chat-input-focused');
+    document.documentElement.style.setProperty('--keyboard-inset', '0px');
+  });
+
+  window.visualViewport?.addEventListener('resize', syncChatKeyboardInset);
+  window.visualViewport?.addEventListener('scroll', syncChatKeyboardInset);
+
+  // En móvil, tocar «enviar» sacaba el foco del textarea: el teclado se
+  // cerraba, el layout se movía y el click nunca llegaba al botón, así que
+  // hacía falta un segundo toque. Se envía en pointerdown (antes del blur) y
+  // el submit que viene después se ignora para no enviar dos veces.
+  el.btnChatSend?.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    sendingFromPointer = true;
+    setTimeout(() => { sendingFromPointer = false; }, 700);
+    sendChatMessage({ stopIfStreaming: true });
   });
 
   el.btnChatFilter?.addEventListener('click', (e) => {
@@ -7993,9 +7961,6 @@ function setupChatEventListeners() {
     }
     if (el.chatAttachMenu && !el.chatAttachMenu.hasAttribute('hidden') && !e.target.closest('.chat-attach-wrap')) {
       toggleChatAttachMenu(false);
-    }
-    if (el.chatSizeMenu && !el.chatSizeMenu.hasAttribute('hidden') && !e.target.closest('.chat-size-wrap')) {
-      toggleChatSizeMenu(false);
     }
     if (!e.target.closest('.chat-download')) {
       el.chatMessages?.querySelectorAll('.chat-download-menu:not([hidden])').forEach(menu => {
@@ -8013,7 +7978,6 @@ function setupChatEventListeners() {
       return;
     }
     toggleChatFilter(false);
-    toggleChatSizeMenu(false);
     toggleChatAttachMenu(false);
     closeSavedPicker();
     el.chatMessages?.querySelectorAll('.chat-download-menu:not([hidden])').forEach(menu => {
@@ -8114,7 +8078,7 @@ function setupChatEventListeners() {
         chat.updatedAt = Date.now();
         persistChats();
       }
-      showToast('“Pensar más” activado: respuesta más profunda, con más fuentes y matices.');
+      showToast('Razonamiento activado: respuesta más profunda, con más fuentes y matices.');
       return;
     }
 
@@ -8158,5 +8122,5 @@ function setupChatEventListeners() {
     chatAutoScroll = isChatNearBottom();
   }, { passive: true });
 
-  if (el.btnChatSend) el.btnChatSend.disabled = true;
+  updateChatSendState();
 }
