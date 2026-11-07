@@ -2416,11 +2416,14 @@ async def _stream_completion(
         'stream_options': {'include_usage': True},
         'max_tokens': max_tokens or MAX_OUTPUT_TOKENS,
     }
-    # El razonamiento del proveedor solo se pide si esta habilitado: con el
-    # modelo flash se comia todo el presupuesto de salida y dejaba la
-    # respuesta vacia o cortada.
-    if PROVIDER_THINKING:
-        payload['thinking'] = {'type': 'enabled' if think else 'disabled'}
+    # Hay que mandar SIEMPRE el campo: omitido, el proveedor razona por su
+    # cuenta y se come la respuesta (el modelo gastaba ~5000 tokens pensando y
+    # no escribia nada). Con "disabled" explicito el modo normal tarda la mitad
+    # y entrega la misma respuesta. Solo se habilita si esta pedido a proposito
+    # por env var.
+    payload['thinking'] = {
+        'type': 'enabled' if (think and PROVIDER_THINKING) else 'disabled',
+    }
     last_error: Optional[BaseException] = None
 
     for attempt in range(min(len(api_keys), 3)):
